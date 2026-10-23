@@ -1,0 +1,75 @@
+# Parameters of sim_node (python3 -m syncai_sim), loaded with
+#   --ros-args --params-file /home/syncrobotic/sim/config/params/sim_params.yaml
+# Keyed /**/sim_node like the workspace's params files, so the same file works
+# under any robot_id namespace. Frames are derived from robot_id at startup
+# (<robot_id>/pointlio_body ...), never written here.
+#
+# Every value here mirrors something the navigation stack assumes; the comment
+# names where. Change the two sides together.
+/**/sim_node:
+  ros__parameters:
+    use_sim_time: false   # the whole stack runs wall clock; stamps are `now`
+
+    # --- world ---------------------------------------------------------------
+    # The map comes from the INI ([map] pcd -> its directory's octomap.bt), like
+    # planner_server.launch.py derives it; `map_dir` overrides it when set.
+    map_dir: ""
+    cache_dir: ""         # default: <sim repo>/cache/<map name>
+    # Viewer mesh only (world.py): faces higher than this above their column's
+    # lowest voxel are not drawn. Measured on dp at 1280x720 on llvmpipe: every
+    # face = 3.5 M triangles = 181 ms a frame; 2.5 m = 1.9 M = 119 ms. The lidar
+    # and the collision queries read the full grid regardless. 0 = draw all.
+    visual_max_height_above_column_floor_m: 3.0
+    plate_min_voxels: 16         # 18 k plates on dp; the floor under a prop is covered at 16, not at 100
+    clip_spikes_above_neighbours_m: 0.2   # the mapping robot's own feet (world.py); 0 keeps them
+    track_floor_fill_radius_m: 0.30       # put floor under the mapping robot where the map has none (world.py); 0 = off
+    track_clear_radius_m: 0.30            # erase what stands where the mapping robot's body was (world.py); 0 = off
+
+    # --- spawn ---------------------------------------------------------------
+    # Default: the INI's [initial_pose] (x, y, z = ground, yaw). z is a hint for
+    # which floor; the sim snaps to the ground under (x, y) nearest to it.
+    use_ini_initial_pose: true
+    spawn: [0.0, 0.0, 0.0, 0.0]   # x y z yaw, used when use_ini_initial_pose is false
+
+    # --- robot geometry (syncai_global_planner / syncai_controller params) -----
+    lidar_height: 0.481          # lidar_top_imu over the ground when standing
+    robot_radius: 0.25           # the costmaps' inscribed radius
+    body_clearance: 0.6          # Octo3D / TerrainLayer body_clearance
+    min_obstacle_height: 0.1     # TerrainLayer min_obstacle_height
+    max_step_height: 0.17        # Octo3D max_step_height
+    stair_tread_window: 0.45     # a second riser within this travel = a flight (kinematics.py)
+    max_drop: 0.3                # never walked down in one step
+    require_backward_descent: true   # stair_descend_backwards must show as vx < 0
+    stair_policy: 1              # StairMode stair_policy_mode (HIMLOCO)
+    walk_vx_min: 0.0             # 0 = off; MPPI walk_vx_min is 0.30 if you want the dead zone
+    in_place_wz_min: 0.0         # 0 = off; MPPI in_place_wz_min is 0.45
+
+    # --- lidar (Livox MID360, bringup.yaml publish_freq 10) -------------------
+    points_per_scan: 20000
+    scan_rate_hz: 10.0
+    fov_lower_deg: -7.0
+    fov_upper_deg: 52.0
+    lidar_min_range: 0.1
+    lidar_max_range: 40.0
+    range_noise_sigma: 0.01      # along the ray; 2 cm pushes returns across the 0.1 m voxel steps (lidar.py)
+
+    # --- fake driver_manager ---------------------------------------------------
+    # Must stay below StairMode's stair_policy_settle_time (3.0 s): it does not
+    # wait for `mode` to report the policy, it settles and climbs. 4.0 is the
+    # "slow driver" negative test; 6.0 also fails WaitForMotionState (5 s).
+    mode_switch_delay: 1.0
+    initial_motion_state: 1      # Locomotion; the controller's own boot value is 8 UNKNOWN
+    initial_policy: 0
+    mode_publish_rate_hz: 2.0
+
+    # --- rates -----------------------------------------------------------------
+    physics_hz: 200.0
+    pose_publish_hz: 50.0        # TF x2 + pointlio/lio_odom (lio_bridge ticks at 20)
+    imu_publish_hz: 50.0
+    status_publish_hz: 2.0
+
+    # --- props -----------------------------------------------------------------
+    # JSON list of PropSpec dicts (scene.py). A mover has waypoints and walks
+    # between them; a prop without waypoints is a free body the trunk can push.
+    props_json: >-
+      []

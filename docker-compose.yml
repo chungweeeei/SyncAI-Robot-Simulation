@@ -1,0 +1,78 @@
+# =============================================================================
+# One container: the workspace's nav stack + the MuJoCo sim, on a DDS domain of
+# their own.
+#
+#   cp .env.example .env            # set ROBOT_WS to your workspace checkout
+#   docker compose build
+#   docker compose up -d
+#   docker compose exec sim bash    # then see README "Running"
+#
+# Why one container and not a sim container beside robot01: the sim replaces
+# the lidar driver, Point-LIO, the localizer and driver_manager, so it has to
+# share a DDS domain with the planner / controller / task_runner it is testing.
+# Starting those a second time next to a live robot01 would publish over the
+# real ones on domain 1 (the workspace's docs/localizer-offline-replay.md has
+# the same warning), so the whole stack is started HERE, from the mounted
+# workspace, on domain 42 with loopback-only DDS (config/cyclonedds.xml) — the
+# sim can never be heard outside this container.
+#
+# The workspace is mounted, not copied: the sim exercises whatever is built in
+# its install/ right now, and the maps live under its map/. Build the
+# workspace first with its own docker-compose.build.yml; this image is derived
+# from the same `syncai-robot-base`, so the artefacts load here unchanged.
+#
+# The instance INI is bind-mounted over the workspace's config/system.ini the
+# way the robot's compose does it, so every launch file reads robot_id sim01
+# and [map] name without a single workspace edit. It is a single-file mount:
+# edit it in place (no rename), as the workspace's smoke test does.
+# =============================================================================
+
+name: syncai-sim
+
+services:
+  sim:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: syncai-robot-sim
+    container_name: syncai-sim
+    # Host uid/gid so files written into the mounted workspace (build/, log/,
+    # cache/) keep the host user's ownership; HOME is world-writable in the
+    # base image for exactly this (same arrangement as the workspace's build
+    # container).
+    user: "${UID:-1000}:${GID:-1000}"
+    working_dir: /home/syncrobotic/robot_ws
+    stdin_open: true
+    tty: true
+    # Not `network_mode: host`: Docker Desktop on a Mac has no host network to
+    # share, and DDS stays on loopback inside the container anyway. The only
+    # things that cross the boundary are the two published ports below.
+    ports:
+      - "6080:6080"   # noVNC: the MuJoCo viewer in a browser, http://localhost:6080/vnc.html
+      - "5901:5901"   # the same display for a native VNC client
+    environment:
+      HOME: /home/syncrobotic
+      ROS_DOMAIN_ID: "42"
+      RMW_IMPLEMENTATION: rmw_cyclonedds_cpp
+      CYCLONEDDS_URI: /home/syncrobotic/sim/config/cyclonedds.xml
+      # The container's own X server (scripts/vnc.sh starts Xvnc on :1 and
+      # serves it to a browser on 6080). Not ${DISPLAY}: on a Mac that is
+      # XQuartz's launchd socket path and means nothing in here.
+      DISPLAY: "${SIM_DISPLAY:-:1}"
+      # Mesa software rendering for the MuJoCo viewer; GLFW over X11.
+      LIBGL_ALWAYS_SOFTWARE: "1"
+      MUJOCO_GL: glfw
+      # numba's parallel ray caster: the image's TBB is older than numba wants
+      # (a warning per process otherwise); OpenMP is there via gcc's libgomp.
+      NUMBA_THREADING_LAYER: omp
+      # Plain-text logs, prompt Python output (same as the robot's compose).
+      RCUTILS_COLORIZED_OUTPUT: "0"
+      PYTHONUNBUFFERED: "1"
+      ROS_LOG_DIR: /tmp/ros_log
+    volumes:
+      - ${ROBOT_WS:-../SyncAI-Robot-Workspace-octomap-planner-3d}:/home/syncrobotic/robot_ws
+      - .:/home/syncrobotic/sim
+      - ./config/instances/sim01.ini:/home/syncrobotic/robot_ws/config/system.ini
+    tmpfs:
+      - /tmp/ros_log:size=134217728,mode=1777
+    command: ["sleep", "infinity"]

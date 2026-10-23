@@ -1,0 +1,37 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  The workspace's config/cyclonedds.xml with one change: <Domain Id="any">
+  instead of the robot's pinned Id="1", so ROS_DOMAIN_ID from docker-compose.yml
+  (42) is what DDS actually uses. Everything else is kept as the robot has it:
+  loopback only and no multicast, which means nothing the sim publishes ever
+  leaves the container — a sim can never be mistaken for a robot on the lab
+  network, and two sim containers on one host do not see each other either.
+  Tracing is at `warning`, not the robot's `config`: that level prints the whole
+  resolved configuration from every process, including each `ros2 topic echo`,
+  and buries the one line you asked for. The domain is in ROS_DOMAIN_ID here.
+-->
+<CycloneDDS
+  xmlns="https://cdds.io/config"
+  xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+  xsi:schemaLocation="https://cdds.io/config https://raw.githubusercontent.com/eclipse-cyclonedds/cyclonedds/master/etc/cyclonedds.xsd"
+>
+    <Domain Id="any">
+        <General>
+            <AllowMulticast>false</AllowMulticast>
+            <Interfaces>
+                <NetworkInterface name="lo"/>
+            </Interfaces>
+        </General>
+        <Discovery>
+            <ParticipantIndex>auto</ParticipantIndex>
+            <MaxAutoParticipantIndex>25</MaxAutoParticipantIndex>
+            <Peers>
+              <Peer address="127.0.0.1"/>
+            </Peers>
+        </Discovery>
+        <Tracing>
+            <Verbosity>warning</Verbosity>
+            <OutputFile>stdout</OutputFile>
+        </Tracing>
+    </Domain>
+</CycloneDDS>

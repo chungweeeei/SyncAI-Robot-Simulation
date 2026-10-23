@@ -1,0 +1,14 @@
+# Installed into the image by the Dockerfile (pip, as root). numpy is NOT
+# listed on purpose: the base image ships ROS Humble's python3-numpy 1.21 and
+# cv_bridge & co. are compiled against it; the Dockerfile pins numpy<2 when it
+# installs these so pip cannot swap it for a 2.x that breaks those imports.
+mujoco==3.17.0
+# The lidar, ground and collision queries are a JIT voxel ray caster
+# (syncai_sim/voxel_grid.py): 20k rays in ~1.3 ms against dp's grid, where
+# MuJoCo's own mj_multiRay took 325 ms against the same site as a mesh and
+# scaled linearly against boxes. numba is what makes a Python sim real-time.
+numba==0.68.0
+# numba 0.68 imports `coverage.types`, which the image's apt coverage 6.2 lacks
+# (python3-coverage, pulled in by ROS's test tooling); a pip coverage >= 7 in
+# /usr/local shadows it. Nothing in the nav stack imports coverage at runtime.
+coverage>=7

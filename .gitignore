@@ -1,0 +1,18 @@
+# Generated per map by `python3 -m syncai_sim.world` (MJCF + stats); rebuilt
+# from <map>/octomap.bt whenever that file changes, so never committed.
+cache/
+
+# Session logs written by scripts/run_session.sh (log/stack/<robot_id>/...).
+log/
+
+# Compose interpolation (ROBOT_WS and friends) — copy .env.example and edit.
+.env
+
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+.DS_Store
+
+# MuJoCo writes this next to the cwd on some errors.
+MUJOCO_LOG.TXT

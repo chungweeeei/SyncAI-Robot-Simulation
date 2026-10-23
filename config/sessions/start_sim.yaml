@@ -1,0 +1,87 @@
+# =============================================================================
+# SyncAI Robot Simulation — the navigation stack against the MuJoCo sim.
+# Same schema as the workspace's config/sessions/*.yaml (see the docstring of
+# NodeManager there), run by scripts/run_session.sh, NOT by NodeManager: the
+# sessions NodeManager knows are operating MODES of a robot (get_mode reports
+# them, switch_mode kills them), and a simulation is not a mode. The runner
+# reproduces the pane semantics — `sleep N && exec cmd`, one process group per
+# pane, logs under log/stack/<robot_id>/<log>/ — the way the workspace's CI
+# smoke test does, without byobu.
+#
+# Every pane runs with the WORKSPACE root as cwd (the launch files resolve the
+# relative config/system.ini there; docker-compose.yml mounts
+# config/instances/sim01.ini over it). Commands that belong to this repo are
+# spelled with the absolute /home/syncrobotic/sim path.
+#
+# This is start_nav.yaml with the hardware replaced:
+#   bringup       -> robot_state_publisher alone (the Livox driver is the sim's)
+#   localization  -> sim_node (Point-LIO's and the localizer's outputs are the sim's)
+#   driver_manager, robot_state, camera_feeder -> gone (the gait driver is the
+#                    sim's; nothing in the nav stack reads RobotState; no camera)
+# The sleep offsets are start_nav.yaml's, so the stack comes up in the order it
+# does on the robot: static TF -> maps -> pose source -> lio_bridge -> planner /
+# controller -> task_runner.
+#
+# Logs go to log/stack/<robot_id>/sim/<name>/, a subtree of their own like
+# start_mapping.yaml's mapping/, so a sim run never interleaves with a robot's
+# nav logs if the same workspace is ever used for both.
+# =============================================================================
+
+session: syncai-sim
+select: sim
+
+windows:
+  # ---------- Window 0: static TF (the URDF's base_link -> lidar_top -> lidar_top_imu)
+  # bringup.launch.py would also start the Livox driver and raise without a
+  # [sensor.lidar] ip, so this repo's launch/rsp.launch.py starts
+  # robot_state_publisher alone, with the same namespace and <robot_id>/ frame
+  # prefix that launch gives it.
+  - name: bringup
+    panes:
+      - cmd: ros2 launch /home/syncrobotic/sim/launch/rsp.launch.py
+        log: sim/bringup
+
+  # ---------- Window 1: map_server + keepout (idle on a 3D-only map) ----------
+  - name: map_server
+    panes:
+      - cmd: ros2 launch syncai_map_server map_server.launch.py
+        log: sim/map_server
+      - cmd: ros2 launch syncai_map_server costmap_filter_info.launch.py
+        sleep: 1
+        log: sim/keepout
+
+  # ---------- Window 2: the simulator ----------
+  # MuJoCo + the ROS face of pointlio / localizer / driver_manager. Needs the
+  # static TF from window 0 only to confirm the frames; the robot's extrinsics
+  # are read from the URDF itself.
+  - name: sim
+    panes:
+      - cmd: >-
+          python3 -m syncai_sim --ros-args
+          --params-file /home/syncrobotic/sim/config/params/sim_params.yaml
+        sleep: 2
+        log: sim/sim_node
+
+  # ---------- Window 3: lio_bridge (map -> <robot_id>/odom -> base_link) ----
+  - name: lio_bridge
+    panes:
+      - cmd: ros2 launch syncai_lio_bridge lio_bridge.launch.py
+        sleep: 4
+        log: sim/lio_bridge
+
+  # ---------- Window 4: planner / controller ----------
+  - name: plan_ctrl
+    panes:
+      - cmd: ros2 launch syncai_global_planner planner_server.launch.py
+        sleep: 4
+        log: sim/planner
+      - cmd: ros2 launch syncai_controller controller_server.launch.py
+        sleep: 4
+        log: sim/controller
+
+  # ---------- Window 5: task_runner ----------
+  - name: task_runner
+    panes:
+      - cmd: ros2 launch syncai_task_runner task_runner.launch.py
+        sleep: 10
+        log: sim/task_runner
