@@ -81,7 +81,7 @@ root, after sourcing the ROS environment):
 
 ```bash
 source /opt/ros/humble/setup.bash && source /opt/ros2_rust_underlay/install/setup.bash && source install/setup.bash
-/home/syncrobotic/sim/scripts/vnc.sh               # the display; then open http://localhost:6080/vnc.html on the host
+/home/syncrobotic/sim/scripts/vnc.sh               # the display; then open http://localhost:6080/vnc.html?autoconnect=1&resize=remote on the host (the picture follows the browser window)
 /home/syncrobotic/sim/scripts/run_session.sh       # the whole stack + the sim, logs under log/stack/sim01/sim/<pane>/current
 python3 /home/syncrobotic/sim/scripts/nav_test.py --goal 3.0 0.0 0.0     # send the robot 3 m ahead
 /home/syncrobotic/sim/scripts/run_session.sh --stop

@@ -48,7 +48,7 @@ services:
     # share, and DDS stays on loopback inside the container anyway. The only
     # things that cross the boundary are the two published ports below.
     ports:
-      - "6080:6080"   # noVNC: the MuJoCo viewer in a browser, http://localhost:6080/vnc.html
+      - "6080:6080"   # noVNC: the MuJoCo viewer in a browser, http://localhost:6080/vnc.html?autoconnect=1&resize=remote
       - "5901:5901"   # the same display for a native VNC client
     environment:
       HOME: /home/syncrobotic
@@ -59,6 +59,8 @@ services:
       # serves it to a browser on 6080). Not ${DISPLAY}: on a Mac that is
       # XQuartz's launchd socket path and means nothing in here.
       DISPLAY: "${SIM_DISPLAY:-:1}"
+      # Xvnc's starting screen size (scripts/vnc.sh); the browser URL resizes it.
+      SIM_VNC_GEOMETRY: "${SIM_VNC_GEOMETRY:-1600x1000}"
       # Mesa software rendering for the MuJoCo viewer; GLFW over X11.
       LIBGL_ALWAYS_SOFTWARE: "1"
       MUJOCO_GL: glfw

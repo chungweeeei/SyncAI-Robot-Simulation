@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+import ctypes
+import ctypes.util
 import math
+import time
 
 import mujoco
 import mujoco.viewer
@@ -62,6 +65,86 @@ class Teleop:
         sim.set_cmd(self.vx, 0.0, self.wz)
 
 
+class _FitToDisplay:
+    """Keep the viewer's X window the size of the X screen.
+
+    The container's Xvnc has no window manager, so GLFW's window opens at its
+    default 2/3 of the screen in the corner and nothing can maximize it; and
+    launch_passive hands out no GLFW handle to resize through. So this talks to
+    the X server itself (libX11 via ctypes, on a connection of its own, so it
+    never races the render thread's) and resizes the top-level window whose
+    name starts with "MuJoCo". Polled, not event-driven: the screen changes
+    whenever noVNC's remote resize follows the browser (vnc.sh's URL asks for
+    it), and a 1 s poll is two round trips to a local server.
+    """
+
+    def __init__(self):
+        self._x = None
+        name = ctypes.util.find_library("X11")
+        if name is None:
+            return
+        x = ctypes.CDLL(name)
+        x.XOpenDisplay.restype = ctypes.c_void_p
+        x.XOpenDisplay.argtypes = [ctypes.c_char_p]
+        x.XDefaultRootWindow.restype = ctypes.c_ulong
+        x.XDefaultRootWindow.argtypes = [ctypes.c_void_p]
+        u, i, p = ctypes.c_uint, ctypes.c_int, ctypes.POINTER
+        x.XGetGeometry.argtypes = [ctypes.c_void_p, ctypes.c_ulong, p(ctypes.c_ulong), p(i), p(i),
+                                   p(u), p(u), p(u), p(u)]
+        x.XQueryTree.argtypes = [ctypes.c_void_p, ctypes.c_ulong, p(ctypes.c_ulong),
+                                 p(ctypes.c_ulong), p(p(ctypes.c_ulong)), p(u)]
+        x.XFetchName.argtypes = [ctypes.c_void_p, ctypes.c_ulong, p(ctypes.c_char_p)]
+        x.XFree.argtypes = [ctypes.c_void_p]
+        x.XMoveResizeWindow.argtypes = [ctypes.c_void_p, ctypes.c_ulong, i, i, u, u]
+        x.XFlush.argtypes = [ctypes.c_void_p]
+        self._dpy = x.XOpenDisplay(None)
+        if not self._dpy:
+            return
+        self._x = x
+        self._root = x.XDefaultRootWindow(self._dpy)
+        self._win = None
+        self._next = 0.0
+
+    def _size(self, win) -> tuple[int, int, int, int]:
+        root, xi, yi = ctypes.c_ulong(), ctypes.c_int(), ctypes.c_int()
+        w, h, b, d = ctypes.c_uint(), ctypes.c_uint(), ctypes.c_uint(), ctypes.c_uint()
+        self._x.XGetGeometry(self._dpy, win, ctypes.byref(root), ctypes.byref(xi), ctypes.byref(yi),
+                             ctypes.byref(w), ctypes.byref(h), ctypes.byref(b), ctypes.byref(d))
+        return xi.value, yi.value, w.value, h.value
+
+    def _find(self):
+        root, parent = ctypes.c_ulong(), ctypes.c_ulong()
+        kids, n = ctypes.POINTER(ctypes.c_ulong)(), ctypes.c_uint()
+        if not self._x.XQueryTree(self._dpy, self._root, ctypes.byref(root), ctypes.byref(parent),
+                                  ctypes.byref(kids), ctypes.byref(n)):
+            return None
+        found = None
+        for k in range(n.value):
+            name = ctypes.c_char_p()
+            if self._x.XFetchName(self._dpy, kids[k], ctypes.byref(name)) and name.value:
+                if name.value.startswith(b"MuJoCo"):
+                    found = kids[k]
+                self._x.XFree(name)
+            if found is not None:
+                break
+        if kids:
+            self._x.XFree(kids)
+        return found
+
+    def poll(self) -> None:
+        if self._x is None or time.monotonic() < self._next:
+            return
+        self._next = time.monotonic() + 1.0
+        if self._win is None:
+            self._win = self._find()  # the render thread maps it a moment after launch
+            if self._win is None:
+                return
+        _, _, sw, sh = self._size(self._root)
+        if self._size(self._win) != (0, 0, sw, sh):
+            self._x.XMoveResizeWindow(self._dpy, self._win, 0, 0, sw, sh)
+            self._x.XFlush(self._dpy)
+
+
 class Viewer:
     def __init__(self, sim, teleop: Teleop | None = None):
         self.sim = sim
@@ -79,12 +162,14 @@ class Viewer:
         opt.geomgroup[3] = 0  # collision primitives and plates
         opt.geomgroup[4] = 0  # the mocap handle
         self._scan_n = 0
+        self._fit = _FitToDisplay()
 
     def is_running(self) -> bool:
         return self.handle.is_running()
 
     def sync(self, sim) -> None:
         self.handle.sync()
+        self._fit.poll()
 
     def show_scan(self, sim, max_points: int = 400) -> None:
         """Draw a thinned copy of the last scan as small spheres in the body frame."""

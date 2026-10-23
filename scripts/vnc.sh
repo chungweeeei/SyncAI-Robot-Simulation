@@ -5,8 +5,13 @@
 #   scripts/vnc.sh            start (idempotent)
 #   scripts/vnc.sh --stop
 #
-# Then open http://localhost:6080/vnc.html (docker-compose.yml publishes 6080),
-# or a VNC client on localhost:5901. No password: the port is published to the
+# Then open http://localhost:6080/vnc.html?autoconnect=1&resize=remote
+# (docker-compose.yml publishes 6080), or a VNC client on localhost:5901.
+# resize=remote has noVNC ask Xvnc to resize the screen to the browser window
+# (Xvnc accepts by default, AcceptSetDesktopSize), and the viewer keeps its
+# window the size of the screen (viewer.py, _FitToDisplay), so the picture
+# fills whatever the browser is. GEOMETRY is only the size until a client
+# asks otherwise, and what a native VNC client gets. No password: the port is published to the
 # host's loopback by Docker and the container holds nothing but a simulation.
 #
 # Why a VNC display and not X11 to XQuartz: XQuartz only offers indirect GLX
@@ -35,4 +40,4 @@ if ! pgrep -f "websockify.*6080" >/dev/null; then
     websockify --web /usr/share/novnc 6080 localhost:5901 > "${LOG}/websockify.log" 2>&1 &
 fi
 sleep 0.5
-echo "display :${DISPLAY_NUM} up; browser: http://localhost:6080/vnc.html  (logs in ${LOG})"
+echo "display :${DISPLAY_NUM} up; browser: http://localhost:6080/vnc.html?autoconnect=1&resize=remote  (logs in ${LOG})"
