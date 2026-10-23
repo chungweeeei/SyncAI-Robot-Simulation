@@ -15,6 +15,10 @@ import numpy as np
 KEY_UP, KEY_DOWN, KEY_LEFT, KEY_RIGHT, KEY_SPACE = 265, 264, 263, 262, 32
 KEY_1, KEY_5, KEY_P, KEY_T, KEY_H = 49, 53, 80, 84, 72
 KEY_EQUAL, KEY_MINUS = 61, 45
+# Every letter is already a MuJoCo viewer shortcut (mujoco.mjVISSTRING /
+# mjRNDSTRING: T transparent, P contact split, H convex hull ... so t / p / h
+# below also flip those); the viewer's geom groups take 0-5. 9 is free.
+KEY_9 = 57
 ARROWS = {KEY_UP: "up", KEY_DOWN: "down", KEY_LEFT: "left", KEY_RIGHT: "right"}
 
 HELP = """teleop keys (viewer window focused):
@@ -22,6 +26,7 @@ HELP = """teleop keys (viewer window focused):
   = / -      faster / slower     space       stop
   1 / 5      set_motion_key 1 (RL) / 5 (MPC)
   p          toggle policy 0/1   t           teleport back to the spawn
+  9          storeys: auto (the robot's and below) / 1F / 2F ... / all
   h          this help"""
 
 # A press without a release to go with it (no X keymap, see _HeldKeys) counts
@@ -213,12 +218,59 @@ class _HeldKeys:
         return {k for k, c in self._codes.items() if bits[c >> 3] & (1 << (c & 7))}
 
 
+class StoreyView:
+    """Which storeys of the site the viewer draws (storeys.py, scene.py).
+
+    Modes, cycled with 9: auto — the robot's storey and those below it, so
+    the floor above never hides the robot and walking up the stairs brings the
+    next storey in; then each storey alone; then all. A hidden storey's site
+    geoms move to geom group HIDDEN, which the viewer does not draw; the
+    change is made under the viewer's lock, in the main thread."""
+
+    HIDDEN = 5
+
+    def __init__(self, sim, log=print):
+        self.sim = sim
+        self.log = log
+        self.n = len(sim.info.storey_bounds) + 1
+        self.modes = ["auto"] + [f"{k + 1}F" for k in range(self.n)] + ["all"]
+        self.mode = 0
+        self.shown: set[int] | None = None
+
+    def cycle(self) -> None:
+        if self.n > 1:
+            self.mode = (self.mode + 1) % len(self.modes)
+            self.log(f"[viewer] storeys: {self.modes[self.mode]}")
+
+    def wanted(self) -> set[int]:
+        name = self.modes[self.mode]
+        if name == "all":
+            return set(range(self.n))
+        if name == "auto":
+            from .storeys import storey_of
+            here = int(storey_of(self.sim.state.z_ground, self.sim.info.storey_bounds))
+            return set(range(here + 1))
+        return {self.modes.index(name) - 1}
+
+    def apply(self, handle) -> None:
+        if self.n <= 1:
+            return
+        want = self.wanted()
+        if want == self.shown:
+            return
+        with handle.lock():
+            for k, geoms in self.sim.info.site_storeys.items():
+                self.sim.model.geom_group[geoms] = 0 if k in want else self.HIDDEN
+        self.shown = want
+
+
 class Viewer:
-    def __init__(self, sim, teleop: Teleop | None = None):
+    def __init__(self, sim, teleop: Teleop | None = None, log=print):
         self.sim = sim
         self.teleop = teleop
+        self.storeys = StoreyView(sim, log)
         self.handle = mujoco.viewer.launch_passive(
-            sim.model, sim.data, key_callback=teleop.key if teleop else None,
+            sim.model, sim.data, key_callback=self._key,
             show_left_ui=False, show_right_ui=False)
         cam = self.handle.cam
         cam.type = mujoco.mjtCamera.mjCAMERA_TRACKING
@@ -229,16 +281,24 @@ class Viewer:
         opt = self.handle.opt
         opt.geomgroup[3] = 0  # collision primitives and plates
         opt.geomgroup[4] = 0  # the mocap handle
+        opt.geomgroup[StoreyView.HIDDEN] = 0  # storeys out of view
         self._scan_n = 0
         self._fit = _FitToDisplay()
         self._keys = _HeldKeys() if teleop else None
         if self._keys is not None and not self._keys.ok:
             self._keys = None  # Teleop falls back to its press timers
 
+    def _key(self, keycode: int) -> None:
+        if keycode == KEY_9:
+            self.storeys.cycle()
+        elif self.teleop is not None:
+            self.teleop.key(keycode)
+
     def is_running(self) -> bool:
         return self.handle.is_running()
 
     def sync(self, sim) -> None:
+        self.storeys.apply(self.handle)
         self.handle.sync()
         self._fit.poll()
         if self._keys is not None:

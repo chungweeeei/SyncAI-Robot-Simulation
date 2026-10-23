@@ -8,8 +8,8 @@ next to the world:
 1. Points are kept only where the cleaned voxel grid is occupied (the voxel or
    a face neighbour), so the picture loses what the world's cleanups removed
    — the mapper's feet, the companion sliver (world.py) — and nothing else;
-   and only up to `max_height` over their column's lowest voxel, the voxel
-   mesh's ceiling cut.
+   and only up to `max_height` over their column's lowest voxel in their
+   storey (storeys.py), the voxel mesh's ceiling cut.
 2. A `voxel` down-sample (4 cm: 4.2 M points on dp), normals from the
    neighbours, turned towards the nearest mapping-track pose (the lidar saw
    every surface from the track side).
@@ -41,7 +41,11 @@ from dataclasses import asdict, dataclass
 import numpy as np
 
 from . import visual
+from .storeys import storey_of
 from .world import World, read_track
+
+# Bumped when the mesh changes without an option changing (2: storeys).
+FORMAT = 2
 
 
 @dataclass
@@ -59,6 +63,7 @@ class PcdMesh:
     vertices: np.ndarray  # (V, 3) float32
     faces: np.ndarray  # (F, 3) int32
     kinds: np.ndarray  # (F,) int8, visual.KIND_*
+    storeys: np.ndarray  # (F,) int8, by the triangle's centroid (storeys.py)
 
 
 def read_pcd(path: str) -> np.ndarray:
@@ -86,7 +91,8 @@ def read_pcd(path: str) -> np.ndarray:
 
 def _key(pcd_path: str, world: World, opts: PcdMeshOptions) -> str:
     st = os.stat(pcd_path)
-    return json.dumps({"pcd": [st.st_size, int(st.st_mtime)], "world": world.stats.cache_key,
+    return json.dumps({"format": FORMAT, "pcd": [st.st_size, int(st.st_mtime)],
+                       "world": world.stats.cache_key, "storeys": world.storey_bounds,
                        "world_options": world.stats.options, "options": asdict(opts)},
                       sort_keys=True)
 
@@ -106,7 +112,7 @@ def load_or_build(map_dir: str, cache_dir: str, world: World,
         z = np.load(data_path)
         if str(z["key"]) == key:
             log(f"[pcd_mesh] cached ({z['faces'].shape[0]} tris)")
-            return PcdMesh(z["vertices"], z["faces"], z["kinds"])
+            return PcdMesh(z["vertices"], z["faces"], z["kinds"], z["storeys"])
     try:
         import open3d  # noqa: F401
     except ImportError:
@@ -116,7 +122,8 @@ def load_or_build(map_dir: str, cache_dir: str, world: World,
     mesh = build(read_pcd(pcd_path), world, read_track(map_dir), opts, log)
     os.makedirs(cache_dir, exist_ok=True)
     tmp = data_path + ".tmp.npz"
-    np.savez(tmp, key=key, vertices=mesh.vertices, faces=mesh.faces, kinds=mesh.kinds)
+    np.savez(tmp, key=key, vertices=mesh.vertices, faces=mesh.faces, kinds=mesh.kinds,
+             storeys=mesh.storeys)
     os.replace(tmp, data_path)
     return mesh
 
@@ -137,9 +144,17 @@ def build(points: np.ndarray, world: World, track: np.ndarray, opts: PcdMeshOpti
             j = idx.copy()
             j[:, axis] += step
             near |= g.grid[j[:, 0], j[:, 1], j[:, 2]]
-    has = g.grid.any(axis=2)
-    lowest = np.where(has, np.argmax(g.grid, axis=2), shape[2])
-    floor_z = g.origin_m[2] + lowest[idx[:, 0], idx[:, 1]] * g.res
+    # The column's lowest voxel within the point's storey.
+    bounds = world.storey_bounds
+    which = storey_of(points[:, 2], bounds)
+    cuts = [0] + [int(np.clip(np.floor((b - g.origin_m[2]) / g.res), 0, shape[2])) for b in bounds] \
+        + [int(shape[2])]
+    floor_z = np.full(points.shape[0], np.inf)
+    for k in range(len(bounds) + 1):
+        band = g.grid[:, :, cuts[k]:cuts[k + 1]]
+        lowest = np.where(band.any(axis=2), np.argmax(band, axis=2) + cuts[k], shape[2])
+        sel = which == k
+        floor_z[sel] = g.origin_m[2] + lowest[idx[sel, 0], idx[sel, 1]] * g.res
     keep = near & (points[:, 2] <= floor_z + opts.max_height)
     points = points[keep]
     log(f"[pcd_mesh] {keep.size} points in the grid, {points.shape[0]} on its voxels "
@@ -177,7 +192,8 @@ def build(points: np.ndarray, world: World, track: np.ndarray, opts: PcdMeshOpti
     F = np.asarray(mesh.triangles, np.int32)
     log(f"[pcd_mesh] {F.shape[0]} triangles, {V.shape[0]} vertices "
         f"({time.perf_counter() - t0:.0f} s)")
-    return PcdMesh(V, F, visual.surface_kinds(V, F))
+    return PcdMesh(V, F, visual.surface_kinds(V, F),
+                   storey_of(V[F].mean(axis=1)[:, 2], world.storey_bounds).astype(np.int8))
 
 
 def main(argv: list[str] | None = None) -> int:

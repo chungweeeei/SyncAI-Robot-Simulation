@@ -33,6 +33,7 @@ import numba as nb
 import numpy as np
 
 from . import btree, greedy_mesh, visual
+from .storeys import storey_bounds, storey_of
 from .voxel_grid import VoxelGrid
 
 
@@ -45,6 +46,9 @@ class WorldOptions:
     # the sensors read is never filtered. The column's lowest voxel is a crude
     # "ground" (under a balcony it is the floor below), hence a knob, not a
     # default.
+    # Measured per storey (storeys.py): over the column's lowest voxel within
+    # its storey, so an upper floor is drawn whole and not cut away as "more
+    # than 3 m above" the floor below it (dp's 2F is 5.3 m over its 1F).
     visual_max_height_above_column_floor_m: float = 0.0
     # A merged box with at least this many voxels becomes a collision plate.
     # dp: 16 gives 18 k plates (MuJoCo compiles them in half a second) and a
@@ -113,8 +117,8 @@ class WorldOptions:
 
 
 # Bumped when the cache's contents change shape without an option changing
-# (2: the visual mesh's per-face directions, visual.py).
-CACHE_FORMAT = 2
+# (2: the visual mesh's per-face directions, visual.py; 3: storeys).
+CACHE_FORMAT = 3
 
 
 @dataclass
@@ -145,6 +149,8 @@ class World:
     plates: np.ndarray  # (P, 6) int64 voxel boxes: x0 y0 z0 nx ny nz
     stats: WorldStats
     mesh_dirs: np.ndarray  # (F,) int8, visual.DIRECTIONS
+    mesh_storeys: np.ndarray  # (F,) int8, 0 = the lowest storey
+    storey_bounds: list[float]  # heights between storeys (storeys.py); [] = one
 
     def plates_metres(self) -> tuple[np.ndarray, np.ndarray]:
         """(centre (P, 3), half-size (P, 3)) in metres."""
@@ -471,7 +477,8 @@ def build_world(map_dir: str, cache_dir: str, opts: WorldOptions | None = None,
             grid = VoxelGrid(z["voxels"], float(z["resolution"]), opts.grid_z_clip_above_lowest_m)
             log(f"[world] {name}: cached ({stats.voxels} voxels, {stats.mesh_triangles} tris, "
                 f"{stats.plates} plates)")
-            return World(grid, z["mesh_vertices"], z["mesh_faces"], z["plates"], stats, z["mesh_dirs"])
+            return World(grid, z["mesh_vertices"], z["mesh_faces"], z["plates"], stats,
+                         z["mesh_dirs"], z["mesh_storeys"], z["storey_bounds"].tolist())
 
     t0 = time.perf_counter()
     leaves_path = os.path.join(cache_dir, f"leaves-{key}.npz")
@@ -512,9 +519,11 @@ def build_world(map_dir: str, cache_dir: str, opts: WorldOptions | None = None,
             f"of up to {opts.floor_hole_max_cells} columns")
     grid = VoxelGrid(voxels, resolution, opts.grid_z_clip_above_lowest_m)
     kept = voxels[voxels[:, 2] <= grid.lo[2] + grid.grid.shape[2] - 1]
-    visual_voxels = column_floor_filter(kept, resolution, opts.visual_max_height_above_column_floor_m)
-    log(f"[world] {name}: {kept.shape[0]} voxels, meshing {visual_voxels.shape[0]} for the viewer")
-    vertices, faces, dirs = exposed_face_mesh(visual_voxels, resolution)
+    bounds = storey_bounds(track[:, 2] - opts.lidar_height_m) if track.shape[0] else []
+    vertices, faces, dirs, storeys, n_visual = _storey_meshes(
+        kept, resolution, bounds, opts.visual_max_height_above_column_floor_m)
+    log(f"[world] {name}: {kept.shape[0]} voxels, meshing {n_visual} for the viewer in "
+        f"{len(bounds) + 1} storeys (bounds {[round(b, 2) for b in bounds]} m)")
     boxes = greedy_mesh.merge_voxels(kept)
     plates = boxes[np.prod(boxes[:, 3:6], axis=1) >= opts.plate_min_voxels]
     build_s = time.perf_counter() - t1
@@ -531,13 +540,31 @@ def build_world(map_dir: str, cache_dir: str, opts: WorldOptions | None = None,
         build_s=round(build_s, 2),
     )
     np.savez(data_path, voxels=kept.astype(np.int32), resolution=resolution,
-             mesh_vertices=vertices, mesh_faces=faces, mesh_dirs=dirs, plates=plates)
+             mesh_vertices=vertices, mesh_faces=faces, mesh_dirs=dirs, mesh_storeys=storeys,
+             storey_bounds=np.array(bounds, dtype=np.float64), plates=plates)
     with open(stats_path + ".tmp", "w") as f:
         json.dump({**asdict(stats), "format": CACHE_FORMAT}, f, indent=2)
     os.replace(stats_path + ".tmp", stats_path)
     log(f"[world] {name}: built in {parse_s + build_s:.1f} s -> {stats.mesh_triangles} tris, "
         f"{stats.plates} plates, grid {stats.grid_shape} ({stats.grid_mb} MB)")
-    return World(grid, vertices, faces, plates, stats, dirs)
+    return World(grid, vertices, faces, plates, stats, dirs, storeys, bounds)
+
+
+def _storey_meshes(voxels: np.ndarray, resolution: float, bounds: list[float], max_height_m: float):
+    """The visual mesh, storey by storey: each storey's voxels cut at
+    `max_height_m` over their column's lowest voxel in that storey, meshed on
+    their own. Returns (vertices, faces, dirs, storeys per face, voxel count)."""
+    z = (voxels[:, 2] - btree.TREE_MAX_VAL + 0.5) * resolution
+    which = storey_of(z, bounds)
+    parts, offset, n_visual = [], 0, 0
+    for k in range(len(bounds) + 1):
+        vis = column_floor_filter(voxels[which == k], resolution, max_height_m)
+        n_visual += int(vis.shape[0])
+        v, f, d = exposed_face_mesh(vis, resolution)
+        parts.append((v, f + offset, d, np.full(f.shape[0], k, np.int8)))
+        offset += v.shape[0]
+    return (np.concatenate([p[0] for p in parts]), np.concatenate([p[1] for p in parts]),
+            np.concatenate([p[2] for p in parts]), np.concatenate([p[3] for p in parts]), n_visual)
 
 
 def default_cache_dir(map_dir: str) -> str:

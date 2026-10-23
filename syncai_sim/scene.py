@@ -15,7 +15,8 @@ wants touch:
 
 Geom groups (the viewer toggles them with keys 0-5): 0 site mesh, 1 robot STL
 visuals, 2 props, 3 collision primitives and plates (hidden), 4 the mocap
-handle (hidden), 5 reserved for debug markers. The lidar never asks MuJoCo
+handle (hidden), 5 hidden storeys (the viewer moves a storey's site geoms
+there to hide it, viewer.py). The lidar never asks MuJoCo
 about any of them — rays go to VoxelGrid for the site and to `prop_rays.py`
 for the props (mj_multiRay scans every geom per ray; 18 k plates would cost
 hundreds of milliseconds a scan).
@@ -70,7 +71,9 @@ class SceneInfo:
     prop_bodies: dict[str, int]
     prop_mocap_ids: dict[str, int]  # movers only
     prop_group: int = 2
-    site_geoms: list[int] = field(default_factory=list)  # the visual site, one per face direction
+    site_geoms: list[int] = field(default_factory=list)  # the visual site
+    site_storeys: dict[int, list[int]] = field(default_factory=dict)  # storey -> its site geoms
+    storey_bounds: list[float] = field(default_factory=list)
     terrain_mocap_ids: np.ndarray | None = None  # (capacity,) mocap indices of the terrain pool
     terrain_geoms: np.ndarray | None = None  # (capacity,) their geom ids, consecutive
 
@@ -102,10 +105,11 @@ def build_scene(world: World, robot: RobotModel, props: list[PropSpec],
 
     # The site, visual only: one mesh per face direction, coloured by height (visual.py).
     if site is not None:
-        site_names = add_site_meshes(spec, site.vertices, site.faces, site.kinds, lambda k: k)
+        site_names = add_site_meshes(spec, site.vertices, site.faces, site.kinds, lambda k: k,
+                                     site.storeys)
     else:
         site_names = add_site_meshes(spec, world.mesh_vertices, world.mesh_faces, world.mesh_dirs,
-                                     visual.kind_of)
+                                     visual.kind_of, world.mesh_storeys)
 
     # Plates: collision for props.
     centres, halves = world.plates_metres()
@@ -164,7 +168,11 @@ def build_scene(world: World, robot: RobotModel, props: list[PropSpec],
         mocap_id=int(model.body_mocapid[mocap]) if mocap >= 0 else -1,
         lidar_body=bid(robot.cfg.lidar_body), imu_body=bid(robot.cfg.imu_body),
         trunk_geoms=trunk, prop_bodies=prop_bodies, prop_mocap_ids=prop_mocap,
-        site_geoms=[mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_GEOM, n) for n in site_names],
+        site_geoms=[mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_GEOM, n)
+                    for names in site_names.values() for n in names],
+        site_storeys={k: [mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_GEOM, n) for n in names]
+                      for k, names in site_names.items()},
+        storey_bounds=list(world.storey_bounds),
         terrain_mocap_ids=np.array([model.body_mocapid[b] for b in terrain_bodies], dtype=int),
         terrain_geoms=np.array([model.body_geomadr[b] for b in terrain_bodies], dtype=int),
     )
@@ -172,12 +180,12 @@ def build_scene(world: World, robot: RobotModel, props: list[PropSpec],
 
 
 def add_site_meshes(spec: mujoco.MjSpec, vertices: np.ndarray, faces: np.ndarray,
-                    groups: np.ndarray, kind_of) -> list[str]:
-    """One visual geom per face group (a voxel face direction, or a point-cloud
-    mesh's surface kind), sharing one height-ramp texture; `kind_of(group)`
-    picks the ramp's row. Returns the geom names."""
+                    groups: np.ndarray, kind_of, storeys: np.ndarray) -> dict[int, list[str]]:
+    """One visual geom per (face group, storey) — a group is a voxel face
+    direction or a point-cloud mesh's surface kind — sharing one height-ramp
+    texture; `kind_of(group)` picks the ramp's row. Returns storey -> geom names."""
     if faces.shape[0] == 0:
-        return []
+        return {}
     tex = spec.add_texture(name="site_ramp", type=mujoco.mjtTexture.mjTEXTURE_2D)
     rgb = visual.texture_rgb()
     tex.width, tex.height, tex.nchannel = rgb.shape[1], rgb.shape[0], 3
@@ -187,26 +195,28 @@ def add_site_meshes(spec: mujoco.MjSpec, vertices: np.ndarray, faces: np.ndarray
     floor = np.isin(groups, [g for g in np.unique(groups) if kind_of(int(g)) == visual.KIND_FLOOR])
     z_range = visual.height_range(vertices[np.unique(faces[floor])][:, 2] if floor.any() else
                                   np.zeros(0))
-    names = []
-    for k in np.unique(groups):
-        f = faces[groups == k]
-        if f.shape[0] == 0:
-            continue
-        used, local = np.unique(f, return_inverse=True)
-        v = vertices[used]
-        mesh = spec.add_mesh(name=f"site_mesh{k}")
-        # One direction's faces enclose no volume; "shell" (area) inertia
-        # compiles, and a static visual geom's inertia is never used anyway.
-        mesh.inertia = mujoco.mjtMeshInertia.mjMESH_INERTIA_SHELL
-        mesh.uservert = v.reshape(-1).astype(np.float32)
-        mesh.userface = local.reshape(-1).astype(np.int32)
-        mesh.usertexcoord = visual.texcoords(v[:, 2], kind_of(int(k)), z_range) \
-            .reshape(-1).astype(np.float32)
-        name = f"site_visual{k}"
-        spec.worldbody.add_geom(name=name, type=mujoco.mjtGeom.mjGEOM_MESH,
-                                meshname=f"site_mesh{k}", material="site_mat", contype=0,
-                                conaffinity=0, group=0)
-        names.append(name)
+    names: dict[int, list[str]] = {}
+    for st in np.unique(storeys):
+        for k in np.unique(groups):
+            f = faces[(groups == k) & (storeys == st)]
+            if f.shape[0] == 0:
+                continue
+            used, local = np.unique(f, return_inverse=True)
+            v = vertices[used]
+            mesh_name = f"site_mesh{k}_s{st}"
+            mesh = spec.add_mesh(name=mesh_name)
+            # One direction's faces enclose no volume; "shell" (area) inertia
+            # compiles, and a static visual geom's inertia is never used anyway.
+            mesh.inertia = mujoco.mjtMeshInertia.mjMESH_INERTIA_SHELL
+            mesh.uservert = v.reshape(-1).astype(np.float32)
+            mesh.userface = local.reshape(-1).astype(np.int32)
+            mesh.usertexcoord = visual.texcoords(v[:, 2], kind_of(int(k)), z_range) \
+                .reshape(-1).astype(np.float32)
+            name = f"site_visual{k}_s{st}"
+            spec.worldbody.add_geom(name=name, type=mujoco.mjtGeom.mjGEOM_MESH,
+                                    meshname=mesh_name, material="site_mat", contype=0,
+                                    conaffinity=0, group=0)
+            names.setdefault(int(st), []).append(name)
     return names
 
 

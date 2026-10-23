@@ -45,6 +45,7 @@ syncai_sim/                        the Python package (python3 -m syncai_sim)
   world.py                           octomap.bt -> VoxelGrid + visual mesh + collision plates, cached
   pcd_mesh.py                        map.pcd -> a smooth viewer surface (Poisson, open3d), cached
   visual.py                          the viewer's look: colour by height, flat-shaded voxel faces, sky
+  storeys.py                         the site's storeys from poses.txt (the viewer's 1F / 2F switch)
   voxel_grid.py                      the numba ray caster, ground query, blocking test
   robot.py                           the workspace URDF -> MJCF: articulated, or rigid with a mocap handle
   scene.py                           robot + site + props (+ the terrain pool) in one MjSpec
@@ -200,6 +201,14 @@ cubes the sim actually senses and stands on. Both are coloured by height —
 floors and treads along a ramp, walls a pale copy, undersides grey — and lit
 by two oblique suns (`visual.py`). Only the picture: the robot may stand a
 few centimetres above the drawn floor, because the feet stand on voxel tops.
+
+**Storeys.** `storeys.py` finds them in `poses.txt` (where the mapping robot
+spent most of its keyframes; dp: 1F at −1.0…−0.2 m, 2F at 4.4…5.6 m, split at
+4.18 m, the flight and its landings with 1F). Each storey is drawn up to
+`visual_max_height_above_column_floor_m` over its own floor, so an upper
+floor is drawn whole, and the viewer shows by default the robot's storey and
+those below it (the floor above never hides the robot; walking up brings the
+next one in). Key `9` cycles auto / 1F / 2F / … / all.
 
 **Robot.** The workspace's `G23.urdf` is loaded by MuJoCo itself with two
 compiler switches injected (`fusestatic=false` so `base_link` can get a free
