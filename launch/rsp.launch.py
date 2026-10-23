@@ -11,6 +11,13 @@ and rcl refuses to parse a 20 KB string with the URDF's punctuation in it.
 `read_robot_id()` is the copy every launch file in the workspace carries (no
 shared helper there either); the INI is config/system.ini relative to the cwd,
 the workspace root, where every pane runs.
+
+The URDF's meshes are relative (`../meshes/hip.STL`), which only a reader
+holding the file can resolve; `robot_description` gets them as
+`package://syncai_bringup/meshes/...` (the package installs them) so that
+Foxglove, through foxglove_bridge's asset fetching, draws the robot. Nothing
+else in the stack reads robot_description (bringup.launch.py is its only
+user in the workspace, and that is this node).
 """
 
 import configparser
@@ -44,7 +51,8 @@ def launch_setup(context, *args, **kwargs):
     urdf_path = LaunchConfiguration("urdf").perform(context)
     robot_id = read_robot_id(config_path)
     with open(urdf_path) as f:
-        robot_description = f.read()
+        robot_description = f.read().replace('filename="../meshes/',
+                                             'filename="package://syncai_bringup/meshes/')
     return [
         Node(
             package="robot_state_publisher",

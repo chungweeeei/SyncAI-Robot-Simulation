@@ -1,0 +1,16 @@
+# foxglove_bridge (scripts/foxglove.sh, the session's foxglove window): the
+# sim and the nav stack to Foxglove on the host, ws://localhost:8765
+# (docker-compose.yml publishes the port).
+/**/foxglove_bridge:
+  ros__parameters:
+    port: 8765
+    address: 0.0.0.0
+    use_sim_time: false
+    # The bridge's default asset allowlist matches lower-case extensions only,
+    # and the G23's meshes are hip.STL & co; robot_description carries them as
+    # package://syncai_bringup/meshes/... (launch/rsp.launch.py).
+    asset_uri_allowlist:
+      - '^package://(?:[-\w%]+/)*[-\w%.]+\.(?:[sS][tT][lL]|dae|obj|glb|gltf|png|jpg|urdf)$'
+    # The map clouds are ~35 MB / 24 MB once each; the default send buffer
+    # (10 MB) would drop them for a client that is slow to drain.
+    send_buffer_limit: 100000000

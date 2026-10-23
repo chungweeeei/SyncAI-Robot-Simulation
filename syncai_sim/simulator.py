@@ -373,6 +373,16 @@ class Simulator:
             m.pos = m.pos + d / dist * step
         self._place_mover(m, m.pos)
 
+    def joint_states(self) -> tuple[list[str], np.ndarray]:
+        """The twelve leg joints by URDF name: the walking body's, or the
+        statue's baked standing angles (robot.py), for robot_state_publisher."""
+        from .legged import JOINTS, LEGS
+        names = [f"{leg}_{j}_joint" for leg in LEGS for j in JOINTS]
+        if self.legged:
+            return names, self.legs.q()
+        standing = self.robot.cfg.standing
+        return names, np.array([standing[j] for _ in LEGS for j in JOINTS])
+
     # -- poses -------------------------------------------------------------------
     def T_map_base(self) -> np.ndarray:
         p, R = sc.body_frame(self.data, self.info.base_body)

@@ -69,6 +69,11 @@ def main(argv=None) -> int:
     sim.spawn(*spawn[:2], spawn[3], spawn[2])
 
     node = SimNode(ini, sim, params, make_frames(ini.robot_id))
+    if params["publish_map_cloud"]:
+        from .map_cloud import load_or_build
+        clouds = load_or_build(cfg.map_dir, cfg.cache_dir, sim.world, log=log)
+        if clouds:
+            node.publish_map_clouds(clouds)
     spinner = Spinner(node)
     spinner.start()
     teleop = None

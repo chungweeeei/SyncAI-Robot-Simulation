@@ -62,6 +62,17 @@ windows:
         sleep: 2
         log: sim/sim_node
 
+  # ---------- Window 2b: Foxglove (the GPU view on the host, ws://localhost:8765)
+  # Not part of the robot's session; the picture of what the stack and the sim
+  # publish, with the site's point cloud (sim/map_cloud/storey<N>).
+  - name: foxglove
+    panes:
+      - cmd: >-
+          ros2 run foxglove_bridge foxglove_bridge --ros-args
+          --params-file /home/syncrobotic/sim/config/foxglove/bridge.yaml
+        sleep: 2
+        log: sim/foxglove
+
   # ---------- Window 3: lio_bridge (map -> <robot_id>/odom -> base_link) ----
   - name: lio_bridge
     panes:

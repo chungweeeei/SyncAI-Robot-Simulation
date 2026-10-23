@@ -30,6 +30,9 @@
     # falls back to voxels without map.pcd or open3d), "voxels" = the cubes the
     # sim actually senses and stands on. A picture either way.
     visual_mesh: pointcloud
+    # Foxglove's site (map_cloud.py): map.pcd thinned to 6 cm, latched once on
+    # sim/map_cloud/storey<N> (dp: 3.7 M points, 59 MB; first build 11 s).
+    publish_map_cloud: true
 
     # --- spawn ---------------------------------------------------------------
     # Default: the INI's [initial_pose] (x, y, z = ground, yaw). z is a hint for

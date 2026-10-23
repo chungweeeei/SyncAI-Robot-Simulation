@@ -2,6 +2,7 @@ import numpy as np
 import pytest
 
 from syncai_sim import visual
+from syncai_sim.map_cloud import thin
 from syncai_sim.pcd_mesh import read_pcd
 
 
@@ -48,3 +49,12 @@ def test_read_pcd_binary(tmp_path):
     p.write_bytes(head.replace("binary", "ascii").encode())
     with pytest.raises(ValueError):
         read_pcd(str(p))
+
+
+def test_thin_averages_one_point_per_cell():
+    pts = np.array([[0.01, 0.01, 0.0], [0.03, 0.03, 0.0], [0.5, 0.0, 0.0]], np.float32)
+    val = np.array([10.0, 30.0, 7.0], np.float32)
+    p, v = thin(pts, val, 0.1)
+    order = np.argsort(p[:, 0])
+    assert np.allclose(p[order], [[0.02, 0.02, 0.0], [0.5, 0.0, 0.0]], atol=1e-6)
+    assert np.allclose(v[order], [20.0, 7.0])

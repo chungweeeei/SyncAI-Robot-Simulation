@@ -66,8 +66,9 @@ class PcdMesh:
     storeys: np.ndarray  # (F,) int8, by the triangle's centroid (storeys.py)
 
 
-def read_pcd(path: str) -> np.ndarray:
-    """(N, 3) float32 xyz of a binary PCD with float32 x y z first (Point-LIO / clean_map's)."""
+def read_pcd(path: str, intensity: bool = False):
+    """(N, 3) float32 xyz of a binary PCD with float32 x y z first (Point-LIO /
+    clean_map's); with `intensity`, also its (N,) intensity field (zeros if none)."""
     with open(path, "rb") as f:
         hdr: dict[str, list[str]] = {}
         while True:
@@ -86,7 +87,11 @@ def read_pcd(path: str) -> np.ndarray:
             raise ValueError(f"{path}: expected binary float32 fields x y z ..., got "
                              f"{hdr['DATA']} {fields} {hdr['TYPE']} {hdr['SIZE']}")
         n = int(hdr["POINTS"][0])
-        return np.fromfile(f, dtype=np.float32, count=n * len(fields)).reshape(n, -1)[:, :3]
+        data = np.fromfile(f, dtype=np.float32, count=n * len(fields)).reshape(n, -1)
+    if not intensity:
+        return data[:, :3]
+    i = data[:, fields.index("intensity")] if "intensity" in fields else np.zeros(n, np.float32)
+    return data[:, :3], i
 
 
 def _key(pcd_path: str, world: World, opts: PcdMeshOptions) -> str:
@@ -128,37 +133,45 @@ def load_or_build(map_dir: str, cache_dir: str, world: World,
     return mesh
 
 
-def build(points: np.ndarray, world: World, track: np.ndarray, opts: PcdMeshOptions,
-          log=print) -> PcdMesh:
-    import open3d as o3d
-
-    t0 = time.perf_counter()
+def on_site(points: np.ndarray, world: World, max_height: float) -> np.ndarray:
+    """(N,) bool: the point's voxel or a face neighbour is occupied in the
+    cleaned grid, and it is at most `max_height` over its column's lowest voxel
+    within its storey (the viewer's ceiling cut, per storey)."""
     g = world.grid
     shape = np.array(g.grid.shape)
     idx = np.floor((points - g.origin_m) / g.res).astype(np.int64)
     inside = np.all((idx >= 1) & (idx < shape - 1), axis=1)
-    points, idx = points[inside], idx[inside]
+    keep = np.zeros(points.shape[0], bool)
+    pts, idx = points[inside], idx[inside]
     near = g.grid[idx[:, 0], idx[:, 1], idx[:, 2]].copy()
     for axis in range(3):
         for step in (-1, 1):
             j = idx.copy()
             j[:, axis] += step
             near |= g.grid[j[:, 0], j[:, 1], j[:, 2]]
-    # The column's lowest voxel within the point's storey.
     bounds = world.storey_bounds
-    which = storey_of(points[:, 2], bounds)
+    which = storey_of(pts[:, 2], bounds)
     cuts = [0] + [int(np.clip(np.floor((b - g.origin_m[2]) / g.res), 0, shape[2])) for b in bounds] \
         + [int(shape[2])]
-    floor_z = np.full(points.shape[0], np.inf)
+    floor_z = np.full(pts.shape[0], np.inf)
     for k in range(len(bounds) + 1):
         band = g.grid[:, :, cuts[k]:cuts[k + 1]]
         lowest = np.where(band.any(axis=2), np.argmax(band, axis=2) + cuts[k], shape[2])
         sel = which == k
         floor_z[sel] = g.origin_m[2] + lowest[idx[sel, 0], idx[sel, 1]] * g.res
-    keep = near & (points[:, 2] <= floor_z + opts.max_height)
+    keep[inside] = near & (pts[:, 2] <= floor_z + max_height)
+    return keep
+
+
+def build(points: np.ndarray, world: World, track: np.ndarray, opts: PcdMeshOptions,
+          log=print) -> PcdMesh:
+    import open3d as o3d
+
+    t0 = time.perf_counter()
+    keep = on_site(points, world, opts.max_height)
     points = points[keep]
-    log(f"[pcd_mesh] {keep.size} points in the grid, {points.shape[0]} on its voxels "
-        f"under {opts.max_height:g} m")
+    log(f"[pcd_mesh] {keep.size} points, {points.shape[0]} on the site's voxels under "
+        f"{opts.max_height:g} m")
 
     pc = o3d.geometry.PointCloud(o3d.utility.Vector3dVector(points.astype(np.float64)))
     pc = pc.voxel_down_sample(opts.voxel)

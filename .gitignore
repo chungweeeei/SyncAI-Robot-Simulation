@@ -18,5 +18,8 @@ __pycache__/
 # where they are not versioned either, never published from here.
 policy/**/*.onnx
 
+# Foxglove layouts written per robot_id by scripts/foxglove.sh from the template.
+config/foxglove/layout-*.json
+
 # MuJoCo writes this next to the cwd on some errors.
 MUJOCO_LOG.TXT

@@ -1,0 +1,118 @@
+{
+  "configById": {
+    "3D!sim": {
+      "followMode": "follow-position",
+      "followTf": "{robot_id}/base_link",
+      "scene": {
+        "enableStats": false,
+        "backgroundColor": "#15181dff",
+        "transforms": {
+          "showLabel": false,
+          "axisScale": 0.6
+        }
+      },
+      "cameraState": {
+        "perspective": true,
+        "distance": 14,
+        "phi": 50,
+        "thetaOffset": 135,
+        "targetOffset": [0, 0, 0],
+        "target": [0, 0, 0],
+        "targetOrientation": [0, 0, 0, 1],
+        "fovy": 45,
+        "near": 0.1,
+        "far": 5000
+      },
+      "transforms": {},
+      "topics": {
+        "/{robot_id}/sim/map_cloud/storey1": {
+          "visible": true,
+          "pointSize": 2,
+          "pointShape": "square",
+          "colorMode": "gradient",
+          "colorField": "intensity",
+          "gradient": ["#22344aff", "#eef4ffff"],
+          "minValue": 0,
+          "maxValue": 150
+        },
+        "/{robot_id}/sim/map_cloud/storey2": {
+          "visible": true,
+          "pointSize": 2,
+          "pointShape": "square",
+          "colorMode": "gradient",
+          "colorField": "intensity",
+          "gradient": ["#3a2a22ff", "#fff3e8ff"],
+          "minValue": 0,
+          "maxValue": 150
+        },
+        "/{robot_id}/pointlio/body_cloud": {
+          "visible": true,
+          "pointSize": 3,
+          "pointShape": "circle",
+          "colorMode": "flat",
+          "flatColor": "#ff8a2aff",
+          "decayTime": 0
+        },
+        "/{robot_id}/robot_description": {
+          "visible": true
+        }
+      },
+      "layers": {
+        "grid": {
+          "visible": true,
+          "layerId": "foxglove.Grid",
+          "frameId": "map",
+          "size": 100,
+          "divisions": 100,
+          "lineWidth": 0.5,
+          "color": "#ffffff14",
+          "position": [0, 0, -0.4],
+          "rotation": [0, 0, 0],
+          "order": 1
+        }
+      },
+      "publish": {
+        "type": "point",
+        "poseTopic": "/move_base_simple/goal",
+        "pointTopic": "/clicked_point",
+        "poseEstimateTopic": "/initialpose",
+        "poseEstimateXDeviation": 0.5,
+        "poseEstimateYDeviation": 0.5,
+        "poseEstimateThetaDeviation": 0.26179939
+      },
+      "imageMode": {}
+    },
+    "RawMessages!status": {
+      "topicPath": "/{robot_id}/sim/status",
+      "diffEnabled": false,
+      "diffMethod": "custom",
+      "diffTopicPath": "",
+      "showFullMessageForDiff": false,
+      "fontSize": 12
+    },
+    "RawMessages!mode": {
+      "topicPath": "/{robot_id}/mode",
+      "diffEnabled": false,
+      "diffMethod": "custom",
+      "diffTopicPath": "",
+      "showFullMessageForDiff": false,
+      "fontSize": 12
+    }
+  },
+  "globalVariables": {},
+  "userNodes": {},
+  "playbackConfig": {
+    "speed": 1
+  },
+  "layout": {
+    "direction": "row",
+    "first": "3D!sim",
+    "second": {
+      "direction": "column",
+      "first": "RawMessages!status",
+      "second": "RawMessages!mode",
+      "splitPercentage": 75
+    },
+    "splitPercentage": 72
+  }
+}

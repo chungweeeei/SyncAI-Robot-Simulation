@@ -46,6 +46,9 @@ syncai_sim/                        the Python package (python3 -m syncai_sim)
   pcd_mesh.py                        map.pcd -> a smooth viewer surface (Poisson, open3d), cached
   visual.py                          the viewer's look: colour by height, flat-shaded voxel faces, sky
   storeys.py                         the site's storeys from poses.txt (the viewer's 1F / 2F switch)
+  map_cloud.py                       map.pcd thinned per storey for Foxglove (sim/map_cloud/storey<N>)
+config/foxglove/bridge.yaml        foxglove_bridge's settings (port 8765, the .STL asset allowlist)
+scripts/foxglove.sh                foxglove_bridge (+ robot_state_publisher) for a sim run by hand
   voxel_grid.py                      the numba ray caster, ground query, blocking test
   robot.py                           the workspace URDF -> MJCF: articulated, or rigid with a mocap handle
   scene.py                           robot + site + props (+ the terrain pool) in one MjSpec
@@ -73,13 +76,24 @@ the sim runs whatever is in its `install/`. Build it with that repo's
 have an `octomap.bt` (`map/<name>/`, see the workspace's `syncai_mapping`).
 
 ```bash
-cp .env.example .env            # ROBOT_WS = path to the workspace checkout (default: ../SyncAI-Robot-Workspace-octomap-planner-3d)
+cp .env.example .env            # ROBOT_WS = path to the workspace checkout (default: ../SyncAI-Robot-Workspace)
 docker compose build            # once; FROM syncai-robot-base:latest, which the workspace's compose builds
 docker compose up -d
 docker compose exec sim bash    # cwd is the workspace root, like every pane on the robot
 ```
 
-`config/instances/sim01.ini` picks the map (`[map] name`) and the spawn pose
+**Isolated or integrated.** By default the container is isolated: a bridge
+network, ROS_DOMAIN_ID 42, this repo's `cyclonedds.xml` and `sim01.ini`. To
+run `syncai_backend` and the frontend against the sim, `.env` switches it to
+the robot's own topology — `SIM_NETWORK_MODE=host`, `SIM_ROS_DOMAIN_ID=1`, the
+workspace's `config/cyclonedds.xml` and an instance file of the workspace's
+(`SIM_INSTANCE_INI`, e.g. `config/instances/robot01.ini`) — the same three the
+backend's compose uses, so it finds the sim as it finds robot01. Both DDS
+configs are loopback-only, so nothing reaches the network in either mode; the
+integrated one must never run on a robot's Jetson, where robot01 shares that
+loopback on domain 1.
+
+`SIM_INSTANCE_INI` (default `config/instances/sim01.ini`) picks the map (`[map] name`) and the spawn pose
 (`[initial_pose]`; z is the ground height, a hint for the floor). It is a
 single-file bind mount: edit it in place, do not rename over it.
 
@@ -201,6 +215,24 @@ cubes the sim actually senses and stands on. Both are coloured by height —
 floors and treads along a ramp, walls a pale copy, undersides grey — and lit
 by two oblique suns (`visual.py`). Only the picture: the robot may stand a
 few centimetres above the drawn floor, because the feet stand on voxel tops.
+
+**Foxglove** (the GPU view, on the host). The MuJoCo viewer renders in
+software; for a detailed picture of the site and the stack, `foxglove_bridge`
+serves everything to Foxglove (desktop app or app.foxglove.dev) at
+`ws://localhost:8765`: the session starts it (window `foxglove`); with the sim
+run by hand as a ROS node (`python3 -m syncai_sim --teleop`, not `--no-ros`),
+`scripts/foxglove.sh` starts it, robot_state_publisher and lio_bridge (which
+joins the sim's TF to the URDF's, as on the robot). The sim adds for it
+the site's point cloud per storey (`sim/map_cloud/storey1`, `storey2`:
+`map.pcd` on the cleaned voxels, 6 cm, with intensity; latched; dp 3.7 M
+points), and the legs' `joint_states`; `robot_description` carries its meshes
+as `package://` URIs so the bridge serves them. In Foxglove: Open connection
+→ Foxglove WebSocket → `ws://localhost:8765`, then import
+`config/foxglove/layout-<robot_id>.json` (layout menu → Import from file;
+`scripts/foxglove.sh` writes it from `layout.template.json` for the INI's
+robot_id): a 3D panel following `<robot_id>/base_link` with both map clouds (shaded by intensity), the
+robot model, the live scan, and `sim/status` / `mode` beside it; the stack's
+plans and costmaps are one toggle away in the panel's topic list.
 
 **Storeys.** `storeys.py` finds them in `poses.txt` (where the mapping robot
 spent most of its keyframes; dp: 1F at −1.0…−0.2 m, 2F at 4.4…5.6 m, split at

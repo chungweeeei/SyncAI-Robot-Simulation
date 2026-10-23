@@ -40,8 +40,8 @@ from diagnostic_msgs.msg import DiagnosticArray, DiagnosticStatus, KeyValue
 from geometry_msgs.msg import PoseWithCovarianceStamped, TransformStamped, Twist
 from nav_msgs.msg import Odometry
 from rclpy.node import Node
-from rclpy.qos import QoSProfile, ReliabilityPolicy
-from sensor_msgs.msg import Imu, PointCloud2, PointField
+from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy
+from sensor_msgs.msg import Imu, JointState, PointCloud2, PointField
 from std_msgs.msg import Int32MultiArray
 from tf2_ros import TransformBroadcaster
 
@@ -108,7 +108,11 @@ class SimNode(Node):
         self.pub_mode = self.create_publisher(Int32MultiArray, "mode", reliable10)
         self.pub_gt = self.create_publisher(Odometry, "sim/ground_truth", reliable10)
         self.pub_status = self.create_publisher(DiagnosticArray, "sim/status", reliable10)
+        # robot_state_publisher (launch/rsp.launch.py, same namespace) turns
+        # these into the legs' TF; nothing in the nav stack reads them.
+        self.pub_joints = self.create_publisher(JointState, "joint_states", reliable10)
         self.tf = TransformBroadcaster(self)
+        self._map_pubs = []  # kept alive: latched map clouds (publish_map_clouds)
 
         self.create_subscription(Twist, "cmd_vel", self._on_cmd_vel, 10)
         self.create_subscription(PoseWithCovarianceStamped, "initialpose", self._on_initialpose, 10)
@@ -241,6 +245,38 @@ class SimNode(Node):
         self.pub_cloud.publish(msg)
         return msg.width
 
+    def publish_joints(self) -> None:
+        with self.lock:
+            names, q = self.sim.joint_states()
+        m = JointState()
+        m.header.stamp = self._stamp()
+        m.name = names
+        m.position = [float(v) for v in q]
+        self.pub_joints.publish(m)
+
+    def publish_map_clouds(self, clouds: dict[int, np.ndarray]) -> None:
+        """The site's point cloud per storey (map_cloud.py), once, latched,
+        on sim/map_cloud/storey<N> in the map frame: for Foxglove."""
+        latched = QoSProfile(depth=1, reliability=ReliabilityPolicy.RELIABLE,
+                             durability=DurabilityPolicy.TRANSIENT_LOCAL)
+        for k, xyzi in sorted(clouds.items()):
+            pub = self.create_publisher(PointCloud2, f"sim/map_cloud/storey{k + 1}", latched)
+            msg = PointCloud2()
+            msg.header.stamp = self._stamp()
+            msg.header.frame_id = self.f["map"]
+            msg.height = 1
+            msg.width = int(xyzi.shape[0])
+            msg.fields = self._cloud_fields
+            msg.is_bigendian = False
+            msg.point_step = 16
+            msg.row_step = 16 * msg.width
+            msg.is_dense = True
+            msg.data = np.ascontiguousarray(xyzi, dtype=np.float32).tobytes()
+            pub.publish(msg)
+            self._map_pubs.append(pub)
+        self.get_logger().info(
+            f"map clouds latched: {[f'storey{k + 1} {c.shape[0]} pts' for k, c in sorted(clouds.items())]}")
+
     def publish_imu(self) -> None:
         with self.lock:
             gyro, accel = self.sim.imu_sample()
@@ -362,6 +398,7 @@ def run_loop(node: SimNode, viewer_factory, teleop, show_scan: bool, stop_after:
             if t >= due["imu"]:
                 due["imu"] = t + periods["imu"]
                 node.publish_imu()
+                node.publish_joints()  # same 50 Hz: legs for robot_state_publisher
             if t >= due["scan"]:
                 due["scan"] = t + periods["scan"]
                 due["pose"] = t + periods["pose"]  # publish_scan sends the pose itself

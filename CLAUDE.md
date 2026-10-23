@@ -53,6 +53,7 @@ Python throughout (decided
 | Need | Place |
 |---|---|
 | map -> world (parse, mesh, plates, cache) | `world.py`, `btree.py`, `greedy_mesh.py` |
+| Foxglove (map clouds, joint_states, bridge) | `map_cloud.py`, `config/foxglove/bridge.yaml`, `scripts/foxglove.sh`; mesh URIs in `launch/rsp.launch.py` |
 | the viewer's look (pcd surface, colours, storeys) | `pcd_mesh.py`, `visual.py`, `storeys.py` (picture only, never sensing); `StoreyView` in `viewer.py` |
 | ray cast / ground / blocked | `voxel_grid.py` |
 | the policies (port of g2_deploy_rs) | `policy.py` (`tests/test_policy.py`; names the Rust source of every constant) |

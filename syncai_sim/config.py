@@ -115,7 +115,7 @@ PARAM_DEFAULTS: dict = {
     "visual_max_height_above_column_floor_m": 3.0, "plate_min_voxels": 16,
     "clip_spikes_above_neighbours_m": 0.2, "track_clear_radius_m": 0.30, "track_floor_fill_radius_m": 0.30,
     "floor_hole_max_cells": 25,
-    "visual_mesh": "pointcloud",
+    "visual_mesh": "pointcloud", "publish_map_cloud": True,
     "use_ini_initial_pose": True, "spawn": [0.0, 0.0, 0.0, 0.0],
     "lidar_height": 0.481, "robot_radius": 0.25, "body_clearance": 0.6,
     "min_obstacle_height": 0.1, "max_step_height": 0.17, "stair_tread_window": 0.45,

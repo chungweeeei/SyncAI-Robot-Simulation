@@ -44,17 +44,30 @@ services:
     working_dir: /home/syncrobotic/robot_ws
     stdin_open: true
     tty: true
-    # Not `network_mode: host`: Docker Desktop on a Mac has no host network to
-    # share, and DDS stays on loopback inside the container anyway. The only
-    # things that cross the boundary are the two published ports below.
+    # Two ways to sit on the network (.env.example says which knob is which):
+    #
+    #   isolated (the default): a bridge network, ROS_DOMAIN_ID 42, this
+    #     repo's cyclonedds.xml and sim01.ini. Safe anywhere, including next
+    #     to a live robot01 on the same machine (its Jetson).
+    #   integrated (SIM_NETWORK_MODE=host, domain 1, the workspace's
+    #     cyclonedds.xml and an instance file of its own): the robot's own
+    #     topology, so syncai_backend's compose — host network, domain 1, the
+    #     same two files — talks to the sim as it talks to robot01. Both DDS
+    #     configs are loopback-only with multicast off, so nothing leaves the
+    #     machine either way; what this mode must never do is run on a robot's
+    #     Jetson, where the real stack shares that loopback on domain 1.
+    #     With a host network the ports below are discarded (the services
+    #     listen on the host directly; OrbStack forwards them to macOS).
+    network_mode: "${SIM_NETWORK_MODE:-bridge}"
     ports:
       - "6080:6080"   # noVNC: the MuJoCo viewer in a browser, http://localhost:6080/vnc.html?autoconnect=1&resize=remote
       - "5901:5901"   # the same display for a native VNC client
+      - "8765:8765"   # foxglove_bridge: Foxglove on the host, ws://localhost:8765
     environment:
       HOME: /home/syncrobotic
-      ROS_DOMAIN_ID: "42"
+      ROS_DOMAIN_ID: "${SIM_ROS_DOMAIN_ID:-42}"
       RMW_IMPLEMENTATION: rmw_cyclonedds_cpp
-      CYCLONEDDS_URI: /home/syncrobotic/sim/config/cyclonedds.xml
+      CYCLONEDDS_URI: "${SIM_CYCLONEDDS_URI:-/home/syncrobotic/sim/config/cyclonedds.xml}"
       # The container's own X server (scripts/vnc.sh starts Xvnc on :1 and
       # serves it to a browser on 6080). Not ${DISPLAY}: on a Mac that is
       # XQuartz's launchd socket path and means nothing in here.
@@ -72,9 +85,13 @@ services:
       PYTHONUNBUFFERED: "1"
       ROS_LOG_DIR: /tmp/ros_log
     volumes:
-      - ${ROBOT_WS:-../SyncAI-Robot-Workspace-octomap-planner-3d}:/home/syncrobotic/robot_ws
+      - ${ROBOT_WS:-../SyncAI-Robot-Workspace}:/home/syncrobotic/robot_ws
       - .:/home/syncrobotic/sim
-      - ./config/instances/sim01.ini:/home/syncrobotic/robot_ws/config/system.ini
+      # The instance file, over the workspace's config/system.ini as on the
+      # robot. Single-file and edited in place by whoever writes it (the
+      # backend rewrites [map] name when a map is activated), never renamed
+      # over: a rename gives the content a new inode this mount never sees.
+      - ${SIM_INSTANCE_INI:-./config/instances/sim01.ini}:/home/syncrobotic/robot_ws/config/system.ini
     tmpfs:
       - /tmp/ros_log:size=134217728,mode=1777
     command: ["sleep", "infinity"]
