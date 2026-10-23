@@ -1,0 +1,35 @@
+# syncai_backend against the sim on a Mac: an override for the backend repo's
+# own docker-compose.yml, which is written for the robot's Jetson. Run from
+# this repo (the backend repo is not edited; CLAUDE.md rule 1 in spirit):
+#
+#   ROBOT_WS=$(cd ../SyncAI-Robot-Workspace && pwd) ROBOT_INSTANCE=robot01 \
+#     docker compose -f ../SyncAI-Robot-Backend/docker-compose.yml \
+#                    -f config/integration/backend.mac.yml up -d
+#
+# with the sim in its integrated mode (.env: SIM_NETWORK_MODE=host, domain 1,
+# the workspace's cyclonedds.xml, SIM_INSTANCE_INI = the same instance file):
+# the backend's compose already has host networking, domain 1 and that DDS
+# config, so it finds the sim's nav stack the way it finds robot01's.
+#
+# What this drops, and why it may: the nvidia runtime, /dev/video*, the video
+# group and /dev/syncai exist on the Jetson for the WebRTC camera pipeline only
+# (the backend's compose says so: "Audio sessions do not need any of this");
+# OrbStack has none of them and refuses a container that names them. The
+# libsyncai_worker.so mount goes too: its absence only 502s the camera stream,
+# while a missing single-file bind source becomes a root-owned directory.
+# Relative paths resolve against the backend repo (the first -f file).
+services:
+  backend:
+    runtime: !reset null
+    devices: !reset []
+    group_add: !reset []
+    volumes: !override
+      - ${ROBOT_WS:?set ROBOT_WS to the workspace checkout (absolute)}/config:/home/syncrobotic/robot_ws/config
+      - ${ROBOT_WS}/config/instances/${ROBOT_INSTANCE:-robot01}.ini:/home/syncrobotic/robot_ws/config/system.ini
+      - ${ROBOT_WS}/map:/home/syncrobotic/robot_ws/map
+      - ${RECORD_DIR:-./record}:/home/syncrobotic/robot_ws/record
+      - type: tmpfs
+        target: /tmp/ros_log
+        tmpfs:
+          size: 134217728
+          mode: 0o1777

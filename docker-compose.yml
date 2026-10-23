@@ -44,6 +44,10 @@ services:
     working_dir: /home/syncrobotic/robot_ws
     stdin_open: true
     tty: true
+    # PID 1 is `sleep infinity`, which never reaps: a node whose `ros2 launch`
+    # parent is stopped first (lio_bridge, every session stop) stays a zombie
+    # until the container goes. Docker's init reaps them.
+    init: true
     # Two ways to sit on the network (.env.example says which knob is which):
     #
     #   isolated (the default): a bridge network, ROS_DOMAIN_ID 42, this

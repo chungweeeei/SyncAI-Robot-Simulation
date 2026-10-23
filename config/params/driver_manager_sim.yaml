@@ -1,0 +1,29 @@
+# syncai_driver_manager's parameters for the sim session: the workspace's own
+# src/syncai_driver_manager/params/driver_manager_params.yaml with the two
+# addresses moved to loopback, where the sim plays the gait controller
+# (syncai_sim/controller_link.py). Passed as the launch file's params_file, so
+# the workspace is not edited. Keep everything else in step with that file.
+#
+# The key is a bare /**: rclrs matches only "/**" or the node's exact name
+# (the workspace file explains); this file goes to that one node.
+/**:
+  ros__parameters:
+    # The sim's controller link sends telemetry here and listens for commands
+    # there; on the robot these are the Jetson (.103) and the controller (.120).
+    telemetry_recv_ip: "127.0.0.1"
+    telemetry_recv_port: 50010
+    command_target_ip: "127.0.0.1"
+    command_target_port: 50051
+
+    # The robot's velocity gains, unchanged: they correct the gait's
+    # under-tracking, and the sim's PPO under-tracks forward like the robot
+    # does (0.40 m/s at a 0.5 command, 0.80, against the workspace's measured
+    # 0.78-0.82). Yaw differs: the sim tracks it at 1.00 where the robot's runs
+    # disagree (0.53 / 1.19), so in the sim a turn comes out up to 1.4x the
+    # command — the controller closes the loop on heading either way.
+    scale_fwd: 1.40
+    scale_back: 1.0
+    scale_left: 1.0
+    scale_right: 1.0
+    scale_turn_l: 1.40
+    scale_turn_r: 1.40

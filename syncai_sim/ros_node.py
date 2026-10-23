@@ -21,6 +21,13 @@ Served: set_motion_key, set_policy_mode (syncai_common). Subscribed: cmd_vel,
 and initialpose (the localizer's topic) as a teleport — covariance[14] != 0
 means z is meant, as in localizer_node.cpp.
 
+With `driver_link: udp` (the session) the driver is the workspace's real
+syncai_driver_manager and the sim is its gait controller (controller_link.py):
+the sim then serves neither set_motion_key / set_policy_mode nor `mode`, and
+does not read cmd_vel — the driver does, and its safety lock drops it — and
+it answers sys_manager's `get_mode` (AUTO, the nav session) for
+syncai_robot_state.
+
 Threading: the physics loop runs in the main thread at wall-clock pace (the
 whole stack runs `use_sim_time: false`, so every stamp is `now`); an rclpy
 executor spins in a daemon thread and its callbacks write into the simulator
@@ -49,7 +56,8 @@ from .config import PARAM_DEFAULTS, IniSettings, build_sim_config  # noqa: F401
 from .simulator import Simulator
 
 try:
-    from syncai_common.srv import SetMotionKey, SetPolicyMode
+    from syncai_common.msg import RobotMode
+    from syncai_common.srv import GetMode, SetMotionKey, SetPolicyMode
 except ImportError as err:  # the workspace install is not sourced
     raise SystemExit(
         "syncai_common is not importable: source the workspace's install/setup.bash "
@@ -105,7 +113,20 @@ class SimNode(Node):
         self.pub_cloud = self.create_publisher(PointCloud2, "pointlio/body_cloud", reliable10)
         self.pub_odom = self.create_publisher(Odometry, "pointlio/lio_odom", reliable10)
         self.pub_imu = self.create_publisher(Imu, "livox/imu", reliable10)
-        self.pub_mode = self.create_publisher(Int32MultiArray, "mode", reliable10)
+        self.link = None
+        if params["driver_link"] == "udp":
+            from .controller_link import ControllerLink, LinkConfig
+            self.link = ControllerLink(sim, sim.driver, LinkConfig(
+                command_port=params["controller_command_port"],
+                telemetry_port=params["controller_telemetry_port"],
+                telemetry_hz=params["controller_telemetry_hz"],
+                battery_soc=params["battery_soc"],
+                battery_drain_per_hour=params["battery_drain_per_hour"]),
+                log=lambda m: self.get_logger().info(m))
+        elif params["driver_link"] != "fake":
+            raise SystemExit(f"driver_link {params['driver_link']!r}: fake | udp")
+        else:
+            self.pub_mode = self.create_publisher(Int32MultiArray, "mode", reliable10)
         self.pub_gt = self.create_publisher(Odometry, "sim/ground_truth", reliable10)
         self.pub_status = self.create_publisher(DiagnosticArray, "sim/status", reliable10)
         # robot_state_publisher (launch/rsp.launch.py, same namespace) turns
@@ -114,10 +135,15 @@ class SimNode(Node):
         self.tf = TransformBroadcaster(self)
         self._map_pubs = []  # kept alive: latched map clouds (publish_map_clouds)
 
-        self.create_subscription(Twist, "cmd_vel", self._on_cmd_vel, 10)
         self.create_subscription(PoseWithCovarianceStamped, "initialpose", self._on_initialpose, 10)
-        self.create_service(SetMotionKey, "set_motion_key", self._on_motion_key)
-        self.create_service(SetPolicyMode, "set_policy_mode", self._on_policy_mode)
+        if self.link is None:
+            self.create_subscription(Twist, "cmd_vel", self._on_cmd_vel, 10)
+            self.create_service(SetMotionKey, "set_motion_key", self._on_motion_key)
+            self.create_service(SetPolicyMode, "set_policy_mode", self._on_policy_mode)
+        else:
+            # sys_manager's NodeManager answers this on the robot with the
+            # running session; the sim session is the nav session's stand-in.
+            self.create_service(GetMode, "get_mode", self._on_get_mode)
 
         self._last_pose: tuple[float, np.ndarray] | None = None  # (stamp s, T_map_imu)
         self._cloud_fields = [
@@ -144,6 +170,11 @@ class SimNode(Node):
                 self.sim.teleport(p.position.x, p.position.y, yaw, z_hint)
         except ValueError as err:
             self.get_logger().error(f"initialpose refused: {err}")
+
+    def _on_get_mode(self, req, res):
+        res.success, res.message = True, "simulation (start_sim)"
+        res.mode, res.session = RobotMode.AUTO, "syncai-sim"
+        return res
 
     def _on_motion_key(self, req, res):
         with self.lock:
@@ -294,7 +325,8 @@ class SimNode(Node):
         self.pub_mode.publish(m)
 
     def publish_mode(self) -> None:
-        self._publish_mode()
+        if self.link is None:  # with the udp link, driver_manager publishes mode
+            self._publish_mode()
 
     def publish_status(self) -> None:
         with self.lock:
@@ -385,10 +417,14 @@ def run_loop(node: SimNode, viewer_factory, teleop, show_scan: bool, stop_after:
             behind = int((now - next_t) / dt) + 1
             steps = max(1, min(behind, max_catch_up))  # catch up, but never more than 0.1 s at once
             with node.lock:
+                if node.link is not None:
+                    node.link.poll()
                 if teleop is not None:
                     teleop.apply(sim)
                 for _ in range(steps):
                     sim.step()
+                if node.link is not None:
+                    node.link.tick(sim.sim_time)
             steps_total += steps
             next_t += steps * dt
             t = sim.sim_time
@@ -427,3 +463,5 @@ def run_loop(node: SimNode, viewer_factory, teleop, show_scan: bool, stop_after:
     finally:
         if viewer is not None:
             viewer.close()
+        if node.link is not None:
+            node.link.close()

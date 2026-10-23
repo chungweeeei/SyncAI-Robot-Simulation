@@ -62,6 +62,21 @@
     lidar_max_range: 40.0
     range_noise_sigma: 0.01      # along the ray; 2 cm pushes returns across the 0.1 m voxel steps (lidar.py)
 
+    # --- the driver ----------------------------------------------------------------
+    # fake: the sim serves set_motion_key / set_policy_mode / mode itself and
+    #   reads cmd_vel (fake_driver.py). udp: the workspace's real
+    #   syncai_driver_manager runs (the session passes driver_link:=udp and starts
+    #   it with config/params/driver_manager_sim.yaml) and the sim is its gait
+    #   controller on loopback UDP (controller_link.py); syncai_robot_state then
+    #   gets battery_state / motor_states / mode / safety_locked from the real
+    #   driver, and get_mode from the sim.
+    driver_link: fake
+    controller_command_port: 50051      # driver_manager_sim.yaml command_target_port
+    controller_telemetry_port: 50010    # driver_manager_sim.yaml telemetry_recv_port
+    controller_telemetry_hz: 50.0       # IMU / joints / MODE_STATE datagrams
+    battery_soc: 90.0                   # % at start (BMS_V2)
+    battery_drain_per_hour: 0.0         # 0 = never empties; e.g. 300 reaches robot_state's 20 % WARNING in ~14 min
+
     # --- fake driver_manager ---------------------------------------------------
     # Must stay below StairMode's stair_policy_settle_time (3.0 s): it does not
     # wait for `mode` to report the policy, it settles and climbs. 4.0 is the

@@ -16,8 +16,11 @@
 # This is start_nav.yaml with the hardware replaced:
 #   bringup       -> robot_state_publisher alone (the Livox driver is the sim's)
 #   localization  -> sim_node (Point-LIO's and the localizer's outputs are the sim's)
-#   driver_manager, robot_state, camera_feeder -> gone (the gait driver is the
-#                    sim's; nothing in the nav stack reads RobotState; no camera)
+#   driver_manager, robot_state -> the workspace's own, unchanged: the sim is the
+#                    gait controller at the other end of driver_manager's UDP
+#                    link (driver_link:=udp, controller_link.py), and the sim
+#                    answers sys_manager's get_mode for robot_state
+#   camera_feeder -> gone (no camera)
 # The sleep offsets are start_nav.yaml's, so the stack comes up in the order it
 # does on the robot: static TF -> maps -> pose source -> lio_bridge -> planner /
 # controller -> task_runner.
@@ -59,6 +62,7 @@ windows:
       - cmd: >-
           python3 -m syncai_sim --ros-args
           --params-file /home/syncrobotic/sim/config/params/sim_params.yaml
+          -p driver_link:=udp
         sleep: 2
         log: sim/sim_node
 
@@ -89,6 +93,25 @@ windows:
       - cmd: ros2 launch syncai_controller controller_server.launch.py
         sleep: 4
         log: sim/controller
+
+  # ---------- Window 4b: driver_manager + robot_state (start_nav's windows 6-7)
+  # The real driver, with its params file's controller addresses moved to
+  # loopback (config/params/driver_manager_sim.yaml): it talks to the sim's
+  # controller link exactly as it talks to the gait controller, and its safety
+  # lock, motion keys and gains are the robot's. robot_state aggregates it into
+  # RobotState for the backend.
+  - name: driver_manager
+    panes:
+      - cmd: >-
+          ros2 launch syncai_driver_manager driver_manager.launch.py
+          params_file:=/home/syncrobotic/sim/config/params/driver_manager_sim.yaml
+        sleep: 2
+        log: sim/driver_manager
+  - name: robot_state
+    panes:
+      - cmd: ros2 launch syncai_robot_state robot_state.launch.py
+        sleep: 4
+        log: sim/robot_state
 
   # ---------- Window 5: task_runner ----------
   - name: task_runner

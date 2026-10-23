@@ -53,6 +53,7 @@ class Teleop:
         self._pending = []  # closures applied under the sim lock
         self._held: set[str] | None = None  # None: no keymap, use the press timers
         self._pressed_until: dict[str, float] = {}
+        self._driving = False
 
     def set_held(self, held: set[str]) -> None:
         self._held = held
@@ -98,7 +99,12 @@ class Teleop:
         h = self.held()
         self.vx = self.vx_speed * (("up" in h) - ("down" in h))
         self.wz = self.wz_speed * (("left" in h) - ("right" in h))
-        sim.set_cmd(self.vx, 0.0, self.wz)
+        # Only while driving, and one stop on release: a teleop that set 0
+        # every loop would override cmd_vel / the driver's AXES with the keys
+        # untouched (the viewer and the nav stack can run together).
+        if h or self._driving:
+            sim.set_cmd(self.vx, 0.0, self.wz)
+        self._driving = bool(h)
 
 
 class _FitToDisplay:

@@ -383,6 +383,28 @@ class Simulator:
         standing = self.robot.cfg.standing
         return names, np.array([standing[j] for _ in LEGS for j in JOINTS])
 
+    def controller_telemetry(self) -> dict:
+        """What the gait controller reports (controller_link.py), in its body
+        frame = base_link: rpy, specific force (m/s^2, gravity only: nothing in
+        the stack reads the driver's `imu`), angular rate, and the twelve
+        joints in the driver's order (FL/FR/HL/HR x HipX/HipY/Knee, the same as
+        joint_states). Kinematic: the baked standing pose, at rest."""
+        R = self.data.xmat[self.info.base_body].reshape(3, 3)
+        rpy = (math.atan2(R[2, 1], R[2, 2]), math.asin(max(-1.0, min(1.0, -R[2, 0]))),
+               math.atan2(R[1, 0], R[0, 0]))
+        acc = R.T @ np.array([0.0, 0.0, 9.81])
+        _, q = self.joint_states()
+        if self.legged:
+            omega = self.data.qvel[self.legs.omega_adr:self.legs.omega_adr + 3].copy()
+            dq = self.legs.dq()
+            tau = self.data.qfrc_applied[self.legs.vadr].copy()
+        else:
+            moving = self.state.last_event is Event.MOVED
+            omega = R.T @ np.array([0.0, 0.0, self.cmd[2] if moving else 0.0])
+            dq = tau = np.zeros(12)
+        return {"rpy": rpy, "acc": acc, "omega": omega,
+                "JOINT_POS": q, "JOINT_VEL": dq, "JOINT_TAU": tau}
+
     # -- poses -------------------------------------------------------------------
     def T_map_base(self) -> np.ndarray:
         p, R = sc.body_frame(self.data, self.info.base_body)

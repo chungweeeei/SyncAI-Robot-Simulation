@@ -63,7 +63,8 @@ Python throughout (decided
 | URDF -> MJCF, mocap weld, standing pose | `robot.py` (`DEFAULT_STANDING` was solved by FK, feet 0.372 m under the hips) |
 | MjSpec assembly, bitmasks, groups | `scene.py` |
 | the lidar pattern, prop rays | `lidar.py`, `prop_rays.py` |
-| services and `mode` | `fake_driver.py` |
+| the gait controller on driver_manager's UDP link (the session) | `controller_link.py` (`tests/test_controller_link.py`), `config/params/driver_manager_sim.yaml` |
+| services and `mode` (driver_link: fake) | `fake_driver.py` |
 | one physics tick, scan, spawn, teleport | `simulator.py` |
 | publishers, subscribers, the main loop | `ros_node.py`; CLI in `__main__.py`; viewer + teleop in `viewer.py` |
 | the session, the display, the test driver | `scripts/run_session.sh`, `scripts/vnc.sh`, `scripts/nav_test.py` |

@@ -116,6 +116,8 @@ PARAM_DEFAULTS: dict = {
     "clip_spikes_above_neighbours_m": 0.2, "track_clear_radius_m": 0.30, "track_floor_fill_radius_m": 0.30,
     "floor_hole_max_cells": 25,
     "visual_mesh": "pointcloud", "publish_map_cloud": True,
+    "driver_link": "fake", "controller_command_port": 50051, "controller_telemetry_port": 50010,
+    "controller_telemetry_hz": 50.0, "battery_soc": 90.0, "battery_drain_per_hour": 0.0,
     "use_ini_initial_pose": True, "spawn": [0.0, 0.0, 0.0, 0.0],
     "lidar_height": 0.481, "robot_radius": 0.25, "body_clearance": 0.6,
     "min_obstacle_height": 0.1, "max_step_height": 0.17, "stair_tread_window": 0.45,
