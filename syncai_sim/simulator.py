@@ -145,6 +145,7 @@ class Simulator:
         self.data = mujoco.MjData(self.model)
         self.legs: LeggedController | None = None
         self.patch: TerrainPatch | None = None
+        self.surface = None
         self.falls = 0
         self._fallen_from: int | None = None
         self._last_world_hit = -math.inf
@@ -152,7 +153,9 @@ class Simulator:
             self.legs = LeggedController(self.model, self.data, self.info.base_body,
                                          load_policies(cfg.ppo_policy, cfg.himloco_policy, log=log),
                                          log=log)
-            self.patch = TerrainPatch(self.world.grid, cfg.terrain)
+            from .surface_heights import load_or_build as load_surface
+            self.surface = load_surface(cfg.map_dir, cfg.cache_dir, self.world, log=log)
+            self.patch = TerrainPatch(self.world.grid, cfg.terrain, self.surface)
             self._gyro = self.model.sensor("imu_gyro").adr[0]
             self._acc = self.model.sensor("imu_acc").adr[0]
             self._trunk_geoms = set(self.info.trunk_geoms)
@@ -217,7 +220,7 @@ class Simulator:
                              self.data.mocap_quat[self.info.mocap_id])
             return
         s = self.state
-        pos = np.array([s.x, s.y, s.z_ground + self.robot.h_stand + 0.005])
+        pos = np.array([s.x, s.y, self._floor_under(s.x, s.y, s.z_ground) + self.robot.h_stand + 0.005])
         self.legs.reset()
         sc.set_base_pose(self.model, self.data, self.info, pos, yaw_pitch_quat(s.yaw, 0.0))
         sc.place_terrain(self.data, self.info, self.patch.boxes_around(pos))
@@ -225,6 +228,16 @@ class Simulator:
         if self._fallen_from is not None:
             self.driver.motion_state = self._fallen_from
             self._fallen_from = None
+
+    def _floor_under(self, x: float, y: float, voxel_top: float) -> float:
+        """The measured floor in the voxel whose top is `voxel_top` (the feet
+        stand there, terrain_patch.py), or that top without a measurement."""
+        if self.surface is None:
+            return voxel_top
+        g = self.grid
+        idx = np.floor((np.array([[x, y, voxel_top - 0.5 * g.res]]) - g.origin_m) / g.res)
+        z = float(self.surface.lookup(idx.astype(np.int64))[0])
+        return voxel_top if math.isnan(z) else z
 
     def _apply_target(self) -> None:
         s = self.state

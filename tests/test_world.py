@@ -83,12 +83,14 @@ def test_clear_track_volume_erases_fence_keeps_floor_and_risers():
     track = [[x, 0.5, 0.481] for x in np.arange(0.2, 2.5, 0.1)]
     track += [[2.5 + 0.3 * k + 0.15, 0.5, 0.481 + 0.2 * (k + 1)] for k in range(4)]
     out = clear_track_volume(vox, 0.1, np.array(track), 0.30, 0.20, 0.30, 0.481, window=3)
-    # The fence has a gap where the track crossed it, from the floor margin
-    # (0.2 m, so its lowest two layers stay as a kerb) up; the rest of it stands.
+    # The fence has a gap where the track crossed it, down to the floor: the
+    # floor margin (0.2 m) keeps its lowest two layers, and on this flat
+    # stretch the ridge cut takes them too — a 0.2 m sliver tripped the
+    # walking robot (_cut_track_ridges). The rest of the fence stands.
     fence_left = out[(out[:, 0] == ORG + 15) & (out[:, 2] >= ORG)]
     assert 0 < fence_left.shape[0] < fence.shape[0]
     gap = fence_left[np.abs(fence_left[:, 1] - (ORG + 5)) <= 2]
-    assert gap.shape[0] > 0 and (gap[:, 2] <= ORG + 1).all()
+    assert gap.shape[0] == 0
     far = fence_left[np.abs(fence_left[:, 1] - (ORG + 5)) >= 4]
     assert (far[:, 2] == ORG + 3).any()
     # Not one voxel of the floor or of the flight is gone.

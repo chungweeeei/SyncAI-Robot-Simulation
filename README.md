@@ -194,7 +194,13 @@ controller locks itself; a teleport or `initialpose` stands the robot up again.
 The feet stand on `terrain_patch.py`: ~300-700 voxel boxes around the robot,
 moved as it walks, with the map's surface-only artefacts closed first (hollow
 stair treads, one-voxel slots across a flight, one-column holes — each with
-the run that found it in the module). There is no step rule in this mode:
+the run that found it in the module), and each column's top box stands at
+the floor's measured height inside its voxel (`surface_heights.py`: the median
+of `map.pcd` there) — the 0.1 m grid turns dp's tilted floor into a strip of
+random blocks every ~13 m, where PPO fell 4 times out of 4. On flat stretches
+of the mapping track the world build also cuts one-voxel-thick ridges (the
+corridor fence of finding 1 had kept 0.2-0.3 m; the robot fell on it both
+ways). There is no step rule in this mode:
 whether a flight is climbed is up to the policy. Measured (2026-10-23):
 PPO 0.4 m/s at a 0.5 command, 1.0 rad/s yaw; HimLoco climbs the planner CLI's
 synthetic flight and dp's first flight to the landing (1.2 m); PPO falls at
@@ -207,7 +213,8 @@ kinematic body is built to. One of the two is not the robot; worth measuring
 on the real G23 before trusting the planner's ground estimate in this mode.
 
 **The picture** (`visual_mesh`, `--visual-mesh`). By default the viewer draws
-a smooth surface reconstructed from the map's `map.pcd` (`pcd_mesh.py`:
+the octomap's voxels; `pointcloud` draws instead a smooth surface reconstructed
+from the map's `map.pcd` (`pcd_mesh.py`:
 points kept only on the cleaned voxels, 4 cm, screened Poisson, 1.5 M
 triangles; dp builds in ~3.5 min once, then loads from the cache; build it
 ahead with `python3 -m syncai_sim.pcd_mesh map/dp`). `voxels` draws the

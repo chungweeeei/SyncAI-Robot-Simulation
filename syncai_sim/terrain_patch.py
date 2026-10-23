@@ -38,9 +38,13 @@ real robot never meets, so the patch closes them before choosing boxes:
 
 Then the occupied voxels with at least one free face-neighbour (an interior
 voxel can never be touched) in the height band from `below` under the base to
-`above` over it become boxes, nearest first. The box tops are the voxel tops,
-the height `VoxelGrid.ground_under` calls the ground, so the feet stand where
-the lidar, the planner and the kinematic mode put the floor. The boxes are
+`above` over it become boxes, nearest first. A box that is the top of its
+column stands with its top at the surface's measured height inside the voxel
+(surface_heights.py: the median of map.pcd's points there; without points,
+the median of its neighbours'), not at the voxel's top: the grid rounds a flat
+but tilted floor into a strip of 0.1 m blocks every ~13 m, and PPO fell on one
+four times out of four. Without map.pcd the tops are the voxel tops, the
+height `VoxelGrid.ground_under` calls the ground. The boxes are
 2 mm smaller than a voxel so that neighbours' bounding boxes do not touch (no
 broadphase pairs between them); a 0.044 m foot does not notice the seam.
 """
@@ -69,9 +73,10 @@ class TerrainPatchConfig:
 
 
 class TerrainPatch:
-    def __init__(self, grid: VoxelGrid, cfg: TerrainPatchConfig | None = None):
+    def __init__(self, grid: VoxelGrid, cfg: TerrainPatchConfig | None = None, surface=None):
         self.grid = grid
         self.cfg = cfg or TerrainPatchConfig()
+        self.surface = surface  # surface_heights.SurfaceHeights or None
         self.centre: np.ndarray | None = None
         self.n_used = 0
         self.truncated = 0  # rebuilds that had more boxes than the pool
@@ -105,8 +110,13 @@ class TerrainPatch:
         off = lo - pad_lo
         inner = keep[off[0]:off[0] + (hi - lo)[0], off[1]:off[1] + (hi - lo)[1],
                      off[2]:off[2] + (hi - lo)[2]]
-        idx = np.argwhere(inner) + lo
+        rel = np.argwhere(inner)
+        idx = rel + lo
         centres = g.origin_m + (idx + 0.5) * res
+        if self.surface is not None and idx.shape[0]:
+            p = rel + off  # the same cells in the padded slice
+            top = ~occ[p[:, 0], p[:, 1], p[:, 2] + 1]
+            centres[top, 2] = self._tops(idx[top], centres[top, 2] + 0.5 * res) - 0.5 * res
         d = np.hypot(centres[:, 0] - x, centres[:, 1] - y)
         if centres.shape[0] > c.capacity:
             # Keep what a foot can reach first: near, and near the feet's height.
@@ -116,6 +126,27 @@ class TerrainPatch:
         self.centre = np.array([x, y, z])
         self.n_used = int(centres.shape[0])
         return centres
+
+
+    def _tops(self, idx: np.ndarray, voxel_tops: np.ndarray) -> np.ndarray:
+        """Measured tops for surface cells; the median of the measured
+        neighbours (8 around, one voxel up and down: the far side of a
+        terrace line is a voxel off) where a cell has none; the voxel top
+        where neither has."""
+        tops = self.surface.lookup(idx)
+        missing = np.isnan(tops)
+        if np.any(missing):
+            m = idx[missing]
+            offs = np.array([(dx, dy, dz) for dx in (-1, 0, 1) for dy in (-1, 0, 1)
+                             for dz in (-1, 0, 1) if dx or dy])
+            near = self.surface.lookup((m[:, None, :] + offs[None]).reshape(-1, 3))
+            near = near.reshape(m.shape[0], offs.shape[0])
+            known = ~np.isnan(near)
+            fill = np.full(m.shape[0], np.nan, np.float32)
+            rows = known.any(axis=1)
+            fill[rows] = np.nanmedian(near[rows], axis=1)
+            tops[missing] = fill
+        return np.where(np.isnan(tops), voxel_tops, tops)
 
 
 def _slice_padded(grid: np.ndarray, lo: np.ndarray, hi: np.ndarray) -> np.ndarray:

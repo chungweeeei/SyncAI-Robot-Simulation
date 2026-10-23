@@ -117,8 +117,9 @@ class WorldOptions:
 
 
 # Bumped when the cache's contents change shape without an option changing
-# (2: the visual mesh's per-face directions, visual.py; 3: storeys).
-CACHE_FORMAT = 3
+# (2: the visual mesh's per-face directions, visual.py; 3: storeys; 4: the
+# track's one-voxel ridges cut, _cut_track_ridges).
+CACHE_FORMAT = 4
 
 
 @dataclass
@@ -259,8 +260,57 @@ def clear_track_volume(voxels: np.ndarray, resolution: float, track: np.ndarray,
         ys = cy + dy
         ok = (xs >= 0) & (xs < size[0]) & (ys >= 0) & (ys < size[1])
         erase[xs[ok], ys[ok], z0:z1 + 1] = True
-    keep = ~erase[idx[:, 0], idx[:, 1], idx[:, 2]]
+    grid &= ~erase
+    _cut_track_ridges(grid, track, grounds, resolution, origin, dx, dy, window)
+    keep = grid[idx[:, 0], idx[:, 1], idx[:, 2]]
     return voxels[keep]
+
+
+def _cut_track_ridges(grid: np.ndarray, track: np.ndarray, grounds: np.ndarray, resolution: float,
+                      origin: np.ndarray, dx: np.ndarray, dy: np.ndarray, window: int,
+                      flat_m: float = 0.1, reach_m: float = 0.5) -> None:
+    """In place: on the flat stretches of the track, cut one-voxel-thick
+    ridges inside the swept disc down to their lower neighbour.
+
+    The floor margin above keeps what is shorter than a riser, which is what
+    the stairs need and what lets a thin sliver up to ~0.2 m survive on a
+    floor: dp's corridor fence at x -7.6 (y -15.1 .. -15.9) kept its lower
+    0.2-0.3 m, the kinematic base stepped it (its allowed step is 0.22) and the
+    walking robot fell on it in both directions (2026-10-24). A ridge is a
+    column whose top stands at least a voxel over both its x neighbours or
+    both its y neighbours, cut to the higher of those two: a sliver is one voxel thick, a step, a tread or a
+    wall is not (a terrace line of the tilted floor has one lower side only).
+    Flat means the keyframes within `window` have grounds within `flat_m`, so
+    a flight is never touched."""
+    nx, ny, nz = grid.shape
+    cols: dict[tuple[int, int], float] = {}
+    for k, (x, y, _z) in enumerate(track):
+        win = grounds[max(0, k - window):k + window + 1]
+        if win.max() - win.min() > flat_m:
+            continue
+        cx = int(math.floor((x - origin[0]) / resolution))
+        cy = int(math.floor((y - origin[1]) / resolution))
+        for i, j in zip(cx + dx, cy + dy):
+            if 1 <= i < nx - 1 and 1 <= j < ny - 1:
+                cols.setdefault((int(i), int(j)), float(grounds[k]))
+    for (i, j), ground in cols.items():
+        hi = min(nz - 1, int(math.floor((ground + reach_m - origin[2]) / resolution)))
+        lo = max(0, int(math.floor((ground - reach_m - origin[2]) / resolution)))
+
+        def top(a, b):
+            ks = np.nonzero(grid[a, b, lo:hi + 1])[0]
+            return lo + int(ks[-1]) if ks.size else -1
+
+        t = top(i, j)
+        if t < 0:
+            continue
+        pairs = ((top(i - 1, j), top(i + 1, j)), (top(i, j - 1), top(i, j + 1)))
+        # Down to the higher of the two lower neighbours: never below the
+        # floor beside it (no pit at a terrace line).
+        floor = max((max(a, b) for a, b in pairs if a >= 0 and b >= 0 and max(a, b) < t),
+                    default=-1)
+        if floor >= 0:
+            grid[i, j, floor + 1:t + 1] = False
 
 
 def fill_track_floor(voxels: np.ndarray, resolution: float, track: np.ndarray, radius_m: float,
