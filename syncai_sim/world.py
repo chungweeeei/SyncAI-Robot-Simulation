@@ -29,9 +29,10 @@ import os
 import time
 from dataclasses import asdict, dataclass
 
+import numba as nb
 import numpy as np
 
-from . import btree, greedy_mesh
+from . import btree, greedy_mesh, visual
 from .voxel_grid import VoxelGrid
 
 
@@ -99,6 +100,21 @@ class WorldOptions:
     # ahead (top 0.2 m up) is inside the window and is left alone. 0 = off.
     track_floor_fill_radius_m: float = 0.30
     lidar_height_m: float = 0.481  # poses.txt is the IMU frame; ground = z - this
+    # Fill floor holes up to this many columns (0.1 m cells; 0 = off): a region
+    # of columns with no surface, enclosed on every side by floor within a
+    # 0.5 m height band, gets a floor voxel at the median height of the floor
+    # around it. They are what the lidar never saw — the blind cone under the
+    # mapper, under furniture — and dp's octomap holds 3965 of them, the same
+    # count before and after every step above (2539 single columns, ~1190 of
+    # 2-9, 118 of 10-24; 2026-10-23): seen as holes in the viewer, rays went
+    # through them, and a walking foot fits in anything over one column.
+    # Larger regions are left: dp's 40 of 1 m^2 and more include stairwells.
+    floor_hole_max_cells: int = 25
+
+
+# Bumped when the cache's contents change shape without an option changing
+# (2: the visual mesh's per-face directions, visual.py).
+CACHE_FORMAT = 2
 
 
 @dataclass
@@ -128,6 +144,7 @@ class World:
     mesh_faces: np.ndarray  # (F, 3) int32
     plates: np.ndarray  # (P, 6) int64 voxel boxes: x0 y0 z0 nx ny nz
     stats: WorldStats
+    mesh_dirs: np.ndarray  # (F,) int8, visual.DIRECTIONS
 
     def plates_metres(self) -> tuple[np.ndarray, np.ndarray]:
         """(centre (P, 3), half-size (P, 3)) in metres."""
@@ -285,12 +302,85 @@ def fill_track_floor(voxels: np.ndarray, resolution: float, track: np.ndarray, r
     return np.concatenate([voxels.astype(np.int64), new])
 
 
-def exposed_face_mesh(voxels: np.ndarray, resolution: float) -> tuple[np.ndarray, np.ndarray]:
+def fill_floor_holes(voxels: np.ndarray, max_cells: int, band: int = 5, step: int = 2) -> np.ndarray:
+    """Fill enclosed floor holes of at most `max_cells` columns (see
+    WorldOptions.floor_hole_max_cells). Bands of `band` voxels every `step`
+    voxels, bottom up: overlapping, so a hole in a floor that drifts by a
+    voxel over the site still has its whole rim in one band, and a hole filled
+    in one band is floor for the next. Returns the extended voxel set."""
+    if max_cells <= 0 or voxels.shape[0] == 0:
+        return voxels
+    v = voxels.astype(np.int64)
+    lo = v.min(axis=0) - np.array([1, 1, 0])  # a free border: holes touching it are not enclosed
+    hi = v.max(axis=0) + np.array([2, 2, 1])
+    grid = np.zeros(tuple((hi - lo).tolist()), dtype=np.bool_)
+    idx = v - lo
+    grid[idx[:, 0], idx[:, 1], idx[:, 2]] = True
+    n0 = int(v.shape[0])
+    for z0 in range(0, grid.shape[2], step):
+        _fill_band(grid, z0, min(z0 + band, grid.shape[2]), max_cells)
+    if int(grid.sum()) == n0:
+        return voxels
+    return np.argwhere(grid) + lo
+
+
+@nb.njit(cache=True)
+def _fill_band(grid, z0, z1, max_cells):
+    nx, ny, nz = grid.shape
+    top = np.full((nx, ny), -1, np.int64)
+    for i in range(nx):
+        for j in range(ny):
+            for z in range(z1 - 1, z0 - 1, -1):
+                if grid[i, j, z] and (z + 1 >= nz or not grid[i, j, z + 1]):
+                    top[i, j] = z
+                    break
+    seen = np.zeros((nx, ny), np.bool_)
+    stack = np.empty(nx * ny, np.int64)
+    cells = np.empty(nx * ny, np.int64)
+    rim = np.empty(4 * max_cells, np.int64)
+    for si in range(nx):
+        for sj in range(ny):
+            if top[si, sj] >= 0 or seen[si, sj]:
+                continue
+            seen[si, sj] = True
+            stack[0] = si * ny + sj
+            sp, n, border = 1, 0, False
+            while sp:
+                sp -= 1
+                c = stack[sp]
+                cells[n] = c
+                n += 1
+                i, j = c // ny, c % ny
+                if i == 0 or j == 0 or i == nx - 1 or j == ny - 1:
+                    border = True
+                for a, b in ((i + 1, j), (i - 1, j), (i, j + 1), (i, j - 1)):
+                    if 0 <= a < nx and 0 <= b < ny and top[a, b] < 0 and not seen[a, b]:
+                        seen[a, b] = True
+                        stack[sp] = a * ny + b
+                        sp += 1
+            if border or n > max_cells:
+                continue
+            m = 0
+            for k in range(n):
+                i, j = cells[k] // ny, cells[k] % ny
+                for a, b in ((i + 1, j), (i - 1, j), (i, j + 1), (i, j - 1)):
+                    if top[a, b] >= 0:
+                        rim[m] = top[a, b]
+                        m += 1
+            h = np.sort(rim[:m])[m // 2]
+            for k in range(n):
+                grid[cells[k] // ny, cells[k] % ny, h] = True
+
+
+def exposed_face_mesh(voxels: np.ndarray, resolution: float
+                      ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     """Triangles of every voxel face that borders empty space, with coplanar
     neighbours merged into rectangles. Returns (vertices (V, 3) float32 metres,
-    faces (F, 3) int32), wound counter-clockwise seen from outside."""
+    faces (F, 3) int32 wound counter-clockwise seen from outside, directions
+    (F,) int8 indexing visual.DIRECTIONS). Vertices are shared only between
+    faces of one direction, so that per-vertex normals stay flat (visual.py)."""
     if voxels.shape[0] == 0:
-        return np.zeros((0, 3), np.float32), np.zeros((0, 3), np.int32)
+        return np.zeros((0, 3), np.float32), np.zeros((0, 3), np.int32), np.zeros(0, np.int8)
     lo = voxels.min(axis=0) - 1  # one voxel of padding so every face has a neighbour
     hi = voxels.max(axis=0) + 2
     grid = np.zeros(tuple((hi - lo).tolist()), dtype=bool)
@@ -320,6 +410,7 @@ def exposed_face_mesh(voxels: np.ndarray, resolution: float) -> tuple[np.ndarray
             quads.append((axis, sign, rects))
 
     verts = []
+    dirs = []
     for axis, sign, rects in quads:
         others = [i for i in range(3) if i != axis]
         a1, a2 = others
@@ -342,15 +433,19 @@ def exposed_face_mesh(voxels: np.ndarray, resolution: float) -> tuple[np.ndarray
             c1, c3 = c3, c1
         corner[:, 0], corner[:, 1], corner[:, 2], corner[:, 3] = c0, c1, c2, c3
         verts.append(corner.reshape(-1, 3))
+        dirs.append(np.full(n, visual.DIRECTIONS.index((axis, sign)), np.int8))
     v = np.concatenate(verts)
     v = (v + lo[None, :] - btree.TREE_MAX_VAL) * resolution
-    # Share vertices between neighbouring rectangles (a 7 M -> ~3 M reduction).
+    quad_dir = np.concatenate(dirs)
+    # Share vertices between neighbouring rectangles of one direction (a
+    # 7 M -> ~3 M reduction across all six).
     key = np.round(v / (resolution * 0.5)).astype(np.int64)
+    key = np.concatenate([key, np.repeat(quad_dir, 4)[:, None].astype(np.int64)], axis=1)
     uniq, inverse = np.unique(key, axis=0, return_inverse=True)
-    vertices = (uniq * (resolution * 0.5)).astype(np.float32)
+    vertices = (uniq[:, :3] * (resolution * 0.5)).astype(np.float32)
     q = inverse.reshape(-1, 4)
     faces = np.concatenate([q[:, [0, 1, 2]], q[:, [0, 2, 3]]]).astype(np.int32)
-    return vertices, faces
+    return vertices, faces, np.concatenate([quad_dir, quad_dir])
 
 
 def build_world(map_dir: str, cache_dir: str, opts: WorldOptions | None = None,
@@ -369,13 +464,14 @@ def build_world(map_dir: str, cache_dir: str, opts: WorldOptions | None = None,
     if os.path.isfile(stats_path) and os.path.isfile(data_path):
         with open(stats_path) as f:
             old = json.load(f)
-        if old.get("cache_key") == key and old.get("options") == asdict(opts):
+        if old.get("cache_key") == key and old.get("options") == asdict(opts) \
+                and old.get("format") == CACHE_FORMAT:
             z = np.load(data_path)
-            stats = WorldStats(**old)
+            stats = WorldStats(**{k: v for k, v in old.items() if k != "format"})
             grid = VoxelGrid(z["voxels"], float(z["resolution"]), opts.grid_z_clip_above_lowest_m)
             log(f"[world] {name}: cached ({stats.voxels} voxels, {stats.mesh_triangles} tris, "
                 f"{stats.plates} plates)")
-            return World(grid, z["mesh_vertices"], z["mesh_faces"], z["plates"], stats)
+            return World(grid, z["mesh_vertices"], z["mesh_faces"], z["plates"], stats, z["mesh_dirs"])
 
     t0 = time.perf_counter()
     leaves_path = os.path.join(cache_dir, f"leaves-{key}.npz")
@@ -409,11 +505,16 @@ def build_world(map_dir: str, cache_dir: str, opts: WorldOptions | None = None,
     if voxels.shape[0] != n_spiked:
         log(f"[world] {name}: erased {n_spiked - voxels.shape[0]} voxels inside the mapping "
             f"robot's body volume along {track.shape[0]} keyframes")
+    n_holey = int(voxels.shape[0])
+    voxels = fill_floor_holes(voxels, opts.floor_hole_max_cells)
+    if voxels.shape[0] != n_holey:
+        log(f"[world] {name}: filled {voxels.shape[0] - n_holey} floor voxels into enclosed holes "
+            f"of up to {opts.floor_hole_max_cells} columns")
     grid = VoxelGrid(voxels, resolution, opts.grid_z_clip_above_lowest_m)
     kept = voxels[voxels[:, 2] <= grid.lo[2] + grid.grid.shape[2] - 1]
-    visual = column_floor_filter(kept, resolution, opts.visual_max_height_above_column_floor_m)
-    log(f"[world] {name}: {kept.shape[0]} voxels, meshing {visual.shape[0]} for the viewer")
-    vertices, faces = exposed_face_mesh(visual, resolution)
+    visual_voxels = column_floor_filter(kept, resolution, opts.visual_max_height_above_column_floor_m)
+    log(f"[world] {name}: {kept.shape[0]} voxels, meshing {visual_voxels.shape[0]} for the viewer")
+    vertices, faces, dirs = exposed_face_mesh(visual_voxels, resolution)
     boxes = greedy_mesh.merge_voxels(kept)
     plates = boxes[np.prod(boxes[:, 3:6], axis=1) >= opts.plate_min_voxels]
     build_s = time.perf_counter() - t1
@@ -430,13 +531,13 @@ def build_world(map_dir: str, cache_dir: str, opts: WorldOptions | None = None,
         build_s=round(build_s, 2),
     )
     np.savez(data_path, voxels=kept.astype(np.int32), resolution=resolution,
-             mesh_vertices=vertices, mesh_faces=faces, plates=plates)
+             mesh_vertices=vertices, mesh_faces=faces, mesh_dirs=dirs, plates=plates)
     with open(stats_path + ".tmp", "w") as f:
-        json.dump(asdict(stats), f, indent=2)
+        json.dump({**asdict(stats), "format": CACHE_FORMAT}, f, indent=2)
     os.replace(stats_path + ".tmp", stats_path)
     log(f"[world] {name}: built in {parse_s + build_s:.1f} s -> {stats.mesh_triangles} tris, "
         f"{stats.plates} plates, grid {stats.grid_shape} ({stats.grid_mb} MB)")
-    return World(grid, vertices, faces, plates, stats)
+    return World(grid, vertices, faces, plates, stats, dirs)
 
 
 def default_cache_dir(map_dir: str) -> str:

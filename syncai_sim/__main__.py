@@ -2,6 +2,7 @@
 
     python3 -m syncai_sim [--teleop] [--headless] [--show-scan] [--no-ros]
                           [--system-config INI] [--map DIR] [--seconds S]
+                          [--locomotion policy|kinematic] [--visual-mesh pointcloud|voxels]
                           [--ros-args --params-file ... -p key:=value ...]
 
 Everything after `--ros-args` goes to rclpy (the params file is
@@ -33,6 +34,10 @@ def main(argv=None) -> int:
     ap.add_argument("--system-config", default=None, help="the instance INI (default config/system.ini)")
     ap.add_argument("--map", default=None, help="map/<name> directory (default: the INI's [map])")
     ap.add_argument("--seconds", type=float, default=None, help="exit after this much wall time")
+    ap.add_argument("--locomotion", choices=("policy", "kinematic"), default=None,
+                    help="override the locomotion parameter (default: the params file's, policy)")
+    ap.add_argument("--visual-mesh", choices=("pointcloud", "voxels"), default=None,
+                    help="what the viewer draws of the site (default: the params file's, pointcloud)")
     a = ap.parse_args(own)
 
     from .config import read_ini
@@ -53,6 +58,10 @@ def main(argv=None) -> int:
     pn.destroy_node()
     if a.map:
         params["map_dir"] = a.map
+    if a.locomotion:
+        params["locomotion"] = a.locomotion
+    if a.visual_mesh:
+        params["visual_mesh"] = a.visual_mesh
     cfg = build_sim_config(ini, params)
     log = print
     sim = Simulator(cfg, log=log)
@@ -101,6 +110,10 @@ def _run_without_ros(ini, a) -> int:
     params = dict(PARAM_DEFAULTS)
     if a.map:
         params["map_dir"] = a.map
+    if a.locomotion:
+        params["locomotion"] = a.locomotion
+    if a.visual_mesh:
+        params["visual_mesh"] = a.visual_mesh
     cfg = build_sim_config(ini, params)
     sim = Simulator(cfg)
     spawn = _spawn_pose(ini, params)
@@ -118,6 +131,7 @@ def _run_without_ros(ini, a) -> int:
     next_t = t_start
     next_scan = 0.0
     next_view = 0.0
+    next_print = 5.0
     scan_ms = 0.0
     n = 0
     try:
@@ -127,7 +141,7 @@ def _run_without_ros(ini, a) -> int:
                 break
             if viewer is not None and not viewer.is_running():
                 break
-            steps = max(1, min(int((now - next_t) / dt) + 1, 20))
+            steps = max(1, min(int((now - next_t) / dt) + 1, int(round(0.1 / dt))))
             if teleop:
                 teleop.apply(sim)
             for _ in range(steps):
@@ -144,7 +158,8 @@ def _run_without_ros(ini, a) -> int:
             if viewer is not None and now >= next_view:
                 next_view = now + 1 / 60
                 viewer.sync(sim)
-            if int(sim.sim_time) % 5 == 0 and abs(sim.sim_time - round(sim.sim_time)) < dt / 2:
+            if sim.sim_time >= next_print:  # steps come in catch-up batches: never ==
+                next_print += 5.0
                 st = sim.status()
                 print(f"[sim] t={sim.sim_time:6.1f}  scan {scan_ms:.1f} ms ({n} pts)  "
                       f"{st['last_event']}  xy=({st['x']:.2f},{st['y']:.2f}) z={st['z_ground']:.2f} "

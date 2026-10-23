@@ -85,3 +85,47 @@ def test_stairs_need_the_policy(stairs_map, tmp_path):
     drive(sim, 0.5, 10.0)
     assert sim.state.z_ground > z0 + 0.6, sim.status()
     assert sim.status()["collisions"] == 0
+
+
+POLICY_DIR = os.environ.get("SYNCAI_POLICY_DIR",
+                            os.path.join(os.path.dirname(__file__), "..", "policy"))
+
+
+def make_walking_sim(stairs_map, tmp_path):
+    pytest.importorskip("onnxruntime")
+    ppo = os.path.join(POLICY_DIR, "ppo", "policy7.onnx")
+    him = os.path.join(POLICY_DIR, "isaacsim", "policy_0812.onnx")
+    if not (os.path.isfile(ppo) and os.path.isfile(him)):
+        pytest.skip(f"policies not under {POLICY_DIR} (policy/README.md)")
+    cfg = SimConfig(map_dir=stairs_map, cache_dir=str(tmp_path / "cache"), urdf_path=URDF,
+                    locomotion="policy", physics_hz=500.0, ppo_policy=ppo, himloco_policy=him)
+    cfg.lidar.points_per_scan = 2000
+    return Simulator(cfg, log=lambda *a: None)
+
+
+def foot_of_flight(sim):
+    lo, hi = sim.grid.bounds_m()
+    y = (lo[1] + hi[1]) / 2
+    xs = np.arange(lo[0] + 0.5, hi[0] - 0.5, 0.1)
+    g = np.array([sim.grid.ground_under(x, y, 0.0, 5.0, 5.0) for x in xs])
+    g = np.where(np.isnan(g), -1e9, g)
+    low = float(np.min(g[g > -1e8]))
+    return xs[np.argmax(g > low + 0.1)], y, low
+
+
+@pytest.mark.parametrize("policy", [0, 1])
+def test_walking_flight_needs_himloco(stairs_map, tmp_path, policy):
+    """The policies themselves decide: HimLoco climbs the 1 m flight, PPO trips
+    at the first riser and the posture check puts the driver in Damping."""
+    sim = make_walking_sim(stairs_map, tmp_path)
+    first, y, low = foot_of_flight(sim)
+    sim.driver.policy = policy
+    sim.spawn(first - 1.0, y, 0.0, low)
+    z0 = sim.state.z_ground
+    drive(sim, 0.4, 12.0)
+    st = sim.status()
+    if policy == 1:
+        assert sim.state.z_ground > z0 + 0.9, st
+        assert st["falls"] == 0 and st["collisions"] == 0, st
+    else:
+        assert sim.state.z_ground < z0 + 0.25, st

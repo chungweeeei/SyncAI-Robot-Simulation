@@ -24,6 +24,12 @@
     clip_spikes_above_neighbours_m: 0.2   # the mapping robot's own feet (world.py); 0 keeps them
     track_floor_fill_radius_m: 0.30       # put floor under the mapping robot where the map has none (world.py); 0 = off
     track_clear_radius_m: 0.30            # erase what stands where the mapping robot's body was (world.py); 0 = off
+    floor_hole_max_cells: 25              # fill enclosed floor holes up to 0.25 m^2 (world.py); 0 = off
+    # What the viewer draws of the site: "pointcloud" = a smooth surface built
+    # from <map>/map.pcd (pcd_mesh.py; dp ~3.5 min the first time, then cached;
+    # falls back to voxels without map.pcd or open3d), "voxels" = the cubes the
+    # sim actually senses and stands on. A picture either way.
+    visual_mesh: pointcloud
 
     # --- spawn ---------------------------------------------------------------
     # Default: the INI's [initial_pose] (x, y, z = ground, yaw). z is a hint for
@@ -62,8 +68,21 @@
     initial_policy: 0
     mode_publish_rate_hz: 2.0
 
+    # --- locomotion -------------------------------------------------------------
+    # policy: the G23 walks on its own ONNX policies, as g2_deploy_rs runs them
+    # (syncai_sim/policy.py names the source files): set_policy_mode 0 = PPO,
+    # 1 = HimLoco (StairMode stair_policy_mode), anything else PPO. The files
+    # are main.rs's defaults, copied into this repo's policy/ (gitignored; see
+    # policy/README.md for where they come from and their checksums).
+    # kinematic: the carried statue with the step rule (kinematics.py).
+    locomotion: policy
+    ppo_policy: /home/syncrobotic/sim/policy/ppo/policy7.onnx
+    himloco_policy: /home/syncrobotic/sim/policy/isaacsim/policy_0812.onnx
+
     # --- rates -----------------------------------------------------------------
-    physics_hz: 200.0
+    # A multiple of the policies' 50 Hz. 2 ms: both policies walk the same at
+    # 1, 2 and 5 ms on flat ground; the margin is for stair edges.
+    physics_hz: 500.0
     pose_publish_hz: 50.0        # TF x2 + pointlio/lio_odom (lio_bridge ticks at 20)
     imu_publish_hz: 50.0
     status_publish_hz: 2.0

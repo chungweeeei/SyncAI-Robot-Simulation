@@ -60,6 +60,18 @@ range noise at 1 cm (`lidar.py`) so those jumps do not read as dynamic
 obstacles; the planner's overlay threshold (0.10 m) is exactly one voxel, and
 with 2 cm noise it fired on flat floor in the sim.
 
+**Cause, measured.** The undulation is a rigid tilt of the whole map, not
+noise: a plane fit to the ground floor's top voxels (284 k columns) gives
+z = −0.31 cm/m · x − 0.78 cm/m · y − 0.39, i.e. ~0.5°, with a residual of
+10.8 cm — one voxel. The floor falls smoothly from −0.2 m at the south end to
+−0.7 m at the north, in identical numbers in the raw `octomap.bt` and in the
+sim's grid, so it is in the map. `syncai_mapping`'s README names the likely
+origin: Point-LIO's gravity alignment runs at start and reset, and "doing that
+in motion tilts the whole map without any error". The sim keeps the tilt on
+purpose — the planner and the localizer read the same tilted map, and a
+levelled sim world would disagree with them by up to 0.25 m at the site's
+edges; a remap of dp with the robot standing still at start is the fix.
+
 ## 4. Stair mode climbs two flights; the turn at the next landing is where it stops (2026-10-23)
 
 **Seen.** With the world cleaned of the mapper's own artefacts (findings 1 and

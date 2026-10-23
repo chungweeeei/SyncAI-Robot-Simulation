@@ -8,9 +8,13 @@ short list of what you must know to edit it correctly.
 
 A MuJoCo simulation of the SyncAI G23 in a real mapped site, so the navigation
 stack of `chungweeeei/SyncAI-Robot-Workspace` (a sibling checkout, mounted into
-the container) runs end to end with no robot. It is **not** a legged
-simulation: there is no gait policy, the robot is a rigid body carried
-kinematically (`syncai_sim/kinematics.py`). Python throughout (decided
+the container) runs end to end with no robot. The G23 walks on its own ONNX
+policies (`policy.py`, a port of `g2_deploy_rs`'s runners; `legged.py` drives
+the joints) on a patch of the voxel grid (`terrain_patch.py`); `locomotion:
+kinematic` keeps the older rigid body carried by rules (`kinematics.py`).
+The two ONNX files live in `policy/`, gitignored: copied from g2_deploy_rs,
+where they are not versioned either (`policy/README.md`); never commit them.
+Python throughout (decided
 2026-10-23); one container (`docker-compose.yml`), the workspace mounted at
 `/home/syncrobotic/robot_ws`, this repo at `/home/syncrobotic/sim`.
 
@@ -24,8 +28,9 @@ kinematically (`syncai_sim/kinematics.py`). Python throughout (decided
 2. **The voxel grid is the truth; MuJoCo is the picture and the props.** Lidar
    rays, the ground under the robot and whether the trunk is blocked are
    answered by `voxel_grid.py` (numba) on the voxels of `octomap.bt`. MuJoCo
-   gets a visual mesh (`contype 0`) and the large merged boxes as collision
-   plates for props. Do not route sensing through `mj_multiRay` or collide the
+   gets a visual mesh (`contype 0`), the large merged boxes as collision
+   plates for props, and — walking — a pool of voxel boxes moved under the
+   feet (`terrain_patch.py`), never the grid whole. Do not route sensing through `mj_multiRay` or collide the
    trunk with the world mesh: the first scans every geom per ray, the second is
    a convex hull. The measurements that decided this are in README
    ("Decisions worth knowing").
@@ -36,7 +41,7 @@ kinematically (`syncai_sim/kinematics.py`). Python throughout (decided
    TF); `initialpose` moves `map -> pointlio_odom`, never the body; goals carry
    the floor's ground z.
 4. **Wall clock.** `use_sim_time` is false everywhere in the stack and the sim
-   paces fixed 5 ms steps to real time. Never publish a stamp that is not `now`.
+   paces fixed 2 ms steps to real time. Never publish a stamp that is not `now`.
 5. **Comments explain why**, as in the workspace, and record measurements and
    rejected alternatives. A bare number without its reason is out of place.
 6. Python: `ruff.toml` (the workspace's rule set, py310, 100 columns). Tests:
@@ -48,8 +53,12 @@ kinematically (`syncai_sim/kinematics.py`). Python throughout (decided
 | Need | Place |
 |---|---|
 | map -> world (parse, mesh, plates, cache) | `world.py`, `btree.py`, `greedy_mesh.py` |
+| the viewer's look (pcd surface, colours) | `pcd_mesh.py`, `visual.py` (picture only, never sensing) |
 | ray cast / ground / blocked | `voxel_grid.py` |
-| the step rule, gates, collisions | `kinematics.py` (pure Python, `tests/test_kinematics.py`) |
+| the policies (port of g2_deploy_rs) | `policy.py` (`tests/test_policy.py`; names the Rust source of every constant) |
+| joints per motion state, PD, falls | `legged.py` |
+| the feet's ground (voxels -> boxes) | `terrain_patch.py` (numba, `tests/test_terrain_patch.py`) |
+| the step rule, gates, collisions (kinematic) | `kinematics.py` (pure Python, `tests/test_kinematics.py`) |
 | URDF -> MJCF, mocap weld, standing pose | `robot.py` (`DEFAULT_STANDING` was solved by FK, feet 0.372 m under the hips) |
 | MjSpec assembly, bitmasks, groups | `scene.py` |
 | the lidar pattern, prop rays | `lidar.py`, `prop_rays.py` |

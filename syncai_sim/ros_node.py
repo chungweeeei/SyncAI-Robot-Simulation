@@ -330,6 +330,7 @@ def run_loop(node: SimNode, viewer_factory, teleop, show_scan: bool, stop_after:
         "status": 1.0 / p["status_publish_hz"], "view": 1.0 / 60.0,
     }
     due = {k: 0.0 for k in periods}
+    max_catch_up = max(1, int(round(0.1 / dt)))
     t_start = time.perf_counter()
     next_t = t_start
     steps_total = 0
@@ -346,7 +347,7 @@ def run_loop(node: SimNode, viewer_factory, teleop, show_scan: bool, stop_after:
                 log("[sim] viewer closed; exiting")
                 break
             behind = int((now - next_t) / dt) + 1
-            steps = max(1, min(behind, 20))  # catch up, but never more than 0.1 s at once
+            steps = max(1, min(behind, max_catch_up))  # catch up, but never more than 0.1 s at once
             with node.lock:
                 if teleop is not None:
                     teleop.apply(sim)

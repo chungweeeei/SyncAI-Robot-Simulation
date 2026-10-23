@@ -12,3 +12,10 @@ numba==0.68.0
 # (python3-coverage, pulled in by ROS's test tooling); a pip coverage >= 7 in
 # /usr/local shadows it. Nothing in the nav stack imports coverage at runtime.
 coverage>=7
+# The G23's locomotion policies are ONNX (g2_deploy_rs runs them with ONNX
+# Runtime 1.19.2, scripts/prepare_onnxruntime.sh); the same version here.
+onnxruntime==1.19.2
+# The viewer's smooth site from map.pcd (syncai_sim/pcd_mesh.py: Poisson
+# reconstruction). 0.18.0 is the version tested here (py310 aarch64 wheel,
+# numpy stays 1.x). Optional: without it the viewer shows the voxels.
+open3d==0.18.0

@@ -63,7 +63,7 @@ def build_sim_config(ini: IniSettings, p: dict) -> SimConfig:
     from .lidar import LidarConfig
     from .scene import PropSpec
     from .simulator import SimConfig
-    from .world import WorldOptions, default_cache_dir
+    from .world import default_cache_dir
 
     map_dir = p["map_dir"] or ini.map_dir
     if not map_dir:
@@ -77,12 +77,7 @@ def build_sim_config(ini: IniSettings, p: dict) -> SimConfig:
         map_dir=map_dir,
         cache_dir=p["cache_dir"] or default_cache_dir(map_dir),
         urdf_path=os.path.join(ini.workspace_root, "src", "syncai_bringup", "description", "G23.urdf"),
-        world=WorldOptions(
-            visual_max_height_above_column_floor_m=p["visual_max_height_above_column_floor_m"],
-            plate_min_voxels=p["plate_min_voxels"],
-            clip_spikes_above_neighbours_m=p["clip_spikes_above_neighbours_m"],
-            track_clear_radius_m=p["track_clear_radius_m"],
-            track_floor_fill_radius_m=p["track_floor_fill_radius_m"]),
+        world=world_options(p),
         kin=KinematicsConfig(
             max_step_height=p["max_step_height"], stair_tread_window=p["stair_tread_window"],
             max_drop=p["max_drop"], require_backward_descent=p["require_backward_descent"],
@@ -97,13 +92,30 @@ def build_sim_config(ini: IniSettings, p: dict) -> SimConfig:
         lidar_height=p["lidar_height"], physics_hz=p["physics_hz"],
         switch_delay=p["mode_switch_delay"], initial_motion_state=p["initial_motion_state"],
         initial_policy=p["initial_policy"], props=props,
+        locomotion=p["locomotion"], ppo_policy=p["ppo_policy"],
+        himloco_policy=p["himloco_policy"], visual_mesh=p["visual_mesh"],
     )
+
+
+def world_options(p: dict):
+    """The params' WorldOptions (shared with `python3 -m syncai_sim.pcd_mesh`,
+    whose cache key must match the sim's world)."""
+    from .world import WorldOptions
+    return WorldOptions(
+        visual_max_height_above_column_floor_m=p["visual_max_height_above_column_floor_m"],
+        plate_min_voxels=p["plate_min_voxels"],
+        clip_spikes_above_neighbours_m=p["clip_spikes_above_neighbours_m"],
+        track_clear_radius_m=p["track_clear_radius_m"],
+        track_floor_fill_radius_m=p["track_floor_fill_radius_m"],
+        floor_hole_max_cells=p["floor_hole_max_cells"])
 
 
 PARAM_DEFAULTS: dict = {
     "map_dir": "", "cache_dir": "",
     "visual_max_height_above_column_floor_m": 3.0, "plate_min_voxels": 16,
     "clip_spikes_above_neighbours_m": 0.2, "track_clear_radius_m": 0.30, "track_floor_fill_radius_m": 0.30,
+    "floor_hole_max_cells": 25,
+    "visual_mesh": "pointcloud",
     "use_ini_initial_pose": True, "spawn": [0.0, 0.0, 0.0, 0.0],
     "lidar_height": 0.481, "robot_radius": 0.25, "body_clearance": 0.6,
     "min_obstacle_height": 0.1, "max_step_height": 0.17, "stair_tread_window": 0.45,
@@ -114,7 +126,10 @@ PARAM_DEFAULTS: dict = {
     "range_noise_sigma": 0.01,
     "mode_switch_delay": 1.0, "initial_motion_state": 1, "initial_policy": 0,
     "mode_publish_rate_hz": 2.0,
-    "physics_hz": 200.0, "pose_publish_hz": 50.0, "imu_publish_hz": 50.0,
+    "locomotion": "policy",
+    "ppo_policy": "/home/syncrobotic/sim/policy/ppo/policy7.onnx",
+    "himloco_policy": "/home/syncrobotic/sim/policy/isaacsim/policy_0812.onnx",
+    "physics_hz": 500.0, "pose_publish_hz": 50.0, "imu_publish_hz": 50.0,
     "status_publish_hz": 2.0,
     "props_json": "[]",
 }

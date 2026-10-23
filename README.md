@@ -9,20 +9,22 @@ robot**. One container holds the workspace's own nav stack and the simulator,
 on a DDS domain of its own; the viewer is served to a browser.
 
 What the simulator is, in one paragraph: the site's `octomap.bt` (written by
-`syncai_mapping`'s `clean_map --octomap 1`) becomes a voxel world; a rigid G23
-in a standing pose is carried through it kinematically on `cmd_vel`, following
-the ground and climbing stairs only when the stair policy has been requested;
+`syncai_mapping`'s `clean_map --octomap 1`) becomes a voxel world; the G23
+walks through it on `cmd_vel` with its own ONNX locomotion policies — PPO for
+flat ground, HimLoco when the stair policy has been requested — driving twelve
+PD joints the way the robot's Rust controller (`g2_deploy_rs`) does;
 a Livox MID360 is ray-cast against the voxels at 10 Hz; and one ROS 2 node
 publishes exactly what the Livox driver, Point-LIO, the localizer and
 `driver_manager` publish on the robot, so the planner, costmaps, controller,
 task_runner and lio_bridge run **unchanged, from the workspace's own
 `install/`**.
 
-What it is not: a legged-locomotion simulation. There is no gait policy here
-(the robot's HIMLOCO / MPC controller is a black box on the real robot), so the
-legs are decoration and the body is placed, not balanced. The physics engine
-contributes contacts with movable props, the GUI, and a place to put a policy
-if one ever becomes available.
+Two locomotions, `locomotion` in the params: **policy** (the default, above)
+and **kinematic** — the robot as a rigid statue carried along the ground by
+rules (`kinematics.py`), which is what the sim was before the policies were
+available and stays for runs that want the step rule's verdicts instead of a
+gait's. What neither is: a simulation of the MPC controller (policy 2 and
+motion state MPC walk on PPO).
 
 ## Layout
 
@@ -41,14 +43,20 @@ syncai_sim/                        the Python package (python3 -m syncai_sim)
   btree.py                           OctoMap .bt reader (no octomap dependency)
   greedy_mesh.py                     voxels -> boxes
   world.py                           octomap.bt -> VoxelGrid + visual mesh + collision plates, cached
+  pcd_mesh.py                        map.pcd -> a smooth viewer surface (Poisson, open3d), cached
+  visual.py                          the viewer's look: colour by height, flat-shaded voxel faces, sky
   voxel_grid.py                      the numba ray caster, ground query, blocking test
-  robot.py                           the workspace URDF -> rigid MJCF with a mocap handle
-  scene.py                           robot + site + props in one MjSpec
-  kinematics.py                      the base: ground following, the step rule, blocking, gates
+  robot.py                           the workspace URDF -> MJCF: articulated, or rigid with a mocap handle
+  scene.py                           robot + site + props (+ the terrain pool) in one MjSpec
+  policy.py                          g2_deploy_rs's PPO / HimLoco runners, ported (onnxruntime)
+  legged.py                          motion state -> policy / stand / lie / damping, PD, the fall check
+  terrain_patch.py                   the voxels around the robot as collision boxes for its feet
+  kinematics.py                      the kinematic base: ground following, the step rule, blocking, gates
   lidar.py, prop_rays.py             the MID360 pattern; analytic rays for props
   fake_driver.py                     set_motion_key / set_policy_mode / mode
   simulator.py                       the ROS-free core (step, scan, imu, spawn, teleport)
   ros_node.py, viewer.py, __main__.py the node, the viewer with teleop, the CLI
+policy/                            the G23's ONNX policies, gitignored: copy them in (policy/README.md)
 tests/                             pytest; ROS-free except test_simulator_synthetic (needs the ROS env + workspace install)
 docs/findings.md                   what the sim found about the navigation stack
 cache/                             per-map build products (gitignored)
@@ -141,7 +149,9 @@ passed through: one-column posts 0.2 m or more above every neighbour are
 clipped (the mapper's own feet), and whatever stands inside the body volume
 the mapper swept along `poses.txt` is erased (`track_clear_radius_m`; on dp a
 one-voxel-thick 0.3 m "fence" across the only corridor to the stairs, which
-`TerrainLayer` had made lethal — see `docs/findings.md`). That grid is the
+`TerrainLayer` had made lethal — see `docs/findings.md`). Enclosed floor holes
+of up to 25 columns — floor the lidar never saw, 3965 on dp — are filled at
+their rim's height (`floor_hole_max_cells`). That grid is the
 truth for the lidar, the ground and blocking — all three are numba kernels in
 `voxel_grid.py`, and 20 k rays take about 1.3 ms. Lidar returns on surface
 voxels are placed at the voxel's mid-height (the real floor is somewhere
@@ -155,9 +165,48 @@ would cost hundreds of milliseconds a scan) and even against the site as one
 mesh its BVH needed 325 ms for 20 k rays; against the voxels the same 20 k
 rays are 1.3 ms. Numbers for dp are in `cache/dp/world.json`.
 
+**Walking** (`locomotion: policy`). `policy.py` is a line-by-line port of the
+runners in `g2_deploy_rs` (`src/policy_runner.rs`, `src/himloco_policy_runner.rs`:
+observation layout and scales, joint order, action scaling and clamps, PD
+gains) running the files its `main.rs` loads by default — `ppo/policy7.onnx`
+for `set_policy_mode 0`, `isaacsim/policy_0812.onnx` for 1, PPO for anything
+else — at 50 Hz, with the PD closed on every 2 ms physics step and clipped to
+the URDF's joint efforts (`legged.py`). The motion state picks the controller
+state: Locomotion / MPC walk the policy, Stand and Lie Down ease to a pose,
+Damping and E-stop leave only kd. The posture check is the controller's
+(|roll| > 30°, |pitch| > 45°): a fall puts the driver in Damping, as the real
+controller locks itself; a teleport or `initialpose` stands the robot up again.
+The feet stand on `terrain_patch.py`: ~300-700 voxel boxes around the robot,
+moved as it walks, with the map's surface-only artefacts closed first (hollow
+stair treads, one-voxel slots across a flight, one-column holes — each with
+the run that found it in the module). There is no step rule in this mode:
+whether a flight is climbed is up to the policy. Measured (2026-10-23):
+PPO 0.4 m/s at a 0.5 command, 1.0 rad/s yaw; HimLoco climbs the planner CLI's
+synthetic flight and dp's first flight to the landing (1.2 m); PPO falls at
+the first riser. A collision is the trunk touching the site.
+
+The walking body is lower than the statue: `lidar_top_imu` rides **~0.44 m**
+over the ground in PPO's gait (0.444 standing at its default pose on dp),
+where the planner's and controllers' `lidar_height` is 0.481 — the value the
+kinematic body is built to. One of the two is not the robot; worth measuring
+on the real G23 before trusting the planner's ground estimate in this mode.
+
+**The picture** (`visual_mesh`, `--visual-mesh`). By default the viewer draws
+a smooth surface reconstructed from the map's `map.pcd` (`pcd_mesh.py`:
+points kept only on the cleaned voxels, 4 cm, screened Poisson, 1.5 M
+triangles; dp builds in ~3.5 min once, then loads from the cache; build it
+ahead with `python3 -m syncai_sim.pcd_mesh map/dp`). `voxels` draws the
+cubes the sim actually senses and stands on. Both are coloured by height —
+floors and treads along a ramp, walls a pale copy, undersides grey — and lit
+by two oblique suns (`visual.py`). Only the picture: the robot may stand a
+few centimetres above the drawn floor, because the feet stand on voxel tops.
+
 **Robot.** The workspace's `G23.urdf` is loaded by MuJoCo itself with two
 compiler switches injected (`fusestatic=false` so `base_link` can get a free
-joint, `discardvisual=false` to keep the STL visuals), then edited: the twelve
+joint, `discardvisual=false` to keep the STL visuals). Walking, it keeps its
+joints (armature 0.01), every leg primitive collides with the terrain patch
+and the trunk with the patch and the props, and a gyro and accelerometer sit
+on `lidar_top_imu`. Kinematic, it is edited: the twelve
 leg joints are removed and baked at a standing angle, the leg and foot
 collision primitives are turned off (a carried statue must not catch a riser),
 the trunk's two boxes collide with props only, and a mocap body is welded to
@@ -167,7 +216,7 @@ body stands with `lidar_top_imu` 0.481 m over the ground — the planner's and
 controllers' `lidar_height` — and pitches with the ground, so the planner's
 known pitch error on stairs (`stair_links.cpp`) is present.
 
-**The step rule** (`kinematics.py`). One step of at most `max_step_height`
+**The step rule** (`kinematics.py`, kinematic mode only). One step of at most `max_step_height`
 (0.17) is a kerb and is walked in any policy; a second step within
 `stair_tread_window` (0.45 m) of travel is a staircase and needs policy 1, as
 does any single step taller than that; a drop deeper than `max_drop` (0.3) is
@@ -228,8 +277,14 @@ python3 -m syncai_sim --ros-args --params-file ... -p mode_switch_delay:=4.0
   planner CLI's synthetic scenes (so they have stair links) and a CI stage —
   are separate changes there.
 * **No `use_sim_time`.** The whole stack runs on the wall clock and so does the
-  sim (fixed 5 ms physics steps paced to real time, catching up to 0.1 s at
-  once).
+  sim (fixed 2 ms physics steps paced to real time, catching up to 0.1 s at
+  once). A walking step costs ~0.25 ms on dp, policy inference included.
+* **The policies are ported, not the controller run.** `g2_deploy_rs` has a
+  MuJoCo mode of its own (UDP to a Python script), but running it here would
+  need a Rust toolchain in the image and its UDP bridge between the stack and
+  the sim; the runners are ~150 lines of Python against the same ONNX files.
+  The price: a change to a runner in `g2_deploy_rs` must be mirrored in
+  `policy.py` (it names the source files).
 
 ## Findings
 

@@ -14,5 +14,9 @@ __pycache__/
 .ruff_cache/
 .DS_Store
 
+# The G23's trained weights (policy/README.md): copied in from g2_deploy_rs,
+# where they are not versioned either, never published from here.
+policy/**/*.onnx
+
 # MuJoCo writes this next to the cwd on some errors.
 MUJOCO_LOG.TXT

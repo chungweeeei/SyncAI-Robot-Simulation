@@ -14,33 +14,62 @@ import numpy as np
 # GLFW key codes
 KEY_UP, KEY_DOWN, KEY_LEFT, KEY_RIGHT, KEY_SPACE = 265, 264, 263, 262, 32
 KEY_1, KEY_5, KEY_P, KEY_T, KEY_H = 49, 53, 80, 84, 72
+KEY_EQUAL, KEY_MINUS = 61, 45
+ARROWS = {KEY_UP: "up", KEY_DOWN: "down", KEY_LEFT: "left", KEY_RIGHT: "right"}
 
 HELP = """teleop keys (viewer window focused):
-  up/down    vx +-0.1 m/s        left/right  wz +-0.1 rad/s
-  space      stop                1 / 5       set_motion_key 1 (RL) / 5 (MPC)
+  arrows     walk / turn while held, stop when released
+  = / -      faster / slower     space       stop
+  1 / 5      set_motion_key 1 (RL) / 5 (MPC)
   p          toggle policy 0/1   t           teleport back to the spawn
   h          this help"""
 
+# A press without a release to go with it (no X keymap, see _HeldKeys) counts
+# as held this long: past a browser's first auto-repeat delay (~0.5 s), so a
+# held key keeps refreshing it, and the robot stops this long after release.
+PRESS_HOLD_S = 0.6
+
 
 class Teleop:
-    def __init__(self, spawn, log=print):
+    """Hold-to-drive: a velocity only while an arrow key is down.
+
+    The viewer reports which arrows are down (`set_held`, from the X server's
+    keymap at 60 Hz); without that, each press holds for PRESS_HOLD_S. The
+    old latched increments kept walking after the last key until someone
+    pressed space, which with a real gait means into a wall."""
+
+    def __init__(self, spawn, log=print, vx_speed: float = 0.4, wz_speed: float = 0.5):
         self.vx = 0.0
         self.wz = 0.0
+        self.vx_speed = vx_speed
+        self.wz_speed = wz_speed
         self.spawn = spawn
         self.log = log
         self._pending = []  # closures applied under the sim lock
+        self._held: set[str] | None = None  # None: no keymap, use the press timers
+        self._pressed_until: dict[str, float] = {}
+
+    def set_held(self, held: set[str]) -> None:
+        self._held = held
+
+    def held(self, now: float | None = None) -> set[str]:
+        if self._held is not None:
+            return self._held
+        now = time.monotonic() if now is None else now
+        return {k for k, t in self._pressed_until.items() if t > now}
 
     def key(self, keycode: int) -> None:
-        if keycode == KEY_UP:
-            self.vx = min(self.vx + 0.1, 0.8)
-        elif keycode == KEY_DOWN:
-            self.vx = max(self.vx - 0.1, -0.8)
-        elif keycode == KEY_LEFT:
-            self.wz = min(self.wz + 0.1, 0.65)
-        elif keycode == KEY_RIGHT:
-            self.wz = max(self.wz - 0.1, -0.65)
-        elif keycode == KEY_SPACE:
-            self.vx = self.wz = 0.0
+        if keycode in ARROWS:
+            self._pressed_until[ARROWS[keycode]] = time.monotonic() + PRESS_HOLD_S
+            return
+        if keycode == KEY_SPACE:
+            self._pressed_until.clear()
+        elif keycode in (KEY_EQUAL, KEY_MINUS):
+            f = 1.25 if keycode == KEY_EQUAL else 0.8
+            self.vx_speed = min(max(self.vx_speed * f, 0.1), 0.8)
+            self.wz_speed = min(max(self.wz_speed * f, 0.1), 2.0)
+            self.log(f"[teleop] speed vx {self.vx_speed:.2f} m/s  wz {self.wz_speed:.2f} rad/s")
+            return
         elif keycode == KEY_1:
             self._pending.append(lambda sim: self.log(f"[teleop] key 1 -> {sim.driver.set_motion_key('1')}"))
         elif keycode == KEY_5:
@@ -56,12 +85,14 @@ class Teleop:
             self.log(HELP)
         else:
             return
-        self.log(f"[teleop] vx {self.vx:+.1f}  wz {self.wz:+.1f}")
 
     def apply(self, sim) -> None:
         for fn in self._pending:
             fn(sim)
         self._pending.clear()
+        h = self.held()
+        self.vx = self.vx_speed * (("up" in h) - ("down" in h))
+        self.wz = self.wz_speed * (("left" in h) - ("right" in h))
         sim.set_cmd(self.vx, 0.0, self.wz)
 
 
@@ -145,6 +176,43 @@ class _FitToDisplay:
             self._x.XFlush(self._dpy)
 
 
+class _HeldKeys:
+    """Which arrow keys are down right now, from the X server's keymap.
+
+    launch_passive's key_callback gets presses (and auto-repeats) but never a
+    release, so it cannot tell "held" from "pressed once". XQueryKeymap can:
+    Xvnc keeps each key down from the VNC client's keydown to its keyup, so the
+    robot stops the moment the key comes up. A connection of its own, as in
+    _FitToDisplay; the keymap is global to the display, which here holds the
+    viewer and nothing else."""
+
+    KEYSYMS = {"up": 0xFF52, "down": 0xFF54, "left": 0xFF51, "right": 0xFF53}  # XK_Up ...
+
+    def __init__(self):
+        self.ok = False
+        name = ctypes.util.find_library("X11")
+        if name is None:
+            return
+        x = ctypes.CDLL(name)
+        x.XOpenDisplay.restype = ctypes.c_void_p
+        x.XOpenDisplay.argtypes = [ctypes.c_char_p]
+        x.XKeysymToKeycode.restype = ctypes.c_ubyte
+        x.XKeysymToKeycode.argtypes = [ctypes.c_void_p, ctypes.c_ulong]
+        x.XQueryKeymap.argtypes = [ctypes.c_void_p, ctypes.c_char_p]
+        self._dpy = x.XOpenDisplay(None)
+        if not self._dpy:
+            return
+        self._x = x
+        self._codes = {k: int(x.XKeysymToKeycode(self._dpy, sym)) for k, sym in self.KEYSYMS.items()}
+        self._buf = ctypes.create_string_buffer(32)
+        self.ok = all(self._codes.values())
+
+    def poll(self) -> set[str]:
+        self._x.XQueryKeymap(self._dpy, self._buf)
+        bits = self._buf.raw
+        return {k for k, c in self._codes.items() if bits[c >> 3] & (1 << (c & 7))}
+
+
 class Viewer:
     def __init__(self, sim, teleop: Teleop | None = None):
         self.sim = sim
@@ -163,6 +231,9 @@ class Viewer:
         opt.geomgroup[4] = 0  # the mocap handle
         self._scan_n = 0
         self._fit = _FitToDisplay()
+        self._keys = _HeldKeys() if teleop else None
+        if self._keys is not None and not self._keys.ok:
+            self._keys = None  # Teleop falls back to its press timers
 
     def is_running(self) -> bool:
         return self.handle.is_running()
@@ -170,6 +241,8 @@ class Viewer:
     def sync(self, sim) -> None:
         self.handle.sync()
         self._fit.poll()
+        if self._keys is not None:
+            self.teleop.set_held(self._keys.poll())
 
     def show_scan(self, sim, max_points: int = 400) -> None:
         """Draw a thinned copy of the last scan as small spheres in the body frame."""

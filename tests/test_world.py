@@ -1,11 +1,13 @@
 import numpy as np
 
+from syncai_sim import visual
 from syncai_sim.btree import TREE_MAX_VAL
 from syncai_sim.world import (
     clear_track_volume,
     clip_spikes,
     column_floor_filter,
     exposed_face_mesh,
+    fill_floor_holes,
     fill_track_floor,
 )
 
@@ -17,8 +19,14 @@ def _grid(x, y, z):
 
 
 def test_single_voxel_mesh_is_a_cube():
-    v, f = exposed_face_mesh(np.array([[ORG, ORG, ORG]]), 0.1)
-    assert v.shape == (8, 3) and f.shape == (12, 3)
+    v, f, d = exposed_face_mesh(np.array([[ORG, ORG, ORG]]), 0.1)
+    # Six faces, four corners each: vertices are not shared across directions.
+    assert v.shape == (24, 3) and f.shape == (12, 3)
+    assert sorted(np.bincount(d).tolist()) == [2] * 6
+    # Each face's vertices lie on its plane: one direction per vertex.
+    for k, (axis, sign) in enumerate(visual.DIRECTIONS):
+        pts = v[np.unique(f[d == k])]
+        assert np.allclose(pts[:, axis], 0.1 if sign > 0 else 0.0)
     assert np.allclose(v.min(axis=0), [0, 0, 0]) and np.allclose(v.max(axis=0), [0.1, 0.1, 0.1])
     # Every triangle's normal points away from the cube centre (outward winding).
     c = np.array([0.05, 0.05, 0.05])
@@ -30,11 +38,11 @@ def test_single_voxel_mesh_is_a_cube():
 
 def test_slab_faces_merge():
     slab = _grid(range(ORG, ORG + 20), range(ORG, ORG + 10), [ORG])
-    v, f = exposed_face_mesh(slab, 0.1)
+    v, f, _ = exposed_face_mesh(slab, 0.1)
     # Top and bottom merge to one rectangle each; the four sides to one each:
-    # 6 rectangles -> 12 triangles, 8 shared vertices.
+    # 6 rectangles -> 12 triangles, 4 corners each.
     assert f.shape == (12, 3)
-    assert v.shape == (8, 3)
+    assert v.shape == (24, 3)
 
 
 def test_column_floor_filter_trims_tall_columns():
@@ -104,3 +112,24 @@ def test_fill_track_floor_closes_holes_under_the_track_only():
     # The riser column is within the window: nothing added under it.
     assert not ((added[:, 0] == ORG + 16)).any()
     assert fill_track_floor(vox, 0.1, track, 0.0, 0.481).shape[0] == vox.shape[0]
+
+
+def test_fill_floor_holes_small_enclosed_only():
+    # A 6 x 6 m floor one voxel thick (top at z 0), tilted one voxel up for x >= 3 m;
+    # a 3 x 3 hole straddling the step, a 7 x 7 hole (49 > 25), a hole at the edge,
+    # and a table top 0.7 m up over the 3 x 3 hole.
+    floor = _grid(range(ORG, ORG + 60), range(ORG, ORG + 60), [ORG - 1])
+    floor[floor[:, 0] >= ORG + 30, 2] += 1
+    small = {(ORG + x, ORG + y) for x in range(29, 32) for y in range(10, 13)}
+    big = {(ORG + x, ORG + y) for x in range(10, 17) for y in range(30, 37)}
+    edge = {(ORG, ORG + y) for y in range(20, 22)}
+    holes = small | big | edge
+    keep = np.array([(x, y) not in holes for x, y, _ in floor])
+    table = _grid(range(ORG + 28, ORG + 33), range(ORG + 9, ORG + 14), [ORG + 6])
+    v = np.concatenate([floor[keep], table])
+    out = {tuple(r) for r in fill_floor_holes(v, 25).tolist()}
+    added = out - {tuple(r) for r in v.tolist()}
+    assert {(x, y) for x, y, _ in added} == small
+    # Filled at the rim's median height: the rim is half at z -1, half at z 0.
+    assert {z for _, _, z in added} <= {ORG - 1, ORG}
+    assert fill_floor_holes(v, 0) is v

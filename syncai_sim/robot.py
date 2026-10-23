@@ -29,6 +29,15 @@ sim needs:
   extrinsics are the URDF's, read, not copied. `pointlio_body` is
   `lidar_top_imu` (CLAUDE.md), and the planner's `lidar_height` 0.481 is that
   frame's height over the ground when standing, which fixes the body height.
+
+With `articulated` (the `policy` locomotion, legged.py) the model is the robot
+instead of a statue: the twelve joints stay, with `JOINT_ARMATURE`; there is
+no mocap or weld, the free base is carried by its legs; every leg and foot
+primitive collides with the terrain patch (terrain_patch.py) and the trunk
+with the patch and the props; a gyro and an accelerometer sit on
+`lidar_top_imu`. The legs never collide with each other or the trunk (the
+URDF's hip cylinders overlap its trunk boxes), and not with props (a leg in a
+prop would need a contact model the props were never tuned for).
 """
 
 from __future__ import annotations
@@ -48,9 +57,16 @@ import numpy as np
 # ground is when lidar_top_imu stands 0.481 m over it (see RobotModel.h_stand).
 DEFAULT_STANDING = {"HipX": 0.0, "HipY": -0.447, "Knee": 0.867}
 
-# Collision bitmasks. World plates are 1/1 (scene.py); props are 2/3.
+# Collision bitmasks. World plates are 1/1 (scene.py); props are 2/3; the
+# terrain patch is 0/4 (articulated only).
 TRUNK_CONTYPE = 2
 TRUNK_CONAFFINITY = 2
+TERRAIN_BIT = 4
+# Rotor inertia reflected to each joint (kg m^2). Not in the URDF; the
+# policies walk the same with 0.005 and 0.01 (flat harness, 2026-10-23), and
+# without any the PD at kp 30 rings at a 1 ms step.
+JOINT_ARMATURE = 0.01
+FOOT_FRICTION = 1.0
 
 
 @dataclass
@@ -63,6 +79,8 @@ class RobotConfig:
     standing: dict[str, float] = field(default_factory=lambda: dict(DEFAULT_STANDING))
     weld_solref: tuple[float, float] = (0.02, 1.0)
     mocap_name: str = "base_mocap"
+    articulated: bool = False
+    imu_site: str = "imu_site"
 
 
 @dataclass
@@ -133,6 +151,8 @@ def load_robot(cfg: RobotConfig) -> RobotModel:
     worldbody = root.find("worldbody")
     base = next(b for b in worldbody.iter("body") if b.get("name") == cfg.base_link)
     ET.SubElement(base, "freejoint", name="base_free")
+    if cfg.articulated:
+        return _articulated(root, base, cfg, base_to_lidar, base_to_imu)
 
     # Legs: remove joints, bake the standing angle into the child body's quat.
     for body in list(root.iter("body")):
@@ -177,6 +197,57 @@ def load_robot(cfg: RobotConfig) -> RobotModel:
     h_stand = cfg.lidar_height - float(base_to_imu[2, 3])
     return RobotModel(mjcf=ET.tostring(root, encoding="unicode"), cfg=cfg,
                       base_to_lidar=base_to_lidar, base_to_imu=base_to_imu, h_stand=h_stand)
+
+
+def _articulated(root: ET.Element, base: ET.Element, cfg: RobotConfig,
+                 base_to_lidar: np.ndarray, base_to_imu: np.ndarray) -> RobotModel:
+    from .policy import Q_DEFAULT
+
+    for joint in root.iter("joint"):
+        if joint.get("type", "hinge") == "hinge":
+            joint.set("armature", str(JOINT_ARMATURE))
+    for body in root.iter("body"):
+        for geom in body.findall("geom"):
+            if geom.get("type") == "mesh":
+                geom.set("group", "1")
+                geom.set("contype", "0")
+                geom.set("conaffinity", "0")
+                continue
+            geom.set("group", "3")
+            if body is base and geom.get("type") == "box":
+                geom.set("contype", str(TRUNK_CONTYPE | TERRAIN_BIT))
+                geom.set("conaffinity", str(TRUNK_CONAFFINITY))
+                geom.set("rgba", "0.2 0.5 0.9 0.35")
+            else:
+                geom.set("contype", str(TERRAIN_BIT))
+                geom.set("conaffinity", "0")
+                geom.set("friction", f"{FOOT_FRICTION:g} 0.005 0.0001")
+    imu = next(b for b in root.iter("body") if b.get("name") == cfg.imu_body)
+    ET.SubElement(imu, "site", name=cfg.imu_site, size="0.01")
+    sensor = root.find("sensor")
+    if sensor is None:
+        sensor = ET.SubElement(root, "sensor")
+    ET.SubElement(sensor, "gyro", name="imu_gyro", site=cfg.imu_site)
+    ET.SubElement(sensor, "accelerometer", name="imu_acc", site=cfg.imu_site)
+    mjcf = ET.tostring(root, encoding="unicode")
+
+    # Standing height: the base over the ground with the legs at the policy's
+    # default pose and the lowest foot sphere touching it.
+    model = mujoco.MjModel.from_xml_string(mjcf)
+    data = mujoco.MjData(model)
+    for leg in ("FL", "FR", "HL", "HR"):
+        for k, j in enumerate(("HipX", "HipY", "Knee")):
+            jid = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_JOINT, f"{leg}_{j}_joint")
+            data.qpos[model.jnt_qposadr[jid]] = Q_DEFAULT[k]
+    mujoco.mj_forward(model, data)
+    bottoms = [data.geom_xpos[g][2] - model.geom_size[g][0] for g in range(model.ngeom)
+               if model.geom_type[g] == mujoco.mjtGeom.mjGEOM_SPHERE
+               and model.body(model.geom_bodyid[g]).name.endswith("_FOOT")]
+    if not bottoms:
+        raise ValueError("URDF has no *_FOOT sphere to stand on")
+    h_stand = float(data.xpos[1][2] - min(bottoms))
+    return RobotModel(mjcf=mjcf, cfg=cfg, base_to_lidar=base_to_lidar, base_to_imu=base_to_imu,
+                      h_stand=h_stand)
 
 
 def default_urdf(workspace: str) -> str:
