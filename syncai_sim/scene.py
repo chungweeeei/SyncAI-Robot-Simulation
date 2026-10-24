@@ -15,8 +15,8 @@ wants touch:
 
 Geom groups (the viewer toggles them with keys 0-5): 0 site mesh, 1 robot STL
 visuals, 2 props, 3 collision primitives and plates (hidden), 4 the mocap
-handle (hidden), 5 hidden storeys (the viewer moves a storey's site geoms
-there to hide it, viewer.py). The lidar never asks MuJoCo
+handle (hidden), 5 the hidden part of the site (the viewer moves the storeys
+and tiles it does not draw there, viewer.SiteView). The lidar never asks MuJoCo
 about any of them — rays go to VoxelGrid for the site and to `prop_rays.py`
 for the props (mj_multiRay scans every geom per ray; 18 k plates would cost
 hundreds of milliseconds a scan).
@@ -29,7 +29,14 @@ waypoints. Both are what the planner's dynamic overlay and TerrainLayer's
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+import glob
+import hashlib
+import json
+import math
+import os
+import re
+import time
+from dataclasses import asdict, dataclass, field
 
 import mujoco
 import numpy as np
@@ -37,6 +44,16 @@ import numpy as np
 from . import visual
 from .robot import TERRAIN_BIT, RobotModel
 from .world import World
+
+# The site's visual meshes are cut into squares of this side, one geom each,
+# so the viewer can draw only those near the robot (viewer.SiteView): llvmpipe's
+# cost is per triangle and dp's ground floor is 1.4 M of them. 10 m: ~100
+# tiles a storey on dp, a few hundred geoms in all, nothing mjv_updateScene
+# notices (0.1 ms for 20 k geoms).
+TILE_M = 10.0
+# Bumped when the compiled scene changes without any input changing: the MJB
+# cache (cached_model) is keyed on it.
+SCENE_FORMAT = 1
 
 PLATE_CONTYPE, PLATE_CONAFFINITY = 1, 1
 PROP_CONTYPE, PROP_CONAFFINITY = 2, 3
@@ -71,8 +88,10 @@ class SceneInfo:
     prop_bodies: dict[str, int]
     prop_mocap_ids: dict[str, int]  # movers only
     prop_group: int = 2
-    site_geoms: list[int] = field(default_factory=list)  # the visual site
+    site_geoms: list[int] = field(default_factory=list)  # the visual site, one per tile and kind
     site_storeys: dict[int, list[int]] = field(default_factory=dict)  # storey -> its site geoms
+    # (G, 4) per site geom: storey, tile centre x, y, half diagonal (m)
+    site_tiles: np.ndarray | None = None
     storey_bounds: list[float] = field(default_factory=list)
     terrain_mocap_ids: np.ndarray | None = None  # (capacity,) mocap indices of the terrain pool
     terrain_geoms: np.ndarray | None = None  # (capacity,) their geom ids, consecutive
@@ -105,11 +124,10 @@ def build_scene(world: World, robot: RobotModel, props: list[PropSpec],
 
     # The site, visual only: one mesh per face direction, coloured by height (visual.py).
     if site is not None:
-        site_names = add_site_meshes(spec, site.vertices, site.faces, site.kinds, lambda k: k,
-                                     site.storeys)
+        add_site_meshes(spec, site.vertices, site.faces, site.kinds, lambda k: k, site.storeys)
     else:
-        site_names = add_site_meshes(spec, world.mesh_vertices, world.mesh_faces, world.mesh_dirs,
-                                     visual.kind_of, world.mesh_storeys)
+        add_site_meshes(spec, world.mesh_vertices, world.mesh_faces, world.mesh_dirs,
+                        visual.kind_of, world.mesh_storeys)
 
     # Plates: collision for props.
     centres, halves = world.plates_metres()
@@ -149,7 +167,15 @@ def build_scene(world: World, robot: RobotModel, props: list[PropSpec],
                                  castshadow=False)
 
     model = spec.compile()
+    return model, scene_info(model, robot, props, terrain_capacity, list(world.storey_bounds))
 
+
+_SITE_GEOM = re.compile(r"^site_visual\d+_s(\d+)_t(-?\d+)_(-?\d+)$")
+
+
+def scene_info(model: mujoco.MjModel, robot: RobotModel, props: list[PropSpec],
+               terrain_capacity: int, storey_bounds: list[float]) -> SceneInfo:
+    """The ids the sim needs, read back from a compiled (or loaded) model by name."""
     def bid(name):
         i = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_BODY, name)
         if i < 0:
@@ -163,29 +189,88 @@ def build_scene(world: World, robot: RobotModel, props: list[PropSpec],
     terrain_bodies = [bid(f"terrain{i}") for i in range(terrain_capacity)]
     prop_bodies = {p.name: bid(f"prop_{p.name}") for p in props}
     prop_mocap = {p.name: int(model.body_mocapid[prop_bodies[p.name]]) for p in props if p.waypoints}
-    info = SceneInfo(
+    site_geoms, storeys, tiles = [], {}, []
+    for g in range(model.ngeom):
+        mt = _SITE_GEOM.match(model.geom(g).name)
+        if mt is None:
+            continue
+        st, ix, iy = (int(v) for v in mt.groups())
+        site_geoms.append(g)
+        storeys.setdefault(st, []).append(g)
+        tiles.append((st, (ix + 0.5) * TILE_M, (iy + 0.5) * TILE_M, TILE_M * math.sqrt(0.5)))
+    return SceneInfo(
         base_body=base, mocap_body=mocap,
         mocap_id=int(model.body_mocapid[mocap]) if mocap >= 0 else -1,
         lidar_body=bid(robot.cfg.lidar_body), imu_body=bid(robot.cfg.imu_body),
         trunk_geoms=trunk, prop_bodies=prop_bodies, prop_mocap_ids=prop_mocap,
-        site_geoms=[mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_GEOM, n)
-                    for names in site_names.values() for n in names],
-        site_storeys={k: [mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_GEOM, n) for n in names]
-                      for k, names in site_names.items()},
-        storey_bounds=list(world.storey_bounds),
+        site_geoms=site_geoms, site_storeys=storeys,
+        site_tiles=np.array(tiles, dtype=np.float64).reshape(-1, 4),
+        storey_bounds=list(storey_bounds),
         terrain_mocap_ids=np.array([model.body_mocapid[b] for b in terrain_bodies], dtype=int),
         terrain_geoms=np.array([model.body_geomadr[b] for b in terrain_bodies], dtype=int),
     )
-    return model, info
+
+
+def scene_key(world: World, robot: RobotModel, props: list[PropSpec], timestep: float,
+              terrain_capacity: int, visual_mesh: str, cache_dir: str) -> str:
+    """Everything the compiled scene depends on, as one string (cached_model)."""
+    from . import pcd_mesh
+    from .world import CACHE_FORMAT
+
+    urdf = os.stat(robot.cfg.urdf_path)
+    # The real path: the same URDF reached through a symlinked workspace is
+    # the same scene. Where the decimated meshes are cached does not change
+    # the model either.
+    robot_cfg = asdict(robot.cfg)
+    robot_cfg["urdf_path"] = os.path.realpath(robot.cfg.urdf_path)
+    robot_cfg.pop("mesh_cache_dir")
+    site = {"mesh": visual_mesh}
+    if visual_mesh == "pointcloud":
+        p = os.path.join(cache_dir, "pcd_mesh.npz")
+        st = os.stat(p) if os.path.isfile(p) else None
+        site["pcd"] = [pcd_mesh.FORMAT, st.st_size, int(st.st_mtime)] if st else None
+    return json.dumps({
+        "scene": SCENE_FORMAT, "mujoco": mujoco.__version__, "tile_m": TILE_M,
+        "world": [world.stats.cache_key, world.stats.options, CACHE_FORMAT],
+        "robot": [urdf.st_size, int(urdf.st_mtime), robot_cfg],
+        "props": [asdict(p) for p in props], "timestep": timestep,
+        "terrain_capacity": terrain_capacity, "site": site,
+    }, sort_keys=True, default=str)
+
+
+def cached_model(cache_dir: str, key: str, build, log=print) -> mujoco.MjModel:
+    """The compiled model for `key` from cache/<map>/scene-<hash>.mjb, else
+    `build()` saved there. Compiling the scene takes 4-5 s on dp (2.7 M
+    visual triangles, 20 k geoms, measured 2026-10-24); mj_loadModel reads
+    the binary in a fraction of that (0.32 s). Older scene-*.mjb files are
+    removed: each is 628 MB on dp (MuJoCo keeps a BVH per mesh, and the site
+    is 2.5 M triangles) and only the current key's is ever loaded."""
+    digest = hashlib.sha1(key.encode()).hexdigest()[:12]
+    path = os.path.join(cache_dir, f"scene-{digest}.mjb")
+    if os.path.isfile(path):
+        t0 = time.perf_counter()
+        model = mujoco.MjModel.from_binary_path(path)
+        log(f"[scene] cached ({os.path.basename(path)}, {time.perf_counter() - t0:.2f} s)")
+        return model
+    t0 = time.perf_counter()
+    model = build()
+    os.makedirs(cache_dir, exist_ok=True)
+    for old in glob.glob(os.path.join(cache_dir, "scene-*.mjb")):
+        os.remove(old)
+    mujoco.mj_saveModel(model, path, None)
+    log(f"[scene] compiled in {time.perf_counter() - t0:.1f} s, cached as {os.path.basename(path)}")
+    return model
 
 
 def add_site_meshes(spec: mujoco.MjSpec, vertices: np.ndarray, faces: np.ndarray,
-                    groups: np.ndarray, kind_of, storeys: np.ndarray) -> dict[int, list[str]]:
-    """One visual geom per (face group, storey) — a group is a voxel face
-    direction or a point-cloud mesh's surface kind — sharing one height-ramp
-    texture; `kind_of(group)` picks the ramp's row. Returns storey -> geom names."""
+                    groups: np.ndarray, kind_of, storeys: np.ndarray) -> int:
+    """One visual geom per (face group, storey, TILE_M tile) — a group is a
+    voxel face direction or a point-cloud mesh's surface kind — sharing one
+    height-ramp texture; `kind_of(group)` picks the ramp's row. The geom name
+    carries the storey and the tile (scene_info reads them back). Returns
+    the number of geoms."""
     if faces.shape[0] == 0:
-        return {}
+        return 0
     tex = spec.add_texture(name="site_ramp", type=mujoco.mjtTexture.mjTEXTURE_2D)
     rgb = visual.texture_rgb()
     tex.width, tex.height, tex.nchannel = rgb.shape[1], rgb.shape[0], 3
@@ -195,29 +280,41 @@ def add_site_meshes(spec: mujoco.MjSpec, vertices: np.ndarray, faces: np.ndarray
     floor = np.isin(groups, [g for g in np.unique(groups) if kind_of(int(g)) == visual.KIND_FLOOR])
     z_range = visual.height_range(vertices[np.unique(faces[floor])][:, 2] if floor.any() else
                                   np.zeros(0))
-    names: dict[int, list[str]] = {}
-    for st in np.unique(storeys):
-        for k in np.unique(groups):
-            f = faces[(groups == k) & (storeys == st)]
-            if f.shape[0] == 0:
-                continue
-            used, local = np.unique(f, return_inverse=True)
-            v = vertices[used]
-            mesh_name = f"site_mesh{k}_s{st}"
-            mesh = spec.add_mesh(name=mesh_name)
-            # One direction's faces enclose no volume; "shell" (area) inertia
-            # compiles, and a static visual geom's inertia is never used anyway.
-            mesh.inertia = mujoco.mjtMeshInertia.mjMESH_INERTIA_SHELL
-            mesh.uservert = v.reshape(-1).astype(np.float32)
-            mesh.userface = local.reshape(-1).astype(np.int32)
-            mesh.usertexcoord = visual.texcoords(v[:, 2], kind_of(int(k)), z_range) \
-                .reshape(-1).astype(np.float32)
-            name = f"site_visual{k}_s{st}"
-            spec.worldbody.add_geom(name=name, type=mujoco.mjtGeom.mjGEOM_MESH,
-                                    meshname=mesh_name, material="site_mat", contype=0,
-                                    conaffinity=0, group=0)
-            names.setdefault(int(st), []).append(name)
-    return names
+    # Tile of each face by its centroid; then one sort of the faces by
+    # (storey, group, tile) and contiguous runs, not a mask per combination
+    # over 2.5 M faces.
+    centroid = vertices[faces].mean(axis=1)
+    tx = np.floor(centroid[:, 0] / TILE_M).astype(np.int64)
+    ty = np.floor(centroid[:, 1] / TILE_M).astype(np.int64)
+    tx0, ty0 = tx.min(), ty.min()
+    nx, ny = int(tx.max() - tx0 + 1), int(ty.max() - ty0 + 1)
+    ng = int(groups.max()) + 1
+    key = ((storeys.astype(np.int64) * ng + groups.astype(np.int64)) * nx + (tx - tx0)) * ny + (ty - ty0)
+    order = np.argsort(key, kind="stable")
+    keys, first, counts = np.unique(key[order], return_index=True, return_counts=True)
+    n = 0
+    for kk, a, c in zip(keys, first, counts):
+        f = faces[order[a:a + c]]
+        iy = int(kk % ny + ty0)
+        ix = int((kk // ny) % nx + tx0)
+        k = int((kk // (ny * nx)) % ng)
+        st = int(kk // (ny * nx * ng))
+        used, local = np.unique(f, return_inverse=True)
+        v = vertices[used]
+        mesh_name = f"site_mesh{k}_s{st}_t{ix}_{iy}"
+        mesh = spec.add_mesh(name=mesh_name)
+        # One direction's faces enclose no volume; "shell" (area) inertia
+        # compiles, and a static visual geom's inertia is never used anyway.
+        mesh.inertia = mujoco.mjtMeshInertia.mjMESH_INERTIA_SHELL
+        mesh.uservert = v.reshape(-1).astype(np.float32)
+        mesh.userface = local.reshape(-1).astype(np.int32)
+        mesh.usertexcoord = visual.texcoords(v[:, 2], kind_of(k), z_range) \
+            .reshape(-1).astype(np.float32)
+        spec.worldbody.add_geom(name=f"site_visual{k}_s{st}_t{ix}_{iy}",
+                                type=mujoco.mjtGeom.mjGEOM_MESH, meshname=mesh_name,
+                                material="site_mat", contype=0, conaffinity=0, group=0)
+        n += 1
+    return n
 
 
 def place_terrain(data: mujoco.MjData, info: SceneInfo, centres: np.ndarray) -> None:

@@ -1,47 +1,75 @@
-"""The MuJoCo passive viewer, following the robot, with keyboard teleop."""
+"""The viewer: a GLFW window of our own, following the robot, with keyboard teleop.
+
+Why not `mujoco.viewer.launch_passive`: on llvmpipe (the container has no
+GPU) its render loop paces itself on the monitor's vsync, and Xvnc has none,
+so it drew the site back to back at whatever rate the CPU allowed — 7-11
+frames a second that cost the render thread plus llvmpipe's workers ~3
+cores whether or not anything moved (2026-10-24). Its `sync()` also copied
+the whole model and the 18 MB MjData to the render thread (12-15 ms, called
+60 times a second), it took every letter for its own toggles (t / p / h
+flipped display options while teleop used them), reported key presses but
+never releases, and gave no handle to its window, so sizing it to the VNC
+screen and reading held keys went through libX11 by ctypes. This module is
+what that was being bent into: one thread, one window, a frame rate cap
+(`RENDER_HZ`), state-only copies (`mj_getState` / `mj_setState`, 0.3 ms),
+`glfw.get_key` for held keys, our own key bindings, and the site drawn only
+where the robot is (`SiteView`: the storey and the tiles within reach).
+
+Threads: the sim's main loop calls `sync()` (copies the state under the
+lock) and `show_scan()`; the viewer thread polls events, reads held keys and
+renders. `model.geom_group` is the one thing both touch (SiteView writes it
+in sync(), mjv_updateScene reads it): under the same lock.
+"""
 
 from __future__ import annotations
 
-import ctypes
-import ctypes.util
 import math
+import threading
 import time
 
+import glfw
 import mujoco
-import mujoco.viewer
 import numpy as np
 
 # GLFW key codes
 KEY_UP, KEY_DOWN, KEY_LEFT, KEY_RIGHT, KEY_SPACE = 265, 264, 263, 262, 32
 KEY_1, KEY_5, KEY_P, KEY_T, KEY_H = 49, 53, 80, 84, 72
 KEY_EQUAL, KEY_MINUS = 61, 45
-# Every letter is already a MuJoCo viewer shortcut (mujoco.mjVISSTRING /
-# mjRNDSTRING: T transparent, P contact split, H convex hull ... so t / p / h
-# below also flip those); the viewer's geom groups take 0-5. 9 is free.
-KEY_9 = 57
+KEY_0, KEY_9 = 48, 57
 ARROWS = {KEY_UP: "up", KEY_DOWN: "down", KEY_LEFT: "left", KEY_RIGHT: "right"}
 
-HELP = """teleop keys (viewer window focused):
+HELP = """viewer keys (window focused):
   arrows     walk / turn while held, stop when released
   = / -      faster / slower     space       stop
   1 / 5      set_motion_key 1 (RL) / 5 (MPC)
   p          toggle policy 0/1   t           teleport back to the spawn
   9          storeys: auto (the robot's and below) / 1F / 2F ... / all
+  0 2 3 4    toggle geom groups: site, props, collision shapes, mocap
+  mouse      left-drag orbits, scroll zooms
   h          this help"""
 
-# A press without a release to go with it (no X keymap, see _HeldKeys) counts
+# A press without a release to go with it (no viewer, see Teleop.held) counts
 # as held this long: past a browser's first auto-repeat delay (~0.5 s), so a
 # held key keeps refreshing it, and the robot stops this long after release.
 PRESS_HOLD_S = 0.6
+
+# State copies to the viewer per second. llvmpipe draws the site at 7-11 fps
+# (1600x1000, measured 2026-10-24), so 60 syncs a second bought nothing; a
+# state-only copy is ~0.3 ms, and 20 a second keep a key release under 50 ms.
+VIEW_HZ = 20.0
+# Frames per second, at most. llvmpipe managed 7-11 unthrottled while using
+# ~3 cores; 10 is what it can do and lets the viewer thread sleep between
+# frames instead of rendering the same picture again.
+RENDER_HZ = 10.0
 
 
 class Teleop:
     """Hold-to-drive: a velocity only while an arrow key is down.
 
-    The viewer reports which arrows are down (`set_held`, from the X server's
-    keymap at 60 Hz); without that, each press holds for PRESS_HOLD_S. The
-    old latched increments kept walking after the last key until someone
-    pressed space, which with a real gait means into a wall."""
+    The viewer reports which arrows are down (`set_held`, from glfw.get_key
+    at VIEW_HZ); without that, each press holds for PRESS_HOLD_S. The old
+    latched increments kept walking after the last key until someone pressed
+    space, which with a real gait means into a wall."""
 
     def __init__(self, spawn, log=print, vx_speed: float = 0.4, wz_speed: float = 0.5):
         self.vx = 0.0
@@ -51,7 +79,7 @@ class Teleop:
         self.spawn = spawn
         self.log = log
         self._pending = []  # closures applied under the sim lock
-        self._held: set[str] | None = None  # None: no keymap, use the press timers
+        self._held: set[str] | None = None  # None: no viewer, use the press timers
         self._pressed_until: dict[str, float] = {}
         self._driving = False
 
@@ -107,146 +135,35 @@ class Teleop:
         self._driving = bool(h)
 
 
-class _FitToDisplay:
-    """Keep the viewer's X window the size of the X screen.
+class SiteView:
+    """Which parts of the site the viewer draws: a storey mode and a radius.
 
-    The container's Xvnc has no window manager, so GLFW's window opens at its
-    default 2/3 of the screen in the corner and nothing can maximize it; and
-    launch_passive hands out no GLFW handle to resize through. So this talks to
-    the X server itself (libX11 via ctypes, on a connection of its own, so it
-    never races the render thread's) and resizes the top-level window whose
-    name starts with "MuJoCo". Polled, not event-driven: the screen changes
-    whenever noVNC's remote resize follows the browser (vnc.sh's URL asks for
-    it), and a 1 s poll is two round trips to a local server.
-    """
-
-    def __init__(self):
-        self._x = None
-        name = ctypes.util.find_library("X11")
-        if name is None:
-            return
-        x = ctypes.CDLL(name)
-        x.XOpenDisplay.restype = ctypes.c_void_p
-        x.XOpenDisplay.argtypes = [ctypes.c_char_p]
-        x.XDefaultRootWindow.restype = ctypes.c_ulong
-        x.XDefaultRootWindow.argtypes = [ctypes.c_void_p]
-        u, i, p = ctypes.c_uint, ctypes.c_int, ctypes.POINTER
-        x.XGetGeometry.argtypes = [ctypes.c_void_p, ctypes.c_ulong, p(ctypes.c_ulong), p(i), p(i),
-                                   p(u), p(u), p(u), p(u)]
-        x.XQueryTree.argtypes = [ctypes.c_void_p, ctypes.c_ulong, p(ctypes.c_ulong),
-                                 p(ctypes.c_ulong), p(p(ctypes.c_ulong)), p(u)]
-        x.XFetchName.argtypes = [ctypes.c_void_p, ctypes.c_ulong, p(ctypes.c_char_p)]
-        x.XFree.argtypes = [ctypes.c_void_p]
-        x.XMoveResizeWindow.argtypes = [ctypes.c_void_p, ctypes.c_ulong, i, i, u, u]
-        x.XFlush.argtypes = [ctypes.c_void_p]
-        self._dpy = x.XOpenDisplay(None)
-        if not self._dpy:
-            return
-        self._x = x
-        self._root = x.XDefaultRootWindow(self._dpy)
-        self._win = None
-        self._next = 0.0
-
-    def _size(self, win) -> tuple[int, int, int, int]:
-        root, xi, yi = ctypes.c_ulong(), ctypes.c_int(), ctypes.c_int()
-        w, h, b, d = ctypes.c_uint(), ctypes.c_uint(), ctypes.c_uint(), ctypes.c_uint()
-        self._x.XGetGeometry(self._dpy, win, ctypes.byref(root), ctypes.byref(xi), ctypes.byref(yi),
-                             ctypes.byref(w), ctypes.byref(h), ctypes.byref(b), ctypes.byref(d))
-        return xi.value, yi.value, w.value, h.value
-
-    def _find(self):
-        root, parent = ctypes.c_ulong(), ctypes.c_ulong()
-        kids, n = ctypes.POINTER(ctypes.c_ulong)(), ctypes.c_uint()
-        if not self._x.XQueryTree(self._dpy, self._root, ctypes.byref(root), ctypes.byref(parent),
-                                  ctypes.byref(kids), ctypes.byref(n)):
-            return None
-        found = None
-        for k in range(n.value):
-            name = ctypes.c_char_p()
-            if self._x.XFetchName(self._dpy, kids[k], ctypes.byref(name)) and name.value:
-                if name.value.startswith(b"MuJoCo"):
-                    found = kids[k]
-                self._x.XFree(name)
-            if found is not None:
-                break
-        if kids:
-            self._x.XFree(kids)
-        return found
-
-    def poll(self) -> None:
-        if self._x is None or time.monotonic() < self._next:
-            return
-        self._next = time.monotonic() + 1.0
-        if self._win is None:
-            self._win = self._find()  # the render thread maps it a moment after launch
-            if self._win is None:
-                return
-        _, _, sw, sh = self._size(self._root)
-        if self._size(self._win) != (0, 0, sw, sh):
-            self._x.XMoveResizeWindow(self._dpy, self._win, 0, 0, sw, sh)
-            self._x.XFlush(self._dpy)
-
-
-class _HeldKeys:
-    """Which arrow keys are down right now, from the X server's keymap.
-
-    launch_passive's key_callback gets presses (and auto-repeats) but never a
-    release, so it cannot tell "held" from "pressed once". XQueryKeymap can:
-    Xvnc keeps each key down from the VNC client's keydown to its keyup, so the
-    robot stops the moment the key comes up. A connection of its own, as in
-    _FitToDisplay; the keymap is global to the display, which here holds the
-    viewer and nothing else."""
-
-    KEYSYMS = {"up": 0xFF52, "down": 0xFF54, "left": 0xFF51, "right": 0xFF53}  # XK_Up ...
-
-    def __init__(self):
-        self.ok = False
-        name = ctypes.util.find_library("X11")
-        if name is None:
-            return
-        x = ctypes.CDLL(name)
-        x.XOpenDisplay.restype = ctypes.c_void_p
-        x.XOpenDisplay.argtypes = [ctypes.c_char_p]
-        x.XKeysymToKeycode.restype = ctypes.c_ubyte
-        x.XKeysymToKeycode.argtypes = [ctypes.c_void_p, ctypes.c_ulong]
-        x.XQueryKeymap.argtypes = [ctypes.c_void_p, ctypes.c_char_p]
-        self._dpy = x.XOpenDisplay(None)
-        if not self._dpy:
-            return
-        self._x = x
-        self._codes = {k: int(x.XKeysymToKeycode(self._dpy, sym)) for k, sym in self.KEYSYMS.items()}
-        self._buf = ctypes.create_string_buffer(32)
-        self.ok = all(self._codes.values())
-
-    def poll(self) -> set[str]:
-        self._x.XQueryKeymap(self._dpy, self._buf)
-        bits = self._buf.raw
-        return {k for k, c in self._codes.items() if bits[c >> 3] & (1 << (c & 7))}
-
-
-class StoreyView:
-    """Which storeys of the site the viewer draws (storeys.py, scene.py).
-
-    Modes, cycled with 9: auto — the robot's storey and those below it, so
-    the floor above never hides the robot and walking up the stairs brings the
-    next storey in; then each storey alone; then all. A hidden storey's site
-    geoms move to geom group HIDDEN, which the viewer does not draw; the
-    change is made under the viewer's lock, in the main thread."""
+    Storeys (storeys.py), cycled with 9: auto — the robot's storey and those
+    below it, so the floor above never hides the robot and walking up the
+    stairs brings the next storey in; then each storey alone; then all. Of a
+    wanted storey only the tiles (scene.TILE_M squares, one geom each) within
+    `radius` of the robot are drawn: llvmpipe's cost is per triangle, and dp's
+    1F is 1.4 M of them where 30 m around the robot hold a fraction. Hidden
+    geoms go to group HIDDEN, which the viewer does not draw; re-decided when
+    the robot has moved `move_m` or the mode changed."""
 
     HIDDEN = 5
 
-    def __init__(self, sim, log=print):
+    def __init__(self, sim, log=print, radius: float = 30.0, move_m: float = 3.0):
         self.sim = sim
         self.log = log
+        self.radius = radius
+        self.move_m = move_m
         self.n = len(sim.info.storey_bounds) + 1
         self.modes = ["auto"] + [f"{k + 1}F" for k in range(self.n)] + ["all"]
         self.mode = 0
-        self.shown: set[int] | None = None
+        self._shown: np.ndarray | None = None
+        self._at: np.ndarray | None = None
+        self._mode_applied = -1
 
     def cycle(self) -> None:
-        if self.n > 1:
-            self.mode = (self.mode + 1) % len(self.modes)
-            self.log(f"[viewer] storeys: {self.modes[self.mode]}")
+        self.mode = (self.mode + 1) % len(self.modes)
+        self.log(f"[viewer] storeys: {self.modes[self.mode]}")
 
     def wanted(self) -> set[int]:
         name = self.modes[self.mode]
@@ -258,81 +175,208 @@ class StoreyView:
             return set(range(here + 1))
         return {self.modes.index(name) - 1}
 
-    def apply(self, handle) -> None:
-        if self.n <= 1:
-            return
+    def apply(self) -> bool:
+        """Set the site geoms' groups for where the robot is; True if any changed.
+        Call with the viewer's lock held (mjv_updateScene reads the groups)."""
+        info = self.sim.info
+        tiles = info.site_tiles
+        if tiles is None or tiles.shape[0] == 0:
+            return False
+        xy = np.array([self.sim.state.x, self.sim.state.y])
+        if self._at is not None and self.mode == self._mode_applied \
+                and np.linalg.norm(xy - self._at) < self.move_m:
+            return False
         want = self.wanted()
-        if want == self.shown:
-            return
-        with handle.lock():
-            for k, geoms in self.sim.info.site_storeys.items():
-                self.sim.model.geom_group[geoms] = 0 if k in want else self.HIDDEN
-        self.shown = want
+        storey_ok = np.isin(tiles[:, 0].astype(int), list(want))
+        near = np.hypot(tiles[:, 1] - xy[0], tiles[:, 2] - xy[1]) <= self.radius + tiles[:, 3]
+        show = storey_ok & near
+        self._at, self._mode_applied = xy, self.mode
+        if self._shown is not None and np.array_equal(show, self._shown):
+            return False
+        self.sim.model.geom_group[np.asarray(info.site_geoms)] = np.where(show, 0, self.HIDDEN)
+        self._shown = show
+        return True
 
 
 class Viewer:
     def __init__(self, sim, teleop: Teleop | None = None, log=print):
         self.sim = sim
         self.teleop = teleop
-        self.storeys = StoreyView(sim, log)
-        self.handle = mujoco.viewer.launch_passive(
-            sim.model, sim.data, key_callback=self._key,
-            show_left_ui=False, show_right_ui=False)
-        cam = self.handle.cam
-        cam.type = mujoco.mjtCamera.mjCAMERA_TRACKING
-        cam.trackbodyid = sim.info.base_body
-        cam.distance = 9.0
-        cam.elevation = -32.0
-        cam.azimuth = 150.0
-        opt = self.handle.opt
-        opt.geomgroup[3] = 0  # collision primitives and plates
-        opt.geomgroup[4] = 0  # the mocap handle
-        opt.geomgroup[StoreyView.HIDDEN] = 0  # storeys out of view
-        self._scan_n = 0
-        self._fit = _FitToDisplay()
-        self._keys = _HeldKeys() if teleop else None
-        if self._keys is not None and not self._keys.ok:
-            self._keys = None  # Teleop falls back to its press timers
+        self.log = log
+        self.rate_hz = VIEW_HZ
+        self.site = SiteView(sim, log)
+        self.cam = mujoco.MjvCamera()
+        self.cam.type = mujoco.mjtCamera.mjCAMERA_TRACKING
+        self.cam.trackbodyid = sim.info.base_body
+        self.cam.distance = 9.0
+        self.cam.elevation = -32.0
+        self.cam.azimuth = 150.0
+        self.opt = mujoco.MjvOption()
+        self.opt.geomgroup[3] = 0  # collision primitives, plates, terrain boxes
+        self.opt.geomgroup[4] = 0  # the mocap handle
+        self.opt.geomgroup[SiteView.HIDDEN] = 0
+        self._lock = threading.Lock()
+        self._d = mujoco.MjData(sim.model)  # the render copy, state only
+        self._spec = mujoco.mjtState.mjSTATE_INTEGRATION
+        self._state = np.empty(mujoco.mj_stateSize(sim.model, self._spec))
+        self._scan: np.ndarray | None = None  # world points to draw as spheres
+        self._held: set[str] = set()
+        self._mouse = {"x": 0.0, "y": 0.0, "left": False}
+        self._running = True
+        self._closed = False
+        self._ready = threading.Event()
+        self._error: BaseException | None = None
+        self._thread = threading.Thread(target=self._run, daemon=True, name="viewer")
+        self._thread.start()
+        self._ready.wait(timeout=30.0)
+        if self._error is not None:
+            raise RuntimeError(f"viewer window failed: {self._error!r}")
 
-    def _key(self, keycode: int) -> None:
-        if keycode == KEY_9:
-            self.storeys.cycle()
-        elif self.teleop is not None:
-            self.teleop.key(keycode)
-
+    # -- the sim's side (main thread) --------------------------------------------
     def is_running(self) -> bool:
-        return self.handle.is_running()
+        return self._thread.is_alive() and not self._closed
 
     def sync(self, sim) -> None:
-        self.storeys.apply(self.handle)
-        self.handle.sync()
-        self._fit.poll()
-        if self._keys is not None:
-            self.teleop.set_held(self._keys.poll())
+        """Copy the state to the render copy; place the site; read held keys."""
+        with self._lock:
+            self.site.apply()
+            mujoco.mj_getState(sim.model, sim.data, self._state, self._spec)
+            mujoco.mj_setState(sim.model, self._d, self._state, self._spec)
+            held = set(self._held)
+        if self.teleop is not None:
+            self.teleop.set_held(held)
 
     def show_scan(self, sim, max_points: int = 400) -> None:
         """Draw a thinned copy of the last scan as small spheres in the body frame."""
         xyzi = sim.scan()  # a fresh, independent draw is fine for a picture
         T = sim.T_map_imu()
         pts = xyzi[:: max(1, xyzi.shape[0] // max_points), :3].astype(np.float64)
-        pts_w = pts @ T[:3, :3].T + T[:3, 3]
-        # The render thread reads user_scn; editing it unlocked ends in a
-        # GLXBadDrawable from the X server a few seconds in.
-        with self.handle.lock():
-            scn = self.handle.user_scn
-            scn.ngeom = 0
-            for i in range(min(pts_w.shape[0], scn.maxgeom)):
-                g = scn.geoms[i]
-                mujoco.mjv_initGeom(g, mujoco.mjtGeom.mjGEOM_SPHERE, np.array([0.03, 0, 0]),
-                                    pts_w[i], np.eye(3).reshape(-1),
-                                    np.array([1.0, 0.3, 0.1, 0.8]))
-                scn.ngeom = i + 1
+        with self._lock:
+            self._scan = pts @ T[:3, :3].T + T[:3, 3]
 
     def close(self) -> None:
+        self._running = False
+        self._thread.join(timeout=5.0)
+
+    # -- the viewer thread ----------------------------------------------------------
+    def _run(self) -> None:
         try:
-            self.handle.close()
-        except Exception:
-            pass
+            self._open()
+        except BaseException as err:  # noqa: BLE001 - reported to the main thread
+            self._error = err
+            self._ready.set()
+            return
+        self._ready.set()
+        try:
+            self._loop()
+        finally:
+            self._closed = True
+            self._ctx.free()
+            glfw.destroy_window(self._window)
+
+    def _open(self) -> None:
+        if not glfw.init():
+            raise RuntimeError("glfw.init failed (no DISPLAY? scripts/vnc.sh starts one)")
+        glfw.window_hint(glfw.SAMPLES, 0)  # no multisampling: fill cost on llvmpipe
+        w, h = self._screen_size()
+        self._window = glfw.create_window(w, h, "MuJoCo : G23", None, None)
+        if not self._window:
+            raise RuntimeError("glfw.create_window failed")
+        glfw.set_window_pos(self._window, 0, 0)
+        glfw.make_context_current(self._window)
+        glfw.swap_interval(0)
+        m = self.sim.model
+        self._ctx = mujoco.MjrContext(m, mujoco.mjtFontScale.mjFONTSCALE_100)
+        self._scn = mujoco.MjvScene(m, maxgeom=m.ngeom + 1000)
+        glfw.set_key_callback(self._window, self._on_key)
+        glfw.set_cursor_pos_callback(self._window, self._on_cursor)
+        glfw.set_mouse_button_callback(self._window, self._on_button)
+        glfw.set_scroll_callback(self._window, self._on_scroll)
+
+    @staticmethod
+    def _screen_size() -> tuple[int, int]:
+        mode = glfw.get_video_mode(glfw.get_primary_monitor())
+        return int(mode.size.width), int(mode.size.height)
+
+    def _loop(self) -> None:
+        m = self.sim.model
+        next_frame = 0.0
+        next_fit = 0.0
+        while self._running and not glfw.window_should_close(self._window):
+            glfw.poll_events()
+            self._held = {name for key, name in ARROWS.items()
+                          if glfw.get_key(self._window, key) == glfw.PRESS}
+            now = time.monotonic()
+            if now >= next_fit:
+                # Xvnc's screen follows the browser (vnc.sh's resize=remote);
+                # keep the window the size of the screen.
+                next_fit = now + 1.0
+                w, h = self._screen_size()
+                if (w, h) != tuple(glfw.get_window_size(self._window)):
+                    glfw.set_window_size(self._window, w, h)
+            if now < next_frame:
+                time.sleep(min(next_frame - now, 0.005))
+                continue
+            next_frame = now + 1.0 / RENDER_HZ
+            with self._lock:
+                # Positions from the copied state: bodies and geoms, then the
+                # lights (mj_camlight: without it light_xdir stays zero and
+                # the floors render in ambient light only, navy instead of
+                # the ramp's blue — the first screenshot, 2026-10-24).
+                mujoco.mj_kinematics(m, self._d)
+                mujoco.mj_camlight(m, self._d)
+                mujoco.mjv_updateScene(m, self._d, self.opt, None, self.cam,
+                                       mujoco.mjtCatBit.mjCAT_ALL, self._scn)
+                self._add_scan()
+            w, h = glfw.get_framebuffer_size(self._window)
+            mujoco.mjr_render(mujoco.MjrRect(0, 0, w, h), self._scn, self._ctx)
+            glfw.swap_buffers(self._window)
+
+    def _add_scan(self) -> None:
+        if self._scan is None:
+            return
+        scn = self._scn
+        size = np.array([0.03, 0.0, 0.0])
+        rgba = np.array([1.0, 0.3, 0.1, 0.8], np.float32)
+        eye = np.eye(3).reshape(-1)
+        for p in self._scan[: scn.maxgeom - scn.ngeom]:
+            mujoco.mjv_initGeom(scn.geoms[scn.ngeom], mujoco.mjtGeom.mjGEOM_SPHERE, size, p,
+                                eye, rgba)
+            scn.ngeom += 1
+
+    # -- input (viewer thread) --------------------------------------------------------
+    def _on_key(self, window, key, scancode, action, mods) -> None:
+        if action != glfw.PRESS:
+            return
+        if key == KEY_9:
+            with self._lock:
+                self.site.cycle()
+        elif KEY_0 <= key <= KEY_0 + 5 and key not in (KEY_1, KEY_5):
+            g = key - KEY_0
+            self.opt.geomgroup[g] = 0 if self.opt.geomgroup[g] else 1
+        elif key == KEY_H and self.teleop is None:
+            self.log(HELP)
+        elif self.teleop is not None:
+            self.teleop.key(key)
+
+    def _on_cursor(self, window, x, y) -> None:
+        dx, dy = x - self._mouse["x"], y - self._mouse["y"]
+        self._mouse["x"], self._mouse["y"] = x, y
+        if self._mouse["left"]:
+            _, h = glfw.get_window_size(window)
+            with self._lock:
+                mujoco.mjv_moveCamera(self.sim.model, mujoco.mjtMouse.mjMOUSE_ROTATE_V,
+                                      dx / h, dy / h, self._scn, self.cam)
+
+    def _on_button(self, window, button, action, mods) -> None:
+        if button == glfw.MOUSE_BUTTON_LEFT:
+            self._mouse["left"] = action == glfw.PRESS
+            self._mouse["x"], self._mouse["y"] = glfw.get_cursor_pos(window)
+
+    def _on_scroll(self, window, xoff, yoff) -> None:
+        with self._lock:
+            mujoco.mjv_moveCamera(self.sim.model, mujoco.mjtMouse.mjMOUSE_ZOOM, 0.0,
+                                  -0.05 * yoff, self._scn, self.cam)
 
 
 def yaw_of(sim) -> float:

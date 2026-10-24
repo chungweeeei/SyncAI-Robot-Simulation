@@ -35,6 +35,7 @@ Frames handed out (4x4, metres):
 from __future__ import annotations
 
 import math
+import os
 import time
 from dataclasses import dataclass, field
 
@@ -130,18 +131,26 @@ class Simulator:
         if cfg.locomotion not in ("kinematic", "policy"):
             raise ValueError(f"locomotion {cfg.locomotion!r}: kinematic | policy")
         self.legged = cfg.locomotion == "policy"
-        self.robot: RobotModel = load_robot(RobotConfig(urdf_path=cfg.urdf_path,
-                                                        lidar_height=cfg.lidar_height,
-                                                        articulated=self.legged))
+        cache_root = os.path.dirname(os.path.abspath(cfg.cache_dir))
+        self.robot: RobotModel = load_robot(RobotConfig(
+            urdf_path=cfg.urdf_path, lidar_height=cfg.lidar_height, articulated=self.legged,
+            mesh_cache_dir=os.path.join(cache_root, "robot")), log=log)
         site = None
         if cfg.visual_mesh == "pointcloud":
             from .pcd_mesh import load_or_build
             site = load_or_build(cfg.map_dir, cfg.cache_dir, self.world, log=log)
         elif cfg.visual_mesh != "voxels":
             raise ValueError(f"visual_mesh {cfg.visual_mesh!r}: voxels | pointcloud")
-        self.model, self.info = sc.build_scene(
-            self.world, self.robot, cfg.props, timestep=1.0 / cfg.physics_hz,
-            terrain_capacity=cfg.terrain.capacity if self.legged else 0, site=site)
+        capacity = cfg.terrain.capacity if self.legged else 0
+        timestep = 1.0 / cfg.physics_hz
+        key = sc.scene_key(self.world, self.robot, cfg.props, timestep, capacity, cfg.visual_mesh,
+                           cfg.cache_dir)
+        self.model = sc.cached_model(
+            cfg.cache_dir, key,
+            lambda: sc.build_scene(self.world, self.robot, cfg.props, timestep=timestep,
+                                   terrain_capacity=capacity, site=site)[0], log=log)
+        self.info = sc.scene_info(self.model, self.robot, cfg.props, capacity,
+                                  list(self.world.storey_bounds))
         self.data = mujoco.MjData(self.model)
         self.legs: LeggedController | None = None
         self.patch: TerrainPatch | None = None

@@ -51,7 +51,7 @@ config/foxglove/bridge.yaml        foxglove_bridge's settings (port 8765, the .S
 scripts/foxglove.sh                foxglove_bridge (+ robot_state_publisher) for a sim run by hand
   voxel_grid.py                      the numba ray caster, ground query, blocking test
   robot.py                           the workspace URDF -> MJCF: articulated, or rigid with a mocap handle
-  scene.py                           robot + site + props (+ the terrain pool) in one MjSpec
+  scene.py                           robot + site (in 10 m tiles) + props (+ the terrain pool) in one MjSpec; the compiled model cached as MJB
   policy.py                          g2_deploy_rs's PPO / HimLoco runners, ported (onnxruntime)
   legged.py                          motion state -> policy / stand / lie / damping, PD, the fall check
   terrain_patch.py                   the voxels around the robot as collision boxes for its feet
@@ -59,11 +59,11 @@ scripts/foxglove.sh                foxglove_bridge (+ robot_state_publisher) for
   lidar.py, prop_rays.py             the MID360 pattern; analytic rays for props
   fake_driver.py                     set_motion_key / set_policy_mode / mode
   simulator.py                       the ROS-free core (step, scan, imu, spawn, teleport)
-  ros_node.py, viewer.py, __main__.py the node, the viewer with teleop, the CLI
+  ros_node.py, viewer.py, __main__.py the node, the viewer (a GLFW window of our own: frame cap, tiles within reach) with teleop, the CLI
 policy/                            the G23's ONNX policies, gitignored: copy them in (policy/README.md)
 tests/                             pytest; ROS-free except test_simulator_synthetic (needs the ROS env + workspace install)
 docs/findings.md                   what the sim found about the navigation stack
-cache/                             per-map build products (gitignored)
+cache/                             per-map build products (gitignored): the world, the compiled scene (scene-*.mjb, 628 MB on dp), the decimated robot meshes (robot/)
 ```
 
 ## Setup
@@ -112,9 +112,11 @@ python3 /home/syncrobotic/sim/scripts/nav_test.py --goal 3.0 0.0 0.0     # send 
 
 The first run on a map builds its cache (dp: ~12 s — parsing 1.6 M occupied
 leaves, merging faces into a 3.5 M-triangle viewer mesh, 18 k collision
-plates, a 133 MB voxel grid); later runs load it in a second. The viewer
-follows the robot; keys `0`–`5` toggle geom groups (0 the site, 1 the robot,
-2 props, 3 collision shapes, 4 the mocap handle).
+plates, a 133 MB voxel grid) and compiles the scene (~5 s; cached as an
+MJB, so later starts take about a second). The viewer follows the robot:
+left-drag orbits, scroll zooms, `9` cycles the storeys, keys `0 2 3 4`
+toggle geom groups (0 the site, 2 props, 3 collision shapes, 4 the mocap
+handle), `h` lists the teleop keys.
 
 The simulator alone, without the stack:
 
@@ -196,8 +198,13 @@ moved as it walks, with the map's surface-only artefacts closed first (hollow
 stair treads, one-voxel slots across a flight, one-column holes — each with
 the run that found it in the module), and each column's top box stands at
 the floor's measured height inside its voxel (`surface_heights.py`: the median
-of `map.pcd` there) — the 0.1 m grid turns dp's tilted floor into a strip of
-random blocks every ~13 m, where PPO fell 4 times out of 4. On flat stretches
+of `map.pcd` there, then an edge-preserving 5 x 5 median over the same surface,
+which also fills the 43 % of floor voxels with no point inside) — the 0.1 m
+grid turns dp's tilted floor into a strip of random blocks every ~13 m, where
+PPO fell 4 times out of 4, and the per-voxel medians alone were still rough
+(8.7 % of neighbouring columns more than 2 cm apart). Smoothed, dp's open floor
+has its largest step between neighbours at ~1 cm; risers and kerbs keep their
+edges. On flat stretches
 of the mapping track the world build also cuts one-voxel-thick ridges (the
 corridor fence of finding 1 had kept 0.2-0.3 m; the robot fell on it both
 ways). There is no step rule in this mode:
@@ -220,8 +227,12 @@ triangles; dp builds in ~3.5 min once, then loads from the cache; build it
 ahead with `python3 -m syncai_sim.pcd_mesh map/dp`). `voxels` draws the
 cubes the sim actually senses and stands on. Both are coloured by height —
 floors and treads along a ramp, walls a pale copy, undersides grey — and lit
-by two oblique suns (`visual.py`). Only the picture: the robot may stand a
-few centimetres above the drawn floor, because the feet stand on voxel tops.
+by two oblique suns (`visual.py`). The site is cut into 10 m tiles and the
+viewer draws only those within 30 m of the robot on the storeys it shows
+(`SiteView`), at most 10 frames a second; the robot's own STLs are drawn
+decimated (274 k → 29 k triangles, `robot.py`). Only the picture: the feet
+stand on the measured floor (`surface_heights.py`), the voxels are drawn at
+their tops, so the robot can look a few centimetres off the drawn floor.
 
 **Foxglove** (the GPU view, on the host). The MuJoCo viewer renders in
 software; for a detailed picture of the site and the stack, `foxglove_bridge`
@@ -319,6 +330,22 @@ python3 -m syncai_sim --ros-args --params-file ... -p mode_switch_delay:=4.0
   Rendering is Mesa's llvmpipe; the full dp mesh is ~180 ms a frame at
   1280x720, the default 3 m height band (`visual_max_height_above_column_floor_m`)
   ~120 ms. The lidar and the collision queries never depend on it.
+* **The viewer is a GLFW window of our own, not `launch_passive`.** On
+  llvmpipe the passive viewer paced itself on a vsync Xvnc does not have, so
+  it rendered flat out (7-11 fps for ~3 cores, moving or not), its `sync()`
+  copied the model and the 18 MB MjData 60 times a second (12-15 ms each,
+  most of the main thread), every letter was one of its display toggles, and
+  its window and held keys were only reachable through libX11 by ctypes.
+  `viewer.py` is one thread with a 10 fps cap, state-only copies at 20 Hz
+  (0.3 ms), `glfw.get_key`, and the site drawn by tile within 30 m.
+* **Where the CPU went (2026-10-24).** The node in the session used ~7 cores;
+  three sinks, none of them physics (a walking step is 0.23 ms): numpy's
+  OpenBLAS workers spin-waiting between the 50 Hz 4x4 TF inversions (350 %
+  for the headless node; `OPENBLAS_NUM_THREADS=1`, set in `__main__.py`:
+  47 %), the viewer above, and `PointCloud2.data` set from `bytes`, which the
+  generated setter validates byte by byte (13.7 ms of a 20 ms scan publish;
+  `array('B')`: 0.03 ms). After: ~1.2 cores, scan 3.7 ms, `Simulator()` in
+  1.1 s from the caches.
 * **The workspace is not modified.** robot_state_publisher is started by this
   repo's launch file, the INI is bind-mounted, the specs are this repo's. The
   two things the sim would like from the workspace — a `--write-poses` for the

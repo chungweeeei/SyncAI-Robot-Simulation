@@ -15,7 +15,16 @@ from __future__ import annotations
 
 import argparse
 import math
+import os
 import sys
+
+# Before numpy is imported anywhere below: numpy's OpenBLAS starts a worker
+# per CPU and the workers busy-wait after each call. The node's only BLAS
+# work is 4x4 TF algebra at 50 Hz (publish_pose), which is single-threaded
+# anyway, and the calls come faster than the workers' spin timeout, so three
+# of them never slept: the ROS node alone, headless, was 350 % CPU; with one
+# thread it is 47 % (2026-10-24).
+os.environ.setdefault("OPENBLAS_NUM_THREADS", "1")
 
 
 def main(argv=None) -> int:
@@ -161,7 +170,7 @@ def _run_without_ros(ini, a) -> int:
                 if viewer is not None and a.show_scan:
                     viewer.show_scan(sim)
             if viewer is not None and now >= next_view:
-                next_view = now + 1 / 60
+                next_view = now + 1 / viewer.rate_hz
                 viewer.sync(sim)
             if sim.sim_time >= next_print:  # steps come in catch-up batches: never ==
                 next_print += 5.0

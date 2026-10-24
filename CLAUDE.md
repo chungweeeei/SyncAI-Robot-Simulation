@@ -61,12 +61,12 @@ Python throughout (decided
 | the feet's ground (voxels -> boxes) | `terrain_patch.py` (numba, `tests/test_terrain_patch.py`) |
 | the step rule, gates, collisions (kinematic) | `kinematics.py` (pure Python, `tests/test_kinematics.py`) |
 | URDF -> MJCF, mocap weld, standing pose | `robot.py` (`DEFAULT_STANDING` was solved by FK, feet 0.372 m under the hips) |
-| MjSpec assembly, bitmasks, groups | `scene.py` |
+| MjSpec assembly, bitmasks, groups, site tiles, the MJB scene cache | `scene.py` (`scene_info` reads a loaded model back by name; `scene_key` lists what the cache depends on) |
 | the lidar pattern, prop rays | `lidar.py`, `prop_rays.py` |
 | the gait controller on driver_manager's UDP link (the session) | `controller_link.py` (`tests/test_controller_link.py`), `config/params/driver_manager_sim.yaml` |
 | services and `mode` (driver_link: fake) | `fake_driver.py` |
 | one physics tick, scan, spawn, teleport | `simulator.py` |
-| publishers, subscribers, the main loop | `ros_node.py`; CLI in `__main__.py`; viewer + teleop in `viewer.py` |
+| publishers, subscribers, the main loop | `ros_node.py`; CLI in `__main__.py` (sets `OPENBLAS_NUM_THREADS=1` before numpy); the viewer (own GLFW thread, `SiteView`) + teleop in `viewer.py` |
 | the session, the display, the test driver | `scripts/run_session.sh`, `scripts/vnc.sh`, `scripts/nav_test.py` |
 
 ## Running and testing (inside the container)

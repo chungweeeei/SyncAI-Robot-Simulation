@@ -36,6 +36,7 @@ under one lock.
 
 from __future__ import annotations
 
+import array
 import json
 import math
 import threading
@@ -262,9 +263,15 @@ class SimNode(Node):
         self.publish_pose(stamp)
         with self.lock:
             xyzi = self.sim.scan()
+        msg = self._cloud_msg(stamp, self.f["body"], xyzi)
+        self.pub_cloud.publish(msg)
+        return msg.width
+
+    def _cloud_msg(self, stamp, frame_id: str, xyzi: np.ndarray) -> PointCloud2:
+        """A PointCloud2 of (N, 4) float32 x y z intensity."""
         msg = PointCloud2()
         msg.header.stamp = stamp
-        msg.header.frame_id = self.f["body"]
+        msg.header.frame_id = frame_id
         msg.height = 1
         msg.width = int(xyzi.shape[0])
         msg.fields = self._cloud_fields
@@ -272,9 +279,12 @@ class SimNode(Node):
         msg.point_step = 16
         msg.row_step = 16 * msg.width
         msg.is_dense = True
-        msg.data = np.ascontiguousarray(xyzi, dtype=np.float32).tobytes()
-        self.pub_cloud.publish(msg)
-        return msg.width
+        # array('B'), not bytes: the generated setter checks a bytes value
+        # element by element in Python (13.7 ms for a 311 KB scan, so the
+        # 3 ms scan published in 20 ms; ~1.5 s for a 35 MB map cloud) and
+        # takes an array('B') as is (0.03 ms; 2026-10-24).
+        msg.data = array.array("B", np.ascontiguousarray(xyzi, dtype=np.float32).tobytes())
+        return msg
 
     def publish_joints(self) -> None:
         with self.lock:
@@ -292,18 +302,7 @@ class SimNode(Node):
                              durability=DurabilityPolicy.TRANSIENT_LOCAL)
         for k, xyzi in sorted(clouds.items()):
             pub = self.create_publisher(PointCloud2, f"sim/map_cloud/storey{k + 1}", latched)
-            msg = PointCloud2()
-            msg.header.stamp = self._stamp()
-            msg.header.frame_id = self.f["map"]
-            msg.height = 1
-            msg.width = int(xyzi.shape[0])
-            msg.fields = self._cloud_fields
-            msg.is_bigendian = False
-            msg.point_step = 16
-            msg.row_step = 16 * msg.width
-            msg.is_dense = True
-            msg.data = np.ascontiguousarray(xyzi, dtype=np.float32).tobytes()
-            pub.publish(msg)
+            pub.publish(self._cloud_msg(self._stamp(), self.f["map"], xyzi))
             self._map_pubs.append(pub)
         self.get_logger().info(
             f"map clouds latched: {[f'storey{k + 1} {c.shape[0]} pts' for k, c in sorted(clouds.items())]}")
@@ -370,7 +369,13 @@ class Spinner:
         self.thread.start()
 
     def stop(self):
+        # shutdown() returns while the thread may still be inside rmw_wait;
+        # destroying the node or the context under it ended the process with
+        # "terminate called without an active exception" (a joinable thread
+        # in rmw_cyclonedds, exit 134) in 6 of 8 --seconds runs; joined, 0 of
+        # 12 (2026-10-24).
         self.exec.shutdown(timeout_sec=1.0)
+        self.thread.join(timeout=3.0)
 
 
 class ParamNode(Node):
@@ -395,7 +400,7 @@ def run_loop(node: SimNode, viewer_factory, teleop, show_scan: bool, stop_after:
     periods = {
         "pose": 1.0 / p["pose_publish_hz"], "imu": 1.0 / p["imu_publish_hz"],
         "scan": 1.0 / p["scan_rate_hz"], "mode": 1.0 / p["mode_publish_rate_hz"],
-        "status": 1.0 / p["status_publish_hz"], "view": 1.0 / 60.0,
+        "status": 1.0 / p["status_publish_hz"],
     }
     due = {k: 0.0 for k in periods}
     max_catch_up = max(1, int(round(0.1 / dt)))
@@ -406,6 +411,9 @@ def run_loop(node: SimNode, viewer_factory, teleop, show_scan: bool, stop_after:
     scan_ms = 0.0
     n = 0
     viewer = viewer_factory() if viewer_factory else None
+    if viewer is not None:
+        periods["view"] = 1.0 / viewer.rate_hz
+        due["view"] = 0.0
     try:
         while rclpy.ok():
             now = time.perf_counter()

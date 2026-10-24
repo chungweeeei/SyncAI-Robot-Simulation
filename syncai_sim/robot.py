@@ -81,6 +81,15 @@ class RobotConfig:
     mocap_name: str = "base_mocap"
     articulated: bool = False
     imu_site: str = "imu_site"
+    # Visual STLs decimated (open3d quadric) into this directory, each to
+    # `mesh_decimation` of its triangles, never under `mesh_min_triangles`.
+    # The URDF's meshes are 274 k triangles (body 100 k, each shank 27 k):
+    # on llvmpipe the robot alone cost ~50 ms a frame at 1600x1000, as much
+    # as a storey of the site (2026-10-24). Collision is primitives, so this
+    # is the picture only. None = the URDF's files as they are.
+    mesh_cache_dir: str | None = None
+    mesh_decimation: float = 0.15
+    mesh_min_triangles: int = 3000
 
 
 @dataclass
@@ -132,7 +141,7 @@ def _frame_of(model: mujoco.MjModel, body: str) -> np.ndarray:
     return np.linalg.inv(T(base)) @ T(bid)
 
 
-def load_robot(cfg: RobotConfig) -> RobotModel:
+def load_robot(cfg: RobotConfig, log=print) -> RobotModel:
     with open(cfg.urdf_path) as f:
         urdf = f.read()
     meshdir = os.path.dirname(os.path.abspath(cfg.urdf_path))
@@ -147,6 +156,8 @@ def load_robot(cfg: RobotConfig) -> RobotModel:
         path = os.path.join(tmp, "robot.xml")
         mujoco.mj_saveLastXML(path, model)
         root = ET.parse(path).getroot()
+    if cfg.mesh_cache_dir:
+        _use_decimated_meshes(root, meshdir, cfg, log)
 
     worldbody = root.find("worldbody")
     base = next(b for b in worldbody.iter("body") if b.get("name") == cfg.base_link)
@@ -248,6 +259,41 @@ def _articulated(root: ET.Element, base: ET.Element, cfg: RobotConfig,
     h_stand = float(data.xpos[1][2] - min(bottoms))
     return RobotModel(mjcf=mjcf, cfg=cfg, base_to_lidar=base_to_lidar, base_to_imu=base_to_imu,
                       h_stand=h_stand)
+
+
+def _use_decimated_meshes(root: ET.Element, meshdir: str, cfg: RobotConfig, log) -> None:
+    """Point the MJCF's <mesh file=...> at decimated copies (see RobotConfig)."""
+    try:
+        import open3d as o3d
+    except ImportError:
+        log("[robot] open3d not installed: the URDF's meshes are drawn as they are")
+        return
+    asset = root.find("asset")
+    if asset is None:
+        return
+    os.makedirs(cfg.mesh_cache_dir, exist_ok=True)
+    for mesh in asset.findall("mesh"):
+        src = mesh.get("file", "")
+        if not src:
+            continue
+        src_path = src if os.path.isabs(src) else os.path.normpath(os.path.join(meshdir, src))
+        if not os.path.isfile(src_path):
+            continue
+        st = os.stat(src_path)
+        stem = os.path.splitext(os.path.basename(src_path))[0]
+        out = os.path.join(cfg.mesh_cache_dir,
+                           f"{stem}-{st.st_size}-{int(st.st_mtime)}-r{cfg.mesh_decimation:g}"
+                           f"-m{cfg.mesh_min_triangles}.stl")
+        if not os.path.isfile(out):
+            m = o3d.io.read_triangle_mesh(src_path)
+            n = len(m.triangles)
+            target = max(cfg.mesh_min_triangles, int(n * cfg.mesh_decimation))
+            if n > target:
+                m = m.simplify_quadric_decimation(target)
+            m.compute_triangle_normals()
+            o3d.io.write_triangle_mesh(out, m)
+            log(f"[robot] {os.path.basename(src_path)}: {n} -> {len(m.triangles)} triangles")
+        mesh.set("file", out)
 
 
 def default_urdf(workspace: str) -> str:
