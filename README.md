@@ -213,7 +213,14 @@ has (its top is 5 cm high on average: on dp's last step to 2F that made a lip
 PPO fell on). Last, steps between two mapping passes that drifted apart in
 height (dp's stairwell sits ~0.13 m under the rest) are ramped wherever the
 mapping track walked level over them: a 0.16 m "step" onto 2F that the real
-robot never meets, where PPO fell twice at 0.7 m/s, became a 1 m ramp. Faults
+robot never meets, where PPO fell twice at 0.7 m/s, became a 1 m ramp. And
+every flight the mapping track climbed is fitted as a staircase of equal
+risers and treads between the landings it joins: per voxel, a riser across a
+column made a half step of the column (dp's flight 3 read 2.56 / 2.61 / 2.69
+/ 2.91 ... 3.06 / 3.17 / 3.23). That did not decide the falls: HimLoco fell
+on dp's stairwell in 7 of 20 climbs before the fit and 3 of 10 after
+(2026-10-25), at the same 45 deg pitch limit g2_deploy_rs's rl_control.rs
+has, on a 33 deg flight. Faults
 in the octomap itself (unseen treads, two-level landings, a shut door) are
 fixed in the map: the workspace's `docs/octomap-repair.md`. With those and
 these, 10 of 10 alternating 1F <-> 2F navigations on dp (2026-10-24). On flat stretches

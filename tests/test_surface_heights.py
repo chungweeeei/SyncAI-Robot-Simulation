@@ -1,7 +1,13 @@
 import numpy as np
 
 from syncai_sim.btree import TREE_MAX_VAL
-from syncai_sim.surface_heights import SurfaceHeights, blend_track_seams, build, smooth
+from syncai_sim.surface_heights import (
+    SurfaceHeights,
+    blend_track_seams,
+    build,
+    fit_track_flights,
+    smooth,
+)
 from syncai_sim.terrain_patch import TerrainPatch
 from syncai_sim.voxel_grid import VoxelGrid
 from syncai_sim.world import _cut_track_ridges
@@ -127,3 +133,94 @@ def test_seams_on_stacked_floors_are_both_ramped():
     for iz, base in ((0, 0.05), (30, 3.05)):
         row = out.lookup(np.array([[i, 10, iz] for i in range(40)]))
         assert np.max(np.abs(np.diff(row))) < 0.03, f"floor at {base} m kept its step"
+
+
+# A flight along +x, 3 m wide: floor 0.5 m, six risers of 0.15 m at x 1.03 +
+# 0.25 k (mid-column, as risers fall), floor 1.4 m from the last one on.
+RISERS = 1.03 + 0.25 * np.arange(6)
+
+
+def _stair_height(x):
+    return 0.5 + 0.15 * np.searchsorted(RISERS, x, side="right")
+
+
+def _stair_case(climb=True, drift=False):
+    nx, ny = 36, 30
+    vox = []
+    for ix in range(nx):
+        top = int(np.ceil(_stair_height((ix + 0.5) * RES) / RES - 1e-9)) - 1
+        for iz in range(top + 1):
+            vox.append(_grid([ORG + ix], range(ORG, ORG + ny), [ORG + iz]))
+    vox.append([[ORG, ORG, ORG + 17]])  # headroom: build reads the layer above every surface
+    g = VoxelGrid(np.concatenate(vox), RES, z_clip_above_lowest_m=0)
+    rng = np.random.default_rng(0)
+    xs, ys = np.meshgrid(np.arange(0.01, 3.6, 0.02), np.arange(0.91, 2.1, 0.02), indexing="ij")
+    tread = np.stack([xs.ravel(), ys.ravel(), _stair_height(xs.ravel())], axis=1)
+    faces = [np.stack([np.full(zs.size * 60, x), np.tile(np.arange(0.91, 2.1, 0.02), zs.size),
+                       np.repeat(zs, 60)], axis=1)
+             for x in RISERS for zs in [np.arange(_stair_height(x - 0.01), _stair_height(x), 0.01)]]
+    pts = np.concatenate([tread, *faces])
+    if drift:
+        # A second pass that drifted 0.07 m up and 0.12 m along over the upper
+        # half, as on dp's flight 3: two sets of treads half a riser apart.
+        pts = np.concatenate([pts, tread[tread[:, 0] > 1.6] + np.array([0.12, 0.0, 0.07])])
+    pts[:, 2] += rng.normal(0.0, 0.005, pts.shape[0])
+    x = np.arange(0.1, 3.45, 0.1)
+    ground = np.interp(x, [0.9, 2.4], [0.5, 1.4]) if climb else np.full(x.size, 0.5)
+    track = np.stack([x, np.full(x.size, 1.5), ground + 0.481], axis=1)
+    return g, pts.astype(np.float32), track
+
+
+def _column_tops(g, sh, iy):
+    out = []
+    for ix in range(g.grid.shape[0]):
+        iz = int(np.nonzero(g.grid[ix, iy])[0].max())
+        out.append(float(sh.lookup(np.array([[ix, iy, iz]]))[0]))
+    return np.array(out)
+
+
+def _fit_case(drift):
+    g, pts, track = _stair_case(drift=drift)
+    sh = build(pts, FakeWorld(g))
+    out, fits, skipped = fit_track_flights(sh, g.grid, g.origin_m, RES, track, pts)
+    assert skipped == [] and len(fits) == 1
+    return g, sh, out, fits[0]
+
+
+def _whole_steps(tops, riser):
+    """Flat or one whole riser between neighbouring columns."""
+    s = np.diff(tops)
+    return np.all((np.abs(s) < 0.005) | (np.abs(s - riser) < 0.005))
+
+
+def test_a_flight_is_fitted_as_a_uniform_staircase():
+    g, sh, out, f = _fit_case(drift=False)
+    assert f.n == 6 and abs(f.tread - 0.25) < 0.011 and abs(f.riser - 0.15) < 0.01
+    assert abs(f.u0 - RISERS[0]) < 0.04  # the face's points lead the envelope by a bin
+    tops = _column_tops(g, out, 15)
+    assert _whole_steps(tops, f.riser)
+    # The right height wherever a column is not cut by a riser ...
+    xc = (np.arange(36) + 0.5) * RES
+    clear = np.min(np.abs(xc[:, None] - RISERS[None, :]), axis=1) > 0.05
+    assert np.max(np.abs(tops - _stair_height(xc))[clear & (xc > 0.6) & (xc < 3.0)]) < 0.02
+    # ... and beyond the flight's width the surface is as measured.
+    assert np.array_equal(_column_tops(g, out, 25), _column_tops(g, sh, 25), equal_nan=True)
+
+
+def test_a_flight_seen_by_two_drifted_passes_still_has_whole_steps():
+    # The per-voxel medians make half steps of the two passes; the fit
+    # compromises on the tread (0.225 here, as on dp's flight 3) but keeps the
+    # risers whole and equal, and meets both floors.
+    g, sh, out, f = _fit_case(drift=True)
+    assert not _whole_steps(_column_tops(g, sh, 15)[6:28], 0.15)
+    assert f.n == 6 and abs(f.riser - 0.15) < 0.01
+    tops = _column_tops(g, out, 15)
+    assert _whole_steps(tops, f.riser)
+    assert abs(tops[5] - 0.5) < 0.01 and abs(tops[30] - 1.4) < 0.01
+
+
+def test_a_level_track_fits_no_flight():
+    g, pts, track = _stair_case(climb=False)
+    sh = build(pts, FakeWorld(g))
+    out, fits, skipped = fit_track_flights(sh, g.grid, g.origin_m, RES, track, pts)
+    assert fits == [] and skipped == [] and out is sh

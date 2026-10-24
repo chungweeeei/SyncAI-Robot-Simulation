@@ -54,6 +54,43 @@ leaves everything more than half the window from it as it was. A real step
 the robot walked over moved its own height too, so it is no seam; a flight
 beside a landing does not change what is under the robot.
 
+And last, **the flights the track climbed are fitted as uniform staircases**
+(`fit_track_flights`). Per voxel, a riser that crosses a column puts its face
+in that column's top voxel, and the median of a face is half a step: dp's
+flight 3 came out as 2.56 / 2.61 / 2.69 / 2.91 ... 3.06 / 3.17 / 3.23 ...
+(risers of 0.05-0.22 m on treads of 0.1-0.3 m), not the building's equal
+risers. HimLoco tipped over backwards or sideways on all four flights of
+the stairwell in 7 of 20 climbs over that surface; over the fitted one it
+did in 3 of 10 (2026-10-25), so the slivers were not what fells it -- the
+fit is here because the stairs are now the building's. Where the points disagree,
+two passes overlap half a riser apart (flight 3's upper half shows tread
+levels 3.39 / 3.45, 3.57 / 3.69), and on flight 4 the lidar saw the risers'
+faces but hardly a tread. A per-voxel rule could not tell a face from a
+noisy floor (15 % of dp's ground-floor voxels spread 5 cm or more, against
+half of a flight's; marking them faces made the floors rougher and the
+flights no better: rejected). So the flight is fitted whole: along the
+track, the upper envelope of the points between 0.35 m under the track's
+ground and 0.3 m over it (the flight's own soffit, seen from the flight
+under it, is ~0.45 m down; a handrail ~0.9 m up), against a staircase of n
+equal risers and equal treads whose two ends are the floor the surface
+already has under the level keyframes before and after the flight (so the
+stairs meet their landings, seams and fixes included). n is held to risers
+of 0.13-0.20 m between those two floors -- free, the fit shortened a flight
+by calling its last treads a landing -- and the points may sit at most 0.07
+m off the landings as a whole (free, an offset of one riser shifted every
+tread by one). Points under the staircase cost a quarter of points over it:
+a tread the lidar never saw leaves only what is under it. On dp: eight
+risers of 0.165-0.174 m on 0.24-0.25 m treads for flights 1 and 2, of 0.163
+on 0.225 for flight 3, seven of 0.170 on 0.245 for flight 4 (its top is the
+stair head's drifted 5.02, not 5.13), residuals 1-1.6 cm. The fitted height
+replaces every surface top within 0.6 m of the track's line and 0.3 m of
+the staircase, from the landing floor before the flight to the one after;
+between an end riser and the landing (at most 0.6 m) it runs from the
+fitted floor to what the landing has there, so a landing's own slope stays
+(dp's landing 2 rises 0.11 m off flight 2 where its seam was ramped:
+flattened to the fitted 2.42, it ended in a 0.11 m step) and a bump before
+it goes (5.12 at the top of flight 4, on a stair head of 5.02).
+
 All of this moves where the feet touch, nothing else: the lidar, the planner
 and the kinematic base still read the voxels (CLAUDE.md, rule 2).
 
@@ -71,8 +108,9 @@ from .pcd_mesh import read_pcd
 from .world import World, read_track
 
 # 2: smoothed; 3: every surface voxel, one point is enough; 4: the wide pass; 5: seams;
-# 6: an unmeasured voxel prefers its own layer; 7: seams keyed by column and band
-FORMAT = 7
+# 6: an unmeasured voxel prefers its own layer; 7: seams keyed by column and band;
+# 8: flights fitted as staircases
+FORMAT = 8
 WIDE_RADIUS = 6  # columns, the second pass (module docstring)
 
 # Seams (blend_track_seams). poses.txt is the IMU; its ground is z - this.
@@ -87,6 +125,29 @@ SEAM_BOX = 5  # columns each side: the 1.1 m box mean
 # Neighbours further off a cell's top than the seam's own jump plus this are
 # not its floor: a riser (0.17 m) beside a 0.07 m seam on dp's landing 3 stays a riser.
 SEAM_SAME_FLOOR = 0.05
+
+# Flights (fit_track_flights; the module docstring has the why of each).
+# A keyframe is on a flight where the track's ground changes more than this
+# over +-2 keyframes, and a run of them that rises more than FLIGHT_RISE is
+# one: the workspace's scripts/map_repair/find_pits.py finds them the same way.
+FLIGHT_SLOPE = 0.15
+FLIGHT_RISE = 0.5
+FLIGHT_BAND = (-0.35, 0.30)  # m around the track's ground: the points that are the stairs
+FLIGHT_FIT_HALF_WIDTH = 0.35  # m of points either side of the track's line, for the fit
+FLIGHT_HALF_WIDTH = 0.6  # m either side of it that the staircase replaces (dp's flights: 1.4-1.6 wide)
+# m: a top this close to the staircase is part of it -- a whole riser off
+# (up to 0.20), the points' offset to the landings (FLIGHT_OFFSET) and 3 cm
+# of noise; the flight's soffit is ~0.45 m under it, a handrail ~0.9 m over.
+# At 0.25 a 0.27 m pit at the top of dp's flight 1 stayed.
+FLIGHT_WINDOW = 0.30
+FLIGHT_BIN = 0.02  # m along the flight, the envelope's bins
+FLIGHT_ENVELOPE_Q = 0.95
+FLIGHT_UNDER_COST = 0.25  # what a point under the staircase costs, against one over it
+FLIGHT_RISERS = (0.13, 0.20)  # m
+FLIGHT_TREADS = (0.22, 0.33)  # m
+FLIGHT_OFFSET = 0.07  # m, the points against the landings
+FLIGHT_MAX_ERR = 0.03  # m, mean (truncated) residual of a fit that is used
+FLIGHT_END = 0.6  # m at most between a flight's end riser and the landing floor it is joined to
 
 
 class SurfaceHeights:
@@ -289,6 +350,206 @@ def blend_track_seams(sh: SurfaceHeights, origin: np.ndarray, res: float, track:
     return SurfaceHeights(sh.shape, sh.keys, tops), seams
 
 
+class FlightFit:
+    """A flight fitted as a staircase: along `axis` (0 x, 1 y), `sign` so that
+    u = sign * coordinate climbs; risers at u0 + k * tread, k < n; floors
+    `bottom` before the first and `top` after the last, running to the
+    landing's own `end_lo` at u_lo and `end_hi` at u_hi."""
+
+    def __init__(self, keyframes, axis, sign, across, u0, tread, n, bottom, top, err):
+        self.keyframes, self.axis, self.sign, self.across = keyframes, axis, sign, across
+        self.u0, self.tread, self.n, self.bottom, self.top = u0, tread, n, bottom, top
+        self.err = err
+        self.u_lo = self.u_hi = self.end_lo = self.end_hi = float("nan")
+
+    @property
+    def riser(self) -> float:
+        return (self.top - self.bottom) / self.n
+
+    @property
+    def u1(self) -> float:
+        return self.u0 + (self.n - 1) * self.tread
+
+    def height(self, u: np.ndarray) -> np.ndarray:
+        k = np.clip(np.floor((u - self.u0) / self.tread) + 1, 0, self.n)
+        h = self.bottom + self.riser * k
+        a = np.clip((self.u0 - u) / max(self.u0 - self.u_lo, 1e-9), 0.0, 1.0)
+        b = np.clip((u - self.u1) / max(self.u_hi - self.u1, 1e-9), 0.0, 1.0)
+        h = np.where(u < self.u0, self.bottom + (self.end_lo - self.bottom) * a, h)
+        return np.where(u > self.u1, self.top + (self.end_hi - self.top) * b, h)
+
+
+def _floor_across(sh: SurfaceHeights, origin: np.ndarray, res: float, f: FlightFit, u: float,
+                  near: float) -> float:
+    """Median surface top across the flight's width at u, within FLIGHT_WINDOW
+    of `near`; `near` itself where there is none."""
+    vals = []
+    for c in np.arange(f.across - FLIGHT_HALF_WIDTH, f.across + FLIGHT_HALF_WIDTH + 1e-9, res):
+        p = [0.0, 0.0]
+        p[f.axis], p[1 - f.axis] = f.sign * u, c
+        ix, iy = (int(np.floor((p[i] - origin[i]) / res)) for i in range(2))
+        zs = np.arange(int(np.floor((near - FLIGHT_WINDOW - origin[2]) / res)),
+                       int(np.floor((near + FLIGHT_WINDOW - origin[2]) / res)) + 1)
+        t = sh.lookup(np.stack([np.full(zs.size, ix), np.full(zs.size, iy), zs], axis=1))
+        t = t[np.abs(t - near) <= FLIGHT_WINDOW]
+        if t.size:
+            vals.append(float(t.max()))
+    return float(np.median(vals)) if vals else near
+
+
+def _flight_runs(ground: np.ndarray) -> list[np.ndarray]:
+    n = ground.size
+    on = np.array([abs(ground[min(k + 2, n - 1)] - ground[max(k - 2, 0)]) > FLIGHT_SLOPE
+                   for k in range(n)], bool)
+    runs, cur = [], []
+    for k in range(n):
+        if on[k]:
+            cur.append(k)
+        elif cur:
+            runs.append(cur)
+            cur = []
+    if cur:
+        runs.append(cur)
+    return [np.array(r) for r in runs if np.ptp(ground[r]) > FLIGHT_RISE]
+
+
+def _fit_staircase(uc: np.ndarray, env: np.ndarray, bottom: float, top: float
+                   ) -> tuple[float, int, float, float] | None:
+    """(err, n, tread, u0) of the staircase from `bottom` to `top` that best
+    fits the envelope `env` at `uc` (the flight's keyframes' stretch), or None."""
+    rise = top - bottom
+    best = None
+    lo_u, hi_u = float(uc.min()), float(uc.max())
+    for n in range(max(2, int(np.ceil(rise / FLIGHT_RISERS[1]))), int(np.floor(rise / FLIGHT_RISERS[0])) + 1):
+        r = rise / n
+        for d in np.arange(FLIGHT_TREADS[0], FLIGHT_TREADS[1] + 1e-9, 0.005):
+            u0s = np.arange(lo_u - 0.8, hi_u + 0.8 - (n - 1) * d, 0.01)
+            if u0s.size == 0:
+                continue
+            k = np.clip(np.floor((uc[None, :] - u0s[:, None]) / d) + 1, 0, n)
+            res = env[None, :] - (bottom + r * k)
+            off = np.clip(np.quantile(res, 0.75, axis=1), -FLIGHT_OFFSET, FLIGHT_OFFSET)
+            res = res - off[:, None]
+            err = np.mean(np.where(res > 0, np.minimum(res, 0.08),
+                                   FLIGHT_UNDER_COST * np.minimum(-res, 0.08)), axis=1)
+            j = int(np.argmin(err))
+            if best is None or err[j] < best[0]:
+                best = (float(err[j]), n, float(d), float(u0s[j]))
+    return best
+
+
+def fit_track_flights(sh: SurfaceHeights, occ: np.ndarray, origin: np.ndarray, res: float,
+                      track: np.ndarray, points: np.ndarray
+                      ) -> tuple[SurfaceHeights, list[FlightFit], list[str]]:
+    """Replace the surface of every flight on the track by a fitted staircase
+    (module docstring). `occ` is the voxel grid, `points` map.pcd. Returns the
+    heights, the fits used and why the others were not."""
+    if track.shape[0] < 5 or sh.keys.size == 0:
+        return sh, [], []
+    ground = track[:, 2] - LIDAR_HEIGHT
+    fits: list[FlightFit] = []
+    skipped: list[str] = []
+    nx, ny, nz = sh.shape
+    new: dict[int, float] = {}
+    for r in _flight_runs(ground):
+        name = f"keyframes {r[0]}-{r[-1]}"
+        xy = track[r, :2]
+        ax = 0 if np.ptp(xy[:, 0]) > np.ptp(xy[:, 1]) else 1
+        climbs = ground[r[-1]] > ground[r[0]]
+        sign = 1.0 if (xy[-1, ax] - xy[0, ax] > 0) == climbs else -1.0
+        across = float(np.median(xy[:, 1 - ax]))
+        u_kf = sign * xy[:, ax]
+        order = np.argsort(u_kf)
+        u_kf, g_kf = u_kf[order], np.maximum.accumulate(ground[r][order])
+
+        # The floors at both ends: under the level keyframes before and after.
+        ends = []
+        for ks in (range(max(0, r[0] - 3), r[0]), range(r[-1] + 1, min(track.shape[0], r[-1] + 4))):
+            ks = list(ks)
+            f = [_floor_under(sh, origin, res, track[k, 0], track[k, 1], ground[k]) for k in ks]
+            ok = [i for i, v in enumerate(f) if v == v]
+            ends.append((float(np.median([f[i] for i in ok])) if ok else float("nan"),
+                         [sign * track[ks[i], ax] for i in ok]))
+        (f0, u0_ends), (f1, u1_ends) = ends if climbs else ends[::-1]
+        if f0 != f0 or f1 != f1:
+            skipped.append(f"{name}: no level floor measured at an end")
+            continue
+
+        # The points' upper envelope along the keyframes' stretch.
+        u = sign * points[:, ax]
+        m = ((u >= u_kf[0]) & (u <= u_kf[-1])
+             & (np.abs(points[:, 1 - ax] - across) <= FLIGHT_FIT_HALF_WIDTH))
+        p, pu = points[m], u[m]
+        g = np.interp(pu, u_kf, g_kf)
+        keep = (p[:, 2] >= g + FLIGHT_BAND[0]) & (p[:, 2] <= g + FLIGHT_BAND[1])
+        p, pu = p[keep], pu[keep]
+        b = np.floor((pu - u_kf[0]) / FLIGHT_BIN).astype(np.int64)
+        order = np.lexsort((p[:, 2], b))
+        b, z = b[order], p[order, 2]
+        bins, first, counts = np.unique(b, return_index=True, return_counts=True)
+        enough = counts >= 3
+        env = z[first + np.minimum(counts - 1, (counts * FLIGHT_ENVELOPE_Q).astype(np.int64))][enough]
+        uc = u_kf[0] + (bins[enough] + 0.5) * FLIGHT_BIN
+        if uc.size < 10:
+            skipped.append(f"{name}: too few points on the flight")
+            continue
+        fit = _fit_staircase(uc, env, f0, f1)
+        if fit is None or fit[0] > FLIGHT_MAX_ERR:
+            skipped.append(f"{name}: no staircase fits"
+                           + ("" if fit is None else f" (residual {fit[0]:.3f} m)"))
+            continue
+        err, n, d, u0 = fit
+        ff = FlightFit((int(r[0]), int(r[-1])), ax, sign, across, u0, d, n, f0, f1, err)
+        u1 = ff.u1
+        u_lo = ff.u_lo = float(np.clip(min(u0_ends, default=u0 - FLIGHT_END), u0 - FLIGHT_END, u0 - res))
+        u_hi = ff.u_hi = float(np.clip(max(u1_ends, default=u1 + FLIGHT_END), u1 + res, u1 + FLIGHT_END))
+        ff.end_lo = _floor_across(sh, origin, res, ff, u_lo, f0)
+        ff.end_hi = _floor_across(sh, origin, res, ff, u_hi, f1)
+        fits.append(ff)
+
+        # Every surface voxel there that is on the staircase takes its height.
+        cmin = across - FLIGHT_HALF_WIDTH
+        cmax = across + FLIGHT_HALF_WIDTH
+        lo_xy, hi_xy = [0.0, 0.0], [0.0, 0.0]
+        lo_xy[ax], hi_xy[ax] = sorted((sign * u_lo, sign * u_hi))
+        lo_xy[1 - ax], hi_xy[1 - ax] = cmin, cmax
+        i0, j0 = (int(np.floor((v - origin[i]) / res)) for i, v in enumerate(lo_xy))
+        i1, j1 = (int(np.floor((v - origin[i]) / res)) for i, v in enumerate(hi_xy))
+        for ix in range(max(i0, 0), min(i1, nx - 1) + 1):
+            for iy in range(max(j0, 0), min(j1, ny - 1) + 1):
+                c = origin[:2] + (np.array([ix, iy]) + 0.5) * res
+                if not (u_lo <= sign * c[ax] <= u_hi and cmin <= c[1 - ax] <= cmax):
+                    continue
+                h = float(ff.height(np.array([sign * c[ax]]))[0])
+                for iz in range(max(int(np.floor((h - 0.3 - origin[2]) / res)), 0),
+                                min(int(np.floor((h + 0.3 - origin[2]) / res)), nz - 2) + 1):
+                    if not occ[ix, iy, iz] or occ[ix, iy, iz + 1]:
+                        continue
+                    lo = origin[2] + iz * res
+                    # No bound but the window: a top lowered takes its stack
+                    # down (terrain_patch.py), and one raised past its voxel
+                    # floats over the stack -- the gap is under the tread's
+                    # nose, where no foot goes. Held to one voxel, the column
+                    # a fitted riser moves over kept its half step (1.06 among
+                    # 0.95 / 1.25 in tests/test_surface_heights.py).
+                    key = (ix * ny + iy) * nz + iz
+                    cur = sh.lookup(np.array([[ix, iy, iz]]))[0]
+                    cur = lo + 0.5 * res if cur != cur else cur
+                    if abs(cur - h) <= FLIGHT_WINDOW:
+                        new[key] = h
+    if not new:
+        return sh, fits, skipped
+    keys = np.fromiter(new.keys(), np.int64)
+    vals = np.fromiter(new.values(), np.float32)
+    have = np.isin(keys, sh.keys)
+    tops = sh.tops.copy()
+    tops[np.searchsorted(sh.keys, keys[have])] = vals[have]
+    all_keys = np.concatenate([sh.keys, keys[~have]])
+    all_tops = np.concatenate([tops, vals[~have]])
+    order = np.argsort(all_keys)
+    return SurfaceHeights(sh.shape, all_keys[order], all_tops[order]), fits, skipped
+
+
 def load_or_build(map_dir: str, cache_dir: str, world: World, log=print) -> SurfaceHeights | None:
     """The cached heights, built first if needed; None without map.pcd (voxel tops then)."""
     pcd_path = os.path.join(map_dir, "map.pcd")
@@ -308,7 +569,8 @@ def load_or_build(map_dir: str, cache_dir: str, world: World, log=print) -> Surf
         if str(z["key"]) == key:
             log(f"[surface] cached ({z['keys'].size} surface voxels with a measured top)")
             return SurfaceHeights(tuple(int(s) for s in z["shape"]), z["keys"], z["tops"])
-    sh = build(read_pcd(pcd_path), world)
+    points = read_pcd(pcd_path)
+    sh = build(points, world)
     g = world.grid
     track = read_track(map_dir)
     sh, seams = blend_track_seams(sh, g.origin_m, g.res, track)
@@ -316,6 +578,15 @@ def load_or_build(map_dir: str, cache_dir: str, world: World, log=print) -> Surf
         x, y = track[j, :2]
         log(f"[surface] seam between passes at keyframes {k}-{j} ({x:.2f}, {y:.2f}): "
             f"the floor jumps {jump:+.2f} m under a level track; ramped")
+    sh, fits, skipped = fit_track_flights(sh, g.grid, g.origin_m, g.res, track, points)
+    for f in fits:
+        rs = [f.sign * (f.u0 + k * f.tread) for k in range(f.n)]
+        log(f"[surface] flight at keyframes {f.keyframes[0]}-{f.keyframes[1]} "
+            f"({'xy'[1 - f.axis]} {f.across:.2f}): {f.n} risers of {f.riser:.3f} m on "
+            f"{f.tread:.3f} m treads, {f.bottom:.2f} -> {f.top:.2f}, residual {f.err:.3f} m; "
+            f"risers at {'xy'[f.axis]} {rs[0]:.2f} .. {rs[-1]:.2f}")
+    for s in skipped:
+        log(f"[surface] flight at {s}; left as measured")
     os.makedirs(cache_dir, exist_ok=True)
     tmp = path + ".tmp.npz"
     np.savez(tmp, key=key, shape=np.array(sh.shape), keys=sh.keys, tops=sh.tops)
