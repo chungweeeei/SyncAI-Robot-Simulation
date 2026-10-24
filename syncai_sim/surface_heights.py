@@ -14,8 +14,22 @@ So for every surface voxel (occupied, free above) the median height of the
 `map.pcd` points inside it is kept as that voxel's real top: neighbouring
 floor columns then differ by millimetres, and a stair tread sits at its
 measured height rather than the 0.1 / 0.2 m the grid made of a 0.17 m riser.
-A surface voxel with fewer than `min_points` points (a filled hole, a filled
-riser, the mapper's track floor) has none and takes its neighbours'
+The medians are then smoothed, edge-preserving: each takes the median of the
+measured tops within `smooth_radius` columns (5 x 5 at 0.1 m) that are on its
+own surface (within `same_surface` of it, one voxel up or down). Per-voxel
+medians alone left dp's ground floor rough in the tail — adjacent columns
+differ by 0.4 cm at the median but by more than 2 cm for 8.7 % of pairs and
+more than 4 cm for 3.9 % (lidar noise, two passes drifted apart, people in
+the map; 2026-10-24) — and a 0.044 m foot meets one every few steps. A median
+window flattens blobs narrower than half of it and keeps a real edge sharp: a
+riser (0.17 m) or a kerb is outside `same_surface`, so its other side never
+votes, and a floor's gentle metre-scale undulation passes through.
+
+Every surface voxel is smoothed this way, also those with no point inside
+(57 % of dp's ground floor had one with at least three points, 75 % near the
+mapping track; the lidar's lower edge misses the floor close to the mapper):
+it takes the median of the measured tops on its surface within the window.
+Only one with no measured neighbour there keeps its voxel top
 (terrain_patch.py). This moves where the feet touch, nothing else: the lidar,
 the planner and the kinematic base still read the voxels (CLAUDE.md, rule 2).
 
@@ -32,7 +46,7 @@ import numpy as np
 from .pcd_mesh import read_pcd
 from .world import World
 
-FORMAT = 1
+FORMAT = 3  # 2: smoothed; 3: every surface voxel, one point is enough
 
 
 class SurfaceHeights:
@@ -61,7 +75,41 @@ class SurfaceHeights:
         return out
 
 
-def build(points: np.ndarray, world: World, min_points: int = 3) -> SurfaceHeights:
+def smooth(raw: SurfaceHeights, targets: np.ndarray, origin_z: float, res: float,
+           radius: int = 2, same_surface: float = 0.08) -> tuple[np.ndarray, np.ndarray]:
+    """The edge-preserving median over each target surface voxel's own
+    surface (see the module docstring). `targets` are (N, 3) grid indices of
+    every surface voxel; a measured one is compared with its own median, an
+    unmeasured one with its voxel's middle and a tolerance wider by half a
+    voxel (its height is only known to the voxel). Returns (keys, tops) of
+    the targets that got a value: a target with no measured neighbour on its
+    surface within the window has none (the voxel top serves, terrain_patch.py)."""
+    nx, ny, nz = raw.shape
+    d = np.arange(-radius, radius + 1)
+    offs = np.array([(a, b, c) for a in d for b in d for c in (-1, 0, 1)])
+    keys = raw.linear(targets)
+    order = np.argsort(keys)
+    keys, targets = keys[order], targets[order]
+    own = raw.lookup(targets)
+    mid = (targets[:, 2] + 0.5).astype(np.float32)  # voxel units
+    out = np.full(keys.size, np.nan, np.float32)
+    chunk = 50_000
+    for a in range(0, keys.size, chunk):
+        p = targets[a:a + chunk]
+        near = raw.lookup((p[:, None, :] + offs[None]).reshape(-1, 3)).reshape(p.shape[0], -1)
+        ref = own[a:a + chunk]
+        tol = np.where(np.isnan(ref), same_surface + 0.5 * res, same_surface)
+        ref = np.where(np.isnan(ref), origin_z + mid[a:a + chunk] * res, ref)
+        near = np.where(np.abs(near - ref[:, None]) <= tol[:, None], near, np.nan)
+        has = ~np.all(np.isnan(near), axis=1)
+        out[a:a + chunk][has] = np.nanmedian(near[has], axis=1)
+    got = ~np.isnan(out)
+    return keys[got], out[got]
+
+
+def build(points: np.ndarray, world: World, min_points: int = 1) -> SurfaceHeights:
+    """Per-voxel medians of the points (`min_points`: one is a measurement;
+    the smoothing removes its noise), then smoothed over every surface voxel."""
     g = world.grid
     shape = np.array(g.grid.shape)
     idx = np.floor((points - g.origin_m) / g.res).astype(np.int64)
@@ -80,7 +128,13 @@ def build(points: np.ndarray, world: World, min_points: int = 3) -> SurfaceHeigh
     iz = idx[first, 2]
     lo = g.origin_m[2] + iz * g.res
     tops = np.clip(med, lo, lo + g.res).astype(np.float32)
-    return SurfaceHeights(sh.shape, keys[enough], tops[enough])
+    raw = SurfaceHeights(sh.shape, keys[enough], tops[enough])
+    occ = g.grid
+    surf = occ.copy()
+    surf[:, :, :-1] &= ~occ[:, :, 1:]
+    targets = np.argwhere(surf).astype(np.int64)
+    skeys, stops = smooth(raw, targets, float(g.origin_m[2]), float(g.res))
+    return SurfaceHeights(sh.shape, skeys, stops)
 
 
 def load_or_build(map_dir: str, cache_dir: str, world: World, log=print) -> SurfaceHeights | None:
