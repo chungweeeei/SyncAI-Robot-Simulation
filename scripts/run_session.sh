@@ -41,7 +41,17 @@ spec="${1:-${SIM_DIR}/config/sessions/start_sim.yaml}"
 [ -f "${spec}" ] || die "no such spec: ${spec}"
 [ -d "${WS}/install" ] || die "${WS}/install missing: build the workspace first"
 command -v ros2 >/dev/null || die "ros2 not on PATH: source the three setup.bash files first"
-[ -f "${PIDFILE}" ] && die "a session is already running (${PIDFILE}); --stop it first"
+# The pid file lives in the mounted workspace, so it outlives the container: a
+# `docker restart` kills every pane but leaves the file, and the next start
+# refused "already running" with nothing running (2026-10-24). A file whose
+# process groups are all gone is stale and is dropped.
+if [ -f "${PIDFILE}" ]; then
+    alive=0
+    while read -r p; do [ -n "${p}" ] && kill -0 -- "-${p}" 2>/dev/null && alive=1; done < "${PIDFILE}"
+    [ "${alive}" = 1 ] && die "a session is already running (${PIDFILE}); --stop it first"
+    echo "dropping a stale ${PIDFILE} (none of its panes is alive)"
+    rm -f "${PIDFILE}"
+fi
 
 cd "${WS}"
 ROBOT_ID="$(python3 - <<'PY'

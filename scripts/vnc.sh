@@ -30,6 +30,11 @@ if [ "${1:-}" = "--stop" ]; then
 fi
 
 if ! pgrep -f "X(tiger)?vnc :${DISPLAY_NUM}" >/dev/null; then
+    # The container's /tmp survives `docker restart`, and so do the lock and the
+    # socket of the Xvnc it killed: the new one then died "Server is already
+    # active for display 1" while this script still said "up", and the viewer's
+    # glfw.init failed (2026-10-24). No Xvnc runs here, so both are stale.
+    rm -f "/tmp/.X${DISPLAY_NUM}-lock" "/tmp/.X11-unix/X${DISPLAY_NUM}"
     # -SecurityTypes None: see header. -localhost no: websockify connects over
     # the container's loopback, but Docker's published 5901 arrives on eth0.
     Xvnc ":${DISPLAY_NUM}" -geometry "${GEOMETRY}" -depth 24 -SecurityTypes None \
@@ -40,4 +45,5 @@ if ! pgrep -f "websockify.*6080" >/dev/null; then
     websockify --web /usr/share/novnc 6080 localhost:5901 > "${LOG}/websockify.log" 2>&1 &
 fi
 sleep 0.5
+[ -e "/tmp/.X11-unix/X${DISPLAY_NUM}" ] || { echo "Xvnc did not start; see ${LOG}/xvnc.log" >&2; exit 1; }
 echo "display :${DISPLAY_NUM} up; browser: http://localhost:6080/vnc.html?autoconnect=1&resize=remote  (logs in ${LOG})"
