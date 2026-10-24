@@ -106,3 +106,76 @@ way — the one-voxel floor jitter, the mapper's own feet and the sliver of a
 companion, the tread holes, the landing's one-voxel nosing, that a blocked
 body still turns — are each a knob or rule with its reason next to it
 (`WorldOptions`, `KinematicsConfig`).
+
+## 5. HimLoco tips over on dp's stairwell in a third of the climbs; to be checked on the robot (2026-10-25)
+
+Workspace `dev` at `97e35da`, g2_deploy_rs `bca8b73` (its ONNX files, `policy/README.md`).
+
+**Seen.** Thirty 1F -> 2F climbs and twenty-one descents through the full stack
+(`nav_test.py --goal 2.84 -16.60 0 --goal-z 5.2` from (1.09, -6.12), and back
+to `1.13 -6.26 0 --goal-z -0.3`), in three batches of ten:
+
+| batch | climbs | descents |
+|---|---|---|
+| map as of 22df084 | 7 / 10 | 7 / 8 |
+| + octomap repairs (three pits, landing 3 to 3.9) | 6 / 10 | 6 / 6 |
+| + flights fitted as staircases (3ff8dd6) | 7 / 10 | 5 / 7 |
+
+Every failure but one is the driver going to Damping on the controller's
+posture check, `|pitch| > 45 deg` or `|roll| > 30 deg`, the same limits as
+g2_deploy_rs's `RlControlState::posture_unsafe_check` (`src/states/rl_control.rs`);
+the one other stood still on flight 2 until `Failed to make progress`. The
+falls are on all four flights, climbing and descending backwards, at no
+particular step. In the bags (`sim/ground_truth`, `cmd_vel`) the last 5 s
+look alike: on flights of 0.163-0.174 m risers and 0.22-0.255 m treads
+(~33 deg) the body pitches -25 to -30 deg with swings of +-15; it stalls once
+or twice (body speed 0 or backwards, -0.2 to -0.5 m/s) while `cmd_vel` holds
+0.5 m/s, heading 5-15 deg off the flight; at the last stall the pitch passes
+-45 (or the roll 30) and it is over. The surface under the feet is not the
+cause: with the flights fitted as equal risers (no half steps, pits or lips
+left; `surface_heights.py`) the rate did not move. The "10 of 10" of 22df084
+does not reproduce (20 of 30 since, same binaries).
+
+**Not yet known.** Whether this is the sim -- its contact, friction,
+actuator and PD timing are idealised -- or a margin the real G23 also has on
+these stairs: the posture limit leaves ~15 deg over the pitch a 33 deg flight
+needs, and the sim's swings use all of it.
+
+**To check on the robot**, on dp's stairwell, HimLoco (stair mode), several
+climbs and descents through the nav stack as above:
+
+1. **Pitch and roll on the stairs.** g2_deploy_rs's `ctx.obs.base_rpy` (or
+   `/robot01/imu`, `/robot01/livox/imu`) per flight: the mean and the extremes.
+   The sim: -25 to -30 deg mean, swings to -40 / -45. A real robot that stays
+   within ~10 deg of the mean means the sim's dynamics are off; one that
+   reaches -40 means the margin is real.
+2. **Did the posture check ever fire?** g2_deploy_rs prints `[RL] Unsafe
+   Posture! RPY: ...` (red) when it does; its stdout over the runs.
+3. **Stalls.** `/robot01/cmd_vel` against the body's speed
+   (`/robot01/pointlio/lio_odom`) on the flights: does the robot stop or slip
+   back while the command stays 0.5 m/s, and how often per flight. In the
+   sim's last 5 s before a fall there are one or two.
+4. **Speed on the stairs.** The body's speed along the flight at a 0.5 m/s
+   command. Flat floor, the sim's HimLoco does 0.4 (README, measured
+   2026-10-23); on the stairs the sim's has not been averaged yet (the bags
+   above have it).
+5. **Heading on the flights.** The yaw against the flight's direction after
+   each landing turn; the sim drifts 5-15 deg off while climbing.
+6. **The stairs themselves**, with a tape: riser height and tread depth of
+   each flight, and landing 3's floor against landing 2's. The sim's fit:
+   flights 1-4 risers 0.174 / 0.165 / 0.163 / 0.170 m, treads 0.240 / 0.250 /
+   0.220 / 0.255 m; landing 3 at 3.9 in the map (repaired from 3.8: its top was
+   never scanned, `docs/octomap-repair.md` in the workspace). Flight 3's 0.220
+   is a compromise of two drifted passes; the building's is probably ~0.25.
+
+Topics to record on the robot for a side-by-side with the sim's bags:
+`/robot01/cmd_vel`, `/robot01/pointlio/lio_odom`, `/robot01/imu`,
+`/robot01/stair_mode`, `/robot01/mode`, `/robot01/plan`, plus g2_deploy_rs's
+stdout. The sim records the same set with `/robot01/sim/ground_truth` in place
+of the odometry.
+
+**Sim side.** Nothing pending until the robot's numbers are in. If they show
+the sim's swings are its own, the places to look are the foot contact
+(friction, `condim`, the terrain boxes' edges), the actuators (`legged.py`:
+effort clipping, PD at 2 ms against the robot's loop) and the policy's
+observation timing (`policy.py`).
