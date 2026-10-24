@@ -41,7 +41,8 @@ voxel can never be touched) in the height band from `below` under the base to
 `above` over it become boxes, nearest first. A box that is the top of its
 column stands with its top at the surface's measured height inside the voxel
 (surface_heights.py: the median of map.pcd's points there; without points,
-the median of its neighbours'), not at the voxel's top: the grid rounds a flat
+the median of its neighbours'; with none of those either, the voxel's middle),
+not at the voxel's top: the grid rounds a flat
 but tilted floor into a strip of 0.1 m blocks every ~13 m, and PPO fell on one
 four times out of four. Without map.pcd the tops are the voxel tops, the
 height `VoxelGrid.ground_under` calls the ground. The boxes are
@@ -116,7 +117,21 @@ class TerrainPatch:
         if self.surface is not None and idx.shape[0]:
             p = rel + off  # the same cells in the padded slice
             top = ~occ[p[:, 0], p[:, 1], p[:, 2] + 1]
+            voxel_z = centres[:, 2].copy()
             centres[top, 2] = self._tops(idx[top], centres[top, 2] + 0.5 * res) - 0.5 * res
+            # A top lowered below its voxel takes the boxes of its stack down
+            # with it: left in place, the exposed voxel under it stands over
+            # the surface. A seam ramped across a voxel boundary on dp's 2F
+            # (surface_heights.py) put 5.05 m tops on 5.1-5.2 voxels, and the
+            # 5.0-5.1 ones beneath, exposed to the lower side, made a 5 cm lip.
+            drop = {c: dz for c, dz in zip(map(tuple, p[top].tolist()),
+                                           (centres[top, 2] - voxel_z[top]).tolist()) if dz < 0}
+            if drop:
+                for i in np.nonzero(~top)[0]:
+                    a, b, h = (int(v) for v in p[i])
+                    while h + 1 < occ.shape[2] and occ[a, b, h + 1]:
+                        h += 1
+                    centres[i, 2] += drop.get((a, b, h), 0.0)
         d = np.hypot(centres[:, 0] - x, centres[:, 1] - y)
         if centres.shape[0] > c.capacity:
             # Keep what a foot can reach first: near, and near the feet's height.
@@ -131,8 +146,10 @@ class TerrainPatch:
     def _tops(self, idx: np.ndarray, voxel_tops: np.ndarray) -> np.ndarray:
         """Measured tops for surface cells; the median of the measured
         neighbours (8 around, one voxel up and down: the far side of a
-        terrace line is a voxel off) where a cell has none; the voxel top
-        where neither has."""
+        terrace line is a voxel off) where a cell has none; the voxel's middle
+        where neither has. Not its top: a measured top lies anywhere in the
+        voxel, so the top is 5 cm high on average and up to 10, and on dp's
+        last step to 2F such tops made a lip PPO fell on (surface_heights.py)."""
         tops = self.surface.lookup(idx)
         missing = np.isnan(tops)
         if np.any(missing):
@@ -146,7 +163,7 @@ class TerrainPatch:
             rows = known.any(axis=1)
             fill[rows] = np.nanmedian(near[rows], axis=1)
             tops[missing] = fill
-        return np.where(np.isnan(tops), voxel_tops, tops)
+        return np.where(np.isnan(tops), voxel_tops - 0.5 * self.grid.res, tops)
 
 
 def _slice_padded(grid: np.ndarray, lo: np.ndarray, hi: np.ndarray) -> np.ndarray:

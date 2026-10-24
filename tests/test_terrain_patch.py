@@ -84,3 +84,24 @@ def test_capacity_and_refresh():
     assert np.hypot(c[:, 0] - 2.0, c[:, 1] - 2.0).max() < 0.5  # the nearest ones were kept
     assert not p.due(np.array([2.1, 2.0, 0.35]))
     assert p.due(np.array([2.2, 2.0, 0.35]))
+
+
+class _Surface:
+    """A measured top for every cell: `top` on x >= 2.3 m, voxel tops elsewhere."""
+
+    def __init__(self, top):
+        self.top = top
+
+    def lookup(self, idx):
+        return np.where(idx[:, 0] >= 23, self.top, np.nan).astype(np.float32)
+
+
+def test_a_lowered_top_takes_its_stack_down():
+    # A two-voxel step (top 0.2) at x >= 2.3 whose measured top is 0.07, below
+    # its top voxel: no box of that stack may stand over 0.07.
+    step = _grid(range(ORG + 23, ORG + 40), range(ORG, ORG + 40), [ORG, ORG + 1])
+    g = VoxelGrid(np.concatenate([_floor(), step]), RES, z_clip_above_lowest_m=0)
+    c = TerrainPatch(g, surface=_Surface(0.07)).boxes_around(BASE)
+    col = c[(np.abs(c[:, 0] - 2.35) < 1e-6) & (np.abs(c[:, 1] - 2.05) < 1e-6)]
+    assert col.shape[0] >= 2
+    assert np.max(col[:, 2]) + 0.05 <= 0.07 + 1e-6

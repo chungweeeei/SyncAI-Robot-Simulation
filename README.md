@@ -206,7 +206,17 @@ grid turns dp's tilted floor into a strip of random blocks every ~13 m, where
 PPO fell 4 times out of 4, and the per-voxel medians alone were still rough
 (8.7 % of neighbouring columns more than 2 cm apart). Smoothed, dp's open floor
 has its largest step between neighbours at ~1 cm; risers and kerbs keep their
-edges. On flat stretches
+edges. A voxel with no point inside takes its own layer's measured neighbours
+first (a tread filled into the octomap otherwise took the tread under it), a
+13 x 13 window when the 5 x 5 has none, and its voxel's middle when neither
+has (its top is 5 cm high on average: on dp's last step to 2F that made a lip
+PPO fell on). Last, steps between two mapping passes that drifted apart in
+height (dp's stairwell sits ~0.13 m under the rest) are ramped wherever the
+mapping track walked level over them: a 0.16 m "step" onto 2F that the real
+robot never meets, where PPO fell twice at 0.7 m/s, became a 1 m ramp. Faults
+in the octomap itself (unseen treads, two-level landings, a shut door) are
+fixed in the map: the workspace's `docs/octomap-repair.md`. With those and
+these, 10 of 10 alternating 1F <-> 2F navigations on dp (2026-10-24). On flat stretches
 of the mapping track the world build also cuts one-voxel-thick ridges (the
 corridor fence of finding 1 had kept 0.2-0.3 m; the robot fell on it both
 ways). There is no step rule in this mode:
