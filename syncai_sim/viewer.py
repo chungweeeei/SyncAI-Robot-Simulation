@@ -69,9 +69,16 @@ class Teleop:
     The viewer reports which arrows are down (`set_held`, from glfw.get_key
     at VIEW_HZ); without that, each press holds for PRESS_HOLD_S. The old
     latched increments kept walking after the last key until someone pressed
-    space, which with a real gait means into a wall."""
+    space, which with a real gait means into a wall.
 
-    def __init__(self, spawn, log=print, vx_speed: float = 0.4, wz_speed: float = 0.5):
+    drive=False (the session, no --teleop) keeps only t and h: the nav stack
+    owns cmd_vel and driver_manager owns the motion keys, but going back to
+    the spawn after a fall is wanted there most; pressing t did nothing in
+    the session before (2026-10-24)."""
+
+    def __init__(self, spawn, log=print, vx_speed: float = 0.4, wz_speed: float = 0.5,
+                 drive: bool = True):
+        self.drive = drive
         self.vx = 0.0
         self.wz = 0.0
         self.vx_speed = vx_speed
@@ -93,6 +100,8 @@ class Teleop:
         return {k for k, t in self._pressed_until.items() if t > now}
 
     def key(self, keycode: int) -> None:
+        if not self.drive and keycode not in (KEY_T, KEY_H):
+            return
         if keycode in ARROWS:
             self._pressed_until[ARROWS[keycode]] = time.monotonic() + PRESS_HOLD_S
             return
@@ -124,7 +133,7 @@ class Teleop:
         for fn in self._pending:
             fn(sim)
         self._pending.clear()
-        h = self.held()
+        h = self.held() if self.drive else set()
         self.vx = self.vx_speed * (("up" in h) - ("down" in h))
         self.wz = self.wz_speed * (("left" in h) - ("right" in h))
         # Only while driving, and one stop on release: a teleop that set 0
@@ -354,8 +363,6 @@ class Viewer:
         elif KEY_0 <= key <= KEY_0 + 5 and key not in (KEY_1, KEY_5):
             g = key - KEY_0
             self.opt.geomgroup[g] = 0 if self.opt.geomgroup[g] else 1
-        elif key == KEY_H and self.teleop is None:
-            self.log(HELP)
         elif self.teleop is not None:
             self.teleop.key(key)
 
@@ -364,9 +371,12 @@ class Viewer:
         self._mouse["x"], self._mouse["y"] = x, y
         if self._mouse["left"]:
             _, h = glfw.get_window_size(window)
+            # No scene argument: mujoco 3.17 dropped it from mjv_moveCamera, and
+            # passing one raised TypeError in the GLFW callback, which killed the
+            # viewer thread and the sim with it on the first drag (2026-10-24).
             with self._lock:
                 mujoco.mjv_moveCamera(self.sim.model, mujoco.mjtMouse.mjMOUSE_ROTATE_V,
-                                      dx / h, dy / h, self._scn, self.cam)
+                                      dx / h, dy / h, self.cam)
 
     def _on_button(self, window, button, action, mods) -> None:
         if button == glfw.MOUSE_BUTTON_LEFT:
@@ -376,7 +386,7 @@ class Viewer:
     def _on_scroll(self, window, xoff, yoff) -> None:
         with self._lock:
             mujoco.mjv_moveCamera(self.sim.model, mujoco.mjtMouse.mjMOUSE_ZOOM, 0.0,
-                                  -0.05 * yoff, self._scn, self.cam)
+                                  -0.05 * yoff, self.cam)
 
 
 def yaw_of(sim) -> float:

@@ -56,3 +56,18 @@ def test_speed_keys_scale_and_clamp():
     for _ in range(40):
         t.key(viewer.KEY_MINUS)
     assert t.vx_speed == 0.1
+
+
+def test_without_drive_only_teleport():
+    # The session (no --teleop): arrows and motion keys are the nav stack's.
+    t = viewer.Teleop((1.0, 2.0, 0.0, 0.5), log=lambda *a: None, drive=False)
+    sim = FakeSim()
+    sim.teleported = None
+    sim.teleport = lambda x, y, yaw, z: setattr(sim, "teleported", (x, y, yaw, z))
+    t.set_held({"up"})
+    t.key(viewer.KEY_UP)
+    t.key(viewer.KEY_P)
+    t.key(viewer.KEY_T)
+    t.apply(sim)
+    assert sim.cmd is None
+    assert sim.teleported == (1.0, 2.0, 0.5, 0.0)

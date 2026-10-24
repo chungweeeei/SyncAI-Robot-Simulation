@@ -88,10 +88,9 @@ def main(argv=None) -> int:
     teleop = None
     viewer_factory = None
     if not a.headless:
-        from .viewer import Teleop, Viewer
+        from .viewer import HELP, Teleop, Viewer
+        teleop = Teleop(spawn, log=log, drive=a.teleop)
         if a.teleop:
-            from .viewer import HELP
-            teleop = Teleop(spawn, log=log)
             log(HELP)
         viewer_factory = lambda: Viewer(sim, teleop)  # noqa: E731
     try:
@@ -136,8 +135,8 @@ def _run_without_ros(ini, a) -> int:
     teleop = None
     if not a.headless:
         from .viewer import HELP, Teleop, Viewer
-        teleop = Teleop(spawn) if a.teleop else None
-        if teleop:
+        teleop = Teleop(spawn, drive=a.teleop)
+        if a.teleop:
             print(HELP)
         viewer = Viewer(sim, teleop)
     dt = sim.model.opt.timestep

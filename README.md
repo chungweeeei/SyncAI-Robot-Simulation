@@ -116,7 +116,9 @@ plates, a 133 MB voxel grid) and compiles the scene (~5 s; cached as an
 MJB, so later starts take about a second). The viewer follows the robot:
 left-drag orbits, scroll zooms, `9` cycles the storeys, keys `0 2 3 4`
 toggle geom groups (0 the site, 2 props, 3 collision shapes, 4 the mocap
-handle), `h` lists the teleop keys.
+handle), `h` lists the teleop keys. In the session (no `--teleop`: the nav
+stack owns `cmd_vel`) only `t` and `h` answer: `t` puts the robot back on the
+spawn, standing.
 
 The simulator alone, without the stack:
 
