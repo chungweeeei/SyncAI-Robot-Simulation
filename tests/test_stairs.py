@@ -48,13 +48,29 @@ def test_one_box_per_tread_at_the_fitted_depth():
 def test_width_grows_to_the_wall_and_the_cap():
     f = _flight()
     sb = stairs.build([f], _occ(f), ORIGIN, RES, log=lambda *a: None)
-    x0, x1, y0, y1, z0, z1 = sb.regions[0]
+    r = sb.regions
+    x0, x1 = r[0, 0], r[0, 1]
     assert np.isclose(x1, 1.7)  # the wall's first column
     assert np.isclose(x0, 1.0 - stairs.MAX_HALF_WIDTH)
-    assert np.isclose(y0, 1.0) and np.isclose(y1, 2.0)
-    assert z0 < 0.0 and np.isclose(z1, 0.75 + stairs.ABOVE)
+    assert np.allclose(r[:, 0], x0) and np.allclose(r[:, 1], x1)
+    assert np.isclose(r[:, 2].min(), 1.0) and np.isclose(r[:, 3].max(), 2.0)
+    assert r[:, 4].min() < 0.0 and np.isclose(r[:, 5].max(), 0.75 + stairs.ABOVE)
     assert np.allclose(sb.boxes[:, 0] - sb.boxes[:, 3], x0)
     assert np.allclose(sb.boxes[:, 0] + sb.boxes[:, 3], x1)
+
+
+def test_the_floor_under_a_flight_is_left_to_the_voxels():
+    # One region per box, from its bottom to ABOVE over its top: the floor
+    # (top 0) under the flight's top step (0.75) is in none of them, as on
+    # dp's middle stair, whose underside the planner routes through.
+    sb = stairs.build([_flight()], _occ(_flight()), ORIGIN, RES, log=lambda *a: None)
+    r = sb.regions
+    assert r.shape == (sb.boxes.shape[0], 6)
+    under_top = (r[:, 2] < 1.95) & (r[:, 3] > 1.95)  # the top slab's columns
+    assert np.all(r[under_top, 4] > 0.0)
+    tops = sb.boxes[:, 2] + sb.boxes[:, 5]
+    assert np.allclose(r[:, 4], sb.boxes[:, 2] - sb.boxes[:, 5])
+    assert np.allclose(r[:, 5], tops + stairs.ABOVE)
 
 
 def test_descending_axis_mirrors():

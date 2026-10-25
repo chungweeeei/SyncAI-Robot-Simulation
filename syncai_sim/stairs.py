@@ -16,9 +16,13 @@ floor from the column holding the first riser up to it, one box per tread
 (fitted depth, from riser to riser), and a slab from the last riser to the end
 of its column; each box is the step's own height plus `UNDER` thick, so every
 riser face is whole and nothing hangs under a flight into the one below. The
-patch leaves its voxels out of the same columns, in the band from under the
-lowest box to `ABOVE` over the top (`regions`, terrain_patch.py). The boxes
-also stay put: the patch re-deals its pool as the robot walks, these never move.
+patch leaves its voxels out of each box's own columns, from the box's bottom
+to `ABOVE` over its top (`regions`, terrain_patch.py) -- one region per box,
+not one per flight: a flight-wide band from the lowest box to the top took
+the floor under the flight's high end with it, and on dp's middle stair,
+whose underside is open floor, the planner routed under flight 1 and the
+robot fell through (2026-10-26). The boxes also stay put: the patch re-deals
+its pool as the robot walks, these never move.
 
 How wide: the fit replaced the surface `FLIGHT_HALF_WIDTH` (0.6 m) either side
 of the track's line, and dp's flights are 1.4-1.6 m. Here each side grows a
@@ -56,7 +60,7 @@ COLUMN_OK = 0.7  # share of a column's treads that must pass for the column to c
 @dataclass
 class StairBoxes:
     boxes: np.ndarray  # (K, 6) centre x y z, half-sizes x y z; axis-aligned
-    regions: np.ndarray  # (F, 6) x0 x1 y0 y1 z0 z1 the patch leaves to the boxes
+    regions: np.ndarray  # (K, 6) x0 x1 y0 y1 z0 z1 the patch leaves to the boxes, one per box
     widths: list[tuple[float, float]]  # per flight kept, metres either side of its line
 
 
@@ -119,12 +123,11 @@ def build(flights: list, occ: np.ndarray, origin: np.ndarray, res: float, log=pr
             centre[ax], half[ax] = f.sign * 0.5 * (u0 + u1), 0.5 * (u1 - u0)
             centre[1 - ax], half[1 - ax] = 0.5 * (lo + hi), 0.5 * (hi - lo)
             boxes.append([*centre, *half])
-        r = [0.0] * 6
-        r[2 * ax], r[2 * ax + 1] = a_lo, a_hi
-        r[2 * (1 - ax)], r[2 * (1 - ax) + 1] = lo, hi
-        r[4] = float(tops.min()) - f.riser - UNDER
-        r[5] = float(tops.max()) + ABOVE
-        regions.append(r)
+            r = [0.0] * 6
+            r[2 * ax], r[2 * ax + 1] = sorted((f.sign * u0, f.sign * u1))
+            r[2 * (1 - ax)], r[2 * (1 - ax) + 1] = lo, hi
+            r[4], r[5] = tops[k] - thick, tops[k] + ABOVE
+            regions.append(r)
         widths.append((f.across - lo, hi - f.across))
         log(f"[stairs] flight at {f.name}: {f.n} risers of "
             f"{f.riser:.3f} m on {f.tread:.3f} m treads as {edges.size - 1} boxes, "
