@@ -91,6 +91,15 @@ fitted floor to what the landing has there, so a landing's own slope stays
 flattened to the fitted 2.42, it ended in a 0.11 m step) and a bump before
 it goes (5.12 at the top of flight 4, on a stair head of 5.02).
 
+**Stairs the track never climbed** get the same fit from a stand-in walk
+(`read_stair_walks`): `config/stair_walks/<map>.yaml` in this repository lists,
+per stair, a polyline of (x, y, ground) through it, level for a metre at both
+ends and on each landing, which is resampled every `WALK_STEP` into keyframes
+and fitted exactly as the track is. The workspace's planner detects such
+stairs off the map since 2026-10-25 (`stair_detect`) and routes over them, so
+the robot climbs them; without a walk their treads stay the measured ones.
+dp's middle stair is the first (its walk is the planner's detected link).
+
 All of this moves where the feet touch, nothing else: the lidar, the planner
 and the kinematic base still read the voxels (CLAUDE.md, rule 2).
 
@@ -109,8 +118,9 @@ from .world import World, read_track
 
 # 2: smoothed; 3: every surface voxel, one point is enough; 4: the wide pass; 5: seams;
 # 6: an unmeasured voxel prefers its own layer; 7: seams keyed by column and band;
-# 8: flights fitted as staircases; 9: the fits saved too (stairs.py builds them as boxes)
-FORMAT = 9
+# 8: flights fitted as staircases; 9: the fits saved too (stairs.py builds them as boxes);
+# 10: stair walks
+FORMAT = 10
 WIDE_RADIUS = 6  # columns, the second pass (module docstring)
 
 # Seams (blend_track_seams). poses.txt is the IMU; its ground is z - this.
@@ -148,6 +158,11 @@ FLIGHT_TREADS = (0.22, 0.33)  # m
 FLIGHT_OFFSET = 0.07  # m, the points against the landings
 FLIGHT_MAX_ERR = 0.03  # m, mean (truncated) residual of a fit that is used
 FLIGHT_END = 0.6  # m at most between a flight's end riser and the landing floor it is joined to
+# Stair walks (read_stair_walks): keyframes this far apart, as on dp's track
+# over a flight (0.05-0.5 m), so _flight_runs' +-2 keyframes span 0.8 m.
+WALK_STEP = 0.2
+WALKS_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                         "config", "stair_walks")
 
 
 class SurfaceHeights:
@@ -356,23 +371,30 @@ class FlightFit:
     """A flight fitted as a staircase: along `axis` (0 x, 1 y), `sign` so that
     u = sign * coordinate climbs; risers at u0 + k * tread, k < n; floors
     `bottom` before the first and `top` after the last, running to the
-    landing's own `end_lo` at u_lo and `end_hi` at u_hi."""
+    landing's own `end_lo` at u_lo and `end_hi` at u_hi. `keyframes` index the
+    track, or stair walk `walk`'s keyframes when that is not -1."""
 
-    def __init__(self, keyframes, axis, sign, across, u0, tread, n, bottom, top, err):
+    def __init__(self, keyframes, axis, sign, across, u0, tread, n, bottom, top, err, walk=-1):
         self.keyframes, self.axis, self.sign, self.across = keyframes, axis, sign, across
         self.u0, self.tread, self.n, self.bottom, self.top = u0, tread, n, bottom, top
-        self.err = err
+        self.err, self.walk = err, walk
         self.u_lo = self.u_hi = self.end_lo = self.end_hi = float("nan")
 
-    # The cache's row: every field, keyframes and n as floats.
+    @property
+    def name(self) -> str:
+        where = "" if self.walk < 0 else f"stair walk {self.walk} "
+        return f"{where}keyframes {self.keyframes[0]}-{self.keyframes[1]}"
+
+    # The cache's row: every field, keyframes, n and walk as floats.
     def row(self) -> list[float]:
         return [*self.keyframes, self.axis, self.sign, self.across, self.u0, self.tread, self.n,
-                self.bottom, self.top, self.err, self.u_lo, self.u_hi, self.end_lo, self.end_hi]
+                self.bottom, self.top, self.err, self.u_lo, self.u_hi, self.end_lo, self.end_hi,
+                self.walk]
 
     @classmethod
     def from_row(cls, r) -> FlightFit:
         f = cls((int(r[0]), int(r[1])), int(r[2]), float(r[3]), float(r[4]), float(r[5]),
-                float(r[6]), int(r[7]), float(r[8]), float(r[9]), float(r[10]))
+                float(r[6]), int(r[7]), float(r[8]), float(r[9]), float(r[10]), int(r[15]))
         f.u_lo, f.u_hi, f.end_lo, f.end_hi = (float(v) for v in r[11:15])
         return f
 
@@ -453,11 +475,12 @@ def _fit_staircase(uc: np.ndarray, env: np.ndarray, bottom: float, top: float
 
 
 def fit_track_flights(sh: SurfaceHeights, occ: np.ndarray, origin: np.ndarray, res: float,
-                      track: np.ndarray, points: np.ndarray
+                      track: np.ndarray, points: np.ndarray, walk: int = -1
                       ) -> tuple[SurfaceHeights, list[FlightFit], list[str]]:
     """Replace the surface of every flight on the track by a fitted staircase
-    (module docstring). `occ` is the voxel grid, `points` map.pcd. Returns the
-    heights, the fits used and why the others were not."""
+    (module docstring). `occ` is the voxel grid, `points` map.pcd; `track` may
+    be stair walk `walk`'s keyframes (read_stair_walks). Returns the heights,
+    the fits used and why the others were not."""
     if track.shape[0] < 5 or sh.keys.size == 0:
         return sh, [], []
     ground = track[:, 2] - LIDAR_HEIGHT
@@ -466,7 +489,7 @@ def fit_track_flights(sh: SurfaceHeights, occ: np.ndarray, origin: np.ndarray, r
     nx, ny, nz = sh.shape
     new: dict[int, float] = {}
     for r in _flight_runs(ground):
-        name = f"keyframes {r[0]}-{r[-1]}"
+        name = ("" if walk < 0 else f"stair walk {walk} ") + f"keyframes {r[0]}-{r[-1]}"
         xy = track[r, :2]
         ax = 0 if np.ptp(xy[:, 0]) > np.ptp(xy[:, 1]) else 1
         climbs = ground[r[-1]] > ground[r[0]]
@@ -513,7 +536,7 @@ def fit_track_flights(sh: SurfaceHeights, occ: np.ndarray, origin: np.ndarray, r
                            + ("" if fit is None else f" (residual {fit[0]:.3f} m)"))
             continue
         err, n, d, u0 = fit
-        ff = FlightFit((int(r[0]), int(r[-1])), ax, sign, across, u0, d, n, f0, f1, err)
+        ff = FlightFit((int(r[0]), int(r[-1])), ax, sign, across, u0, d, n, f0, f1, err, walk)
         u1 = ff.u1
         u_lo = ff.u_lo = float(np.clip(min(u0_ends, default=u0 - FLIGHT_END), u0 - FLIGHT_END, u0 - res))
         u_hi = ff.u_hi = float(np.clip(max(u1_ends, default=u1 + FLIGHT_END), u1 + res, u1 + FLIGHT_END))
@@ -564,7 +587,29 @@ def fit_track_flights(sh: SurfaceHeights, occ: np.ndarray, origin: np.ndarray, r
     return SurfaceHeights(sh.shape, all_keys[order], all_tops[order]), fits, skipped
 
 
-def load_or_build(map_dir: str, cache_dir: str, world: World, log=print) -> SurfaceHeights | None:
+def read_stair_walks(path: str) -> list[tuple[str, np.ndarray]]:
+    """(name, (K, 3) keyframes as poses.txt's: IMU z = ground + LIDAR_HEIGHT)
+    per stair in a stair-walks file (module docstring); [] without one."""
+    if not os.path.isfile(path):
+        return []
+    import yaml
+
+    with open(path) as f:
+        spec = yaml.safe_load(f) or {}
+    out = []
+    for w in spec.get("walks", []):
+        p = np.asarray(w["points"], np.float64).reshape(-1, 3)
+        seg = np.hypot(*np.diff(p[:, :2], axis=0).T)
+        s = np.concatenate([[0.0], np.cumsum(seg)])
+        t = np.linspace(0.0, s[-1], max(2, int(round(s[-1] / WALK_STEP)) + 1))
+        kf = np.stack([np.interp(t, s, p[:, i]) for i in range(3)], axis=1)
+        kf[:, 2] += LIDAR_HEIGHT
+        out.append((str(w["name"]), kf))
+    return out
+
+
+def load_or_build(map_dir: str, cache_dir: str, world: World, log=print,
+                  walks_dir: str = WALKS_DIR) -> SurfaceHeights | None:
     """The cached heights, built first if needed; None without map.pcd (voxel tops then)."""
     pcd_path = os.path.join(map_dir, "map.pcd")
     if not os.path.isfile(pcd_path):
@@ -573,8 +618,11 @@ def load_or_build(map_dir: str, cache_dir: str, world: World, log=print) -> Surf
     st = os.stat(pcd_path)
     poses = os.path.join(map_dir, "poses.txt")
     pst = os.stat(poses) if os.path.isfile(poses) else None
+    walks_path = os.path.join(walks_dir, os.path.basename(os.path.normpath(map_dir)) + ".yaml")
+    walks = read_stair_walks(walks_path)
     key = json.dumps({"format": FORMAT, "pcd": [st.st_size, int(st.st_mtime)],
                       "poses": [pst.st_size, int(pst.st_mtime)] if pst else None,
+                      "walks": [[n, np.round(kf, 4).tolist()] for n, kf in walks],
                       "world": world.stats.cache_key, "world_options": world.stats.options},
                      sort_keys=True)
     path = os.path.join(cache_dir, "surface_heights.npz")
@@ -594,9 +642,14 @@ def load_or_build(map_dir: str, cache_dir: str, world: World, log=print) -> Surf
         log(f"[surface] seam between passes at keyframes {k}-{j} ({x:.2f}, {y:.2f}): "
             f"the floor jumps {jump:+.2f} m under a level track; ramped")
     sh, fits, skipped = fit_track_flights(sh, g.grid, g.origin_m, g.res, track, points)
+    for i, (name, kf) in enumerate(walks):
+        log(f"[surface] stair walk {i}: {name} ({kf.shape[0]} keyframes, {walks_path})")
+        sh, wf, ws = fit_track_flights(sh, g.grid, g.origin_m, g.res, kf, points, walk=i)
+        fits += wf
+        skipped += ws
     for f in fits:
         rs = [f.sign * (f.u0 + k * f.tread) for k in range(f.n)]
-        log(f"[surface] flight at keyframes {f.keyframes[0]}-{f.keyframes[1]} "
+        log(f"[surface] flight at {f.name} "
             f"({'xy'[1 - f.axis]} {f.across:.2f}): {f.n} risers of {f.riser:.3f} m on "
             f"{f.tread:.3f} m treads, {f.bottom:.2f} -> {f.top:.2f}, residual {f.err:.3f} m; "
             f"risers at {'xy'[f.axis]} {rs[0]:.2f} .. {rs[-1]:.2f}")
@@ -606,7 +659,7 @@ def load_or_build(map_dir: str, cache_dir: str, world: World, log=print) -> Surf
     tmp = path + ".tmp.npz"
     sh.flights = fits
     np.savez(tmp, key=key, shape=np.array(sh.shape), keys=sh.keys, tops=sh.tops,
-             flights=np.array([f.row() for f in fits], np.float64).reshape(-1, 15))
+             flights=np.array([f.row() for f in fits], np.float64).reshape(-1, 16))
     os.replace(tmp, path)
     log(f"[surface] {sh.keys.size} surface voxels with a measured top (median of map.pcd)")
     return sh

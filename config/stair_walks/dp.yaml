@@ -1,0 +1,26 @@
+# Stand-in walks over dp's stairs that the mapping track never climbed, for
+# surface_heights.py's flight fit (its module docstring): each a polyline of
+# [x, y, ground] in the map frame, resampled every 0.2 m. The fit takes the
+# floors at both ends from the surface under the level keyframes, so every
+# walk starts, turns and ends on a metre or so of level floor.
+
+walks:
+  # The middle stair, a U: flight 1 up north at x 5.4-7.0 (-0.3 -> landing),
+  # the landing at y -6.0 .. -7.6, flight 2 up south at x 3.5-5.1 to 2F.
+  # Read off the workspace planner's detected link ("detected at (6.4,
+  # -12.6)", octomap_planner_3d_cli --plan 6.5 -12.6 -0.3 4.3 -13.5 5.3) and
+  # inspect_map.py, 2026-10-25: flight 1's foot at y -12.3 (floor -0.3), its
+  # head at -7.6; the landing at 2.3 once its 0.3 m pit was filled
+  # (fill_box.py, x 4.05-6.25, y -7.45 .. -6.65); flight 2 from y -7.8 to
+  # 2F (5.2) at -12.8. The lines run down each flight's middle, so the fit's
+  # 0.6 m either side and stairs.py's growing columns cover it.
+  - name: dp middle stair (planner's detected link at (6.4, -12.6))
+    points:
+      - [6.2, -13.4, -0.3]
+      - [6.2, -12.3, -0.3]
+      - [6.2, -7.6, 2.2]
+      - [6.2, -6.9, 2.2]
+      - [4.3, -6.9, 2.2]
+      - [4.3, -7.8, 2.2]
+      - [4.3, -12.8, 5.2]
+      - [4.3, -14.0, 5.2]

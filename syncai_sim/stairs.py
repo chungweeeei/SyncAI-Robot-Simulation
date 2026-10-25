@@ -1,6 +1,7 @@
 """The fitted flights as fixed boxes: one solid step per tread, where the feet meet them.
 
-surface_heights.py fits every flight the mapping track climbed as a staircase
+surface_heights.py fits every flight the mapping track climbed (or a stair walk
+crosses) as a staircase
 of equal risers on equal treads, but terrain_patch.py builds the feet's ground
 from 0.1 m voxel boxes, each with the fitted height at its column's centre.
 That keeps the risers (0.163-0.174 m on dp) and rounds every riser's position
@@ -80,7 +81,7 @@ def build(flights: list, occ: np.ndarray, origin: np.ndarray, res: float, log=pr
         # Across: the column the line is in, then outwards a column at a time.
         c_cell = cell(f.across, 1 - ax)
         if not _column_ok(occ, origin, res, f, c_cell + 0.5 * res):
-            log(f"[stairs] flight at keyframes {f.keyframes[0]}-{f.keyframes[1]}: its own line "
+            log(f"[stairs] flight at {f.name}: its own line "
                 f"does not look like the fitted flight; left to the voxels")
             continue
         lo, hi = c_cell, c_cell + res
@@ -115,7 +116,7 @@ def build(flights: list, occ: np.ndarray, origin: np.ndarray, res: float, log=pr
         r[5] = float(tops.max()) + ABOVE
         regions.append(r)
         widths.append((f.across - lo, hi - f.across))
-        log(f"[stairs] flight at keyframes {f.keyframes[0]}-{f.keyframes[1]}: {f.n} risers of "
+        log(f"[stairs] flight at {f.name}: {f.n} risers of "
             f"{f.riser:.3f} m on {f.tread:.3f} m treads as {edges.size - 1} boxes, "
             f"{hi - lo:.1f} m wide ({'xy'[1 - ax]} {lo:.2f} .. {hi:.2f})")
     return StairBoxes(np.array(boxes, np.float64).reshape(-1, 6),

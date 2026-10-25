@@ -6,6 +6,7 @@ from syncai_sim.surface_heights import (
     blend_track_seams,
     build,
     fit_track_flights,
+    read_stair_walks,
     smooth,
 )
 from syncai_sim.terrain_patch import TerrainPatch
@@ -224,3 +225,23 @@ def test_a_level_track_fits_no_flight():
     sh = build(pts, FakeWorld(g))
     out, fits, skipped = fit_track_flights(sh, g.grid, g.origin_m, RES, track, pts)
     assert fits == [] and skipped == [] and out is sh
+
+
+def test_a_stair_walk_stands_in_for_the_track(tmp_path):
+    # The same flight, never climbed by the track: a walk file's polyline,
+    # level at both ends, is resampled into keyframes and fitted as the track.
+    g, pts, _ = _stair_case(climb=False)
+    path = tmp_path / "site.yaml"
+    path.write_text("walks:\n  - name: test stair\n    points: "
+                    "[[0.1, 1.5, 0.5], [0.9, 1.5, 0.5], [2.4, 1.5, 1.4], [3.4, 1.5, 1.4]]\n")
+    (name, kf), = read_stair_walks(str(path))
+    assert name == "test stair" and abs(kf[1, 0] - kf[0, 0] - 0.2) < 0.01
+    assert abs(kf[0, 2] - 0.5 - 0.481) < 1e-9
+    sh = build(pts, FakeWorld(g))
+    out, fits, skipped = fit_track_flights(sh, g.grid, g.origin_m, RES, kf, pts, walk=0)
+    assert skipped == [] and len(fits) == 1
+    f = fits[0]
+    assert f.walk == 0 and f.name.startswith("stair walk 0 keyframes")
+    assert f.n == 6 and abs(f.riser - 0.15) < 0.01 and abs(f.tread - 0.25) < 0.011
+    assert type(f).from_row(f.row()).name == f.name
+    assert read_stair_walks(str(tmp_path / "none.yaml")) == []

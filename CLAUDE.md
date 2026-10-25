@@ -59,6 +59,7 @@ Python throughout (decided
 | the policies (port of g2_deploy_rs) | `policy.py` (`tests/test_policy.py`; names the Rust source of every constant) |
 | joints per motion state, PD, falls | `legged.py` |
 | the feet's ground (voxels -> boxes) | `terrain_patch.py` (numba, `tests/test_terrain_patch.py`) |
+| the feet's floor heights, flights fitted as staircases | `surface_heights.py`, `stairs.py`; stairs the track never climbed: `config/stair_walks/<map>.yaml` |
 | the step rule, gates, collisions (kinematic) | `kinematics.py` (pure Python, `tests/test_kinematics.py`) |
 | URDF -> MJCF, mocap weld, standing pose | `robot.py` (`DEFAULT_STANDING` was solved by FK, feet 0.372 m under the hips) |
 | MjSpec assembly, bitmasks, groups, site tiles, the MJB scene cache | `scene.py` (`scene_info` reads a loaded model back by name; `scene_key` lists what the cache depends on) |

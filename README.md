@@ -220,7 +220,10 @@ column made a half step of the column (dp's flight 3 read 2.56 / 2.61 / 2.69
 / 2.91 ... 3.06 / 3.17 / 3.23). That did not decide the falls: HimLoco fell
 on dp's stairwell in 7 of 20 climbs before the fit and 3 of 10 after
 (2026-10-25), at the same 45 deg pitch limit g2_deploy_rs's rl_control.rs
-has, on a 33 deg flight. Faults
+has, on a 33 deg flight. A stair the track never climbed but the planner
+detects and routes over (its `stair_detect`, 2026-10-25) gets the same fit
+from a stand-in walk in `config/stair_walks/<map>.yaml` (dp: the middle
+stair). Faults
 in the octomap itself (unseen treads, two-level landings, a shut door) are
 fixed in the map: the workspace's `docs/octomap-repair.md`. With those and
 these, 10 of 10 alternating 1F <-> 2F navigations on dp (2026-10-24). On flat stretches
