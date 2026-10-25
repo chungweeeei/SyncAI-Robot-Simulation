@@ -81,6 +81,9 @@ class SimConfig:
     himloco_policy: str = ""
     terrain: TerrainPatchConfig = field(default_factory=TerrainPatchConfig)
     visual_mesh: str = "voxels"  # voxels | pointcloud (pcd_mesh.py)
+    # Walking only: fitted = the fitted flights as fixed boxes (stairs.py); voxels = the
+    # patch's boxes there too, risers on the 0.1 m column grid (the sim before 2026-10-25)
+    stairs: str = "fitted"
 
 
 @dataclass
@@ -143,18 +146,31 @@ class Simulator:
             raise ValueError(f"visual_mesh {cfg.visual_mesh!r}: voxels | pointcloud")
         capacity = cfg.terrain.capacity if self.legged else 0
         timestep = 1.0 / cfg.physics_hz
+        if cfg.stairs not in ("fitted", "voxels"):
+            raise ValueError(f"stairs {cfg.stairs!r}: fitted | voxels")
+        # Walking: the feet's surface, and the flights it fitted, before the
+        # scene, which builds those as fixed boxes (stairs.py).
+        self.surface = None
+        stairs = None
+        if self.legged:
+            from .surface_heights import load_or_build as load_surface
+            self.surface = load_surface(cfg.map_dir, cfg.cache_dir, self.world, log=log)
+            if cfg.stairs == "fitted" and self.surface is not None and self.surface.flights:
+                from . import stairs as st
+                g = self.world.grid
+                stairs = st.build(self.surface.flights, g.grid, g.origin_m, g.res, log=log)
+        boxes = None if stairs is None else stairs.boxes
         key = sc.scene_key(self.world, self.robot, cfg.props, timestep, capacity, cfg.visual_mesh,
-                           cfg.cache_dir)
+                           cfg.cache_dir, stairs=boxes)
         self.model = sc.cached_model(
             cfg.cache_dir, key,
             lambda: sc.build_scene(self.world, self.robot, cfg.props, timestep=timestep,
-                                   terrain_capacity=capacity, site=site)[0], log=log)
+                                   terrain_capacity=capacity, site=site, stairs=boxes)[0], log=log)
         self.info = sc.scene_info(self.model, self.robot, cfg.props, capacity,
                                   list(self.world.storey_bounds))
         self.data = mujoco.MjData(self.model)
         self.legs: LeggedController | None = None
         self.patch: TerrainPatch | None = None
-        self.surface = None
         self.falls = 0
         self._fallen_from: int | None = None
         self._last_world_hit = -math.inf
@@ -162,12 +178,12 @@ class Simulator:
             self.legs = LeggedController(self.model, self.data, self.info.base_body,
                                          load_policies(cfg.ppo_policy, cfg.himloco_policy, log=log),
                                          log=log)
-            from .surface_heights import load_or_build as load_surface
-            self.surface = load_surface(cfg.map_dir, cfg.cache_dir, self.world, log=log)
-            self.patch = TerrainPatch(self.world.grid, cfg.terrain, self.surface)
+            self.patch = TerrainPatch(self.world.grid, cfg.terrain, self.surface,
+                                      None if stairs is None else stairs.regions)
             self._gyro = self.model.sensor("imu_gyro").adr[0]
             self._acc = self.model.sensor("imu_acc").adr[0]
             self._trunk_geoms = set(self.info.trunk_geoms)
+            self._stair_geoms = set(self.info.stair_geoms)
         self.grid = self.world.grid
         self.lidar = LidarModel(cfg.lidar, cfg.seed)
         self.driver = FakeDriver(switch_delay=cfg.switch_delay,
@@ -367,13 +383,15 @@ class Simulator:
 
     def _world_hit(self) -> bool:
         # One geom per terrain body, added in a row: their ids are one range.
+        # The fixed stairs are the site too.
         terrain = self.info.terrain_geoms
         lo, hi = int(terrain[0]), int(terrain[-1])
-        trunk = self._trunk_geoms
+        trunk, stairs = self._trunk_geoms, self._stair_geoms
         for i in range(self.data.ncon):
             c = self.data.contact[i]
             g1, g2 = int(c.geom1), int(c.geom2)
-            other = g2 if lo <= g1 <= hi else g1 if lo <= g2 <= hi else -1
+            other = (g2 if lo <= g1 <= hi or g1 in stairs else
+                     g1 if lo <= g2 <= hi or g2 in stairs else -1)
             if other in trunk:
                 return True
         return False

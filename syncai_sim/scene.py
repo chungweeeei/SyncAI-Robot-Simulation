@@ -12,6 +12,7 @@ wants touch:
     visual mesh    0 / 0      the viewer's copy of the site; collides with nothing
     terrain patch  0 / 4      articulated robot only: voxel boxes the legs (4 / 0)
                               and the trunk (6 / 2) stand on (terrain_patch.py)
+    stairs         0 / 4      the same, the fitted flights as fixed boxes (stairs.py)
 
 Geom groups (the viewer toggles them with keys 0-5): 0 site mesh, 1 robot STL
 visuals, 2 props, 3 collision primitives and plates (hidden), 4 the mocap
@@ -95,12 +96,14 @@ class SceneInfo:
     storey_bounds: list[float] = field(default_factory=list)
     terrain_mocap_ids: np.ndarray | None = None  # (capacity,) mocap indices of the terrain pool
     terrain_geoms: np.ndarray | None = None  # (capacity,) their geom ids, consecutive
+    stair_geoms: list[int] = field(default_factory=list)  # the fixed stairs (stairs.py)
 
 
 def build_scene(world: World, robot: RobotModel, props: list[PropSpec],
-                timestep: float = 0.005, terrain_capacity: int = 0, site=None
-                ) -> tuple[mujoco.MjModel, SceneInfo]:
-    """`site`: a pcd_mesh.PcdMesh to draw instead of the voxel mesh."""
+                timestep: float = 0.005, terrain_capacity: int = 0, site=None,
+                stairs: np.ndarray | None = None) -> tuple[mujoco.MjModel, SceneInfo]:
+    """`site`: a pcd_mesh.PcdMesh to draw instead of the voxel mesh; `stairs`:
+    (K, 6) boxes, centre and half-sizes (stairs.StairBoxes.boxes)."""
     spec = mujoco.MjSpec.from_string(robot.mjcf)
     spec.option.timestep = timestep
     spec.option.gravity[:] = (0.0, 0.0, -9.81)
@@ -159,6 +162,11 @@ def build_scene(world: World, robot: RobotModel, props: list[PropSpec],
         body.add_geom(name=f"terrain{i}_geom", type=mujoco.mjtGeom.mjGEOM_BOX,
                       size=(half, half, half), contype=TERRAIN_CONTYPE,
                       conaffinity=TERRAIN_CONAFFINITY, group=3, rgba=(0.9, 0.4, 0.2, 0.5))
+    for i, b in enumerate(np.zeros((0, 6)) if stairs is None else stairs):
+        spec.worldbody.add_geom(name=f"stair{i}", type=mujoco.mjtGeom.mjGEOM_BOX,
+                                pos=tuple(float(v) for v in b[:3]),
+                                size=tuple(float(v) for v in b[3:]), contype=TERRAIN_CONTYPE,
+                                conaffinity=TERRAIN_CONAFFINITY, group=3, rgba=(0.2, 0.6, 0.9, 0.5))
 
     for name, d, diffuse in (("sun", (0.35, 0.6, -1.0), 0.45), ("fill", (-0.6, -0.25, -0.8), 0.25)):
         spec.worldbody.add_light(name=name, pos=(0.0, 0.0, 30.0), dir=d,
@@ -171,6 +179,7 @@ def build_scene(world: World, robot: RobotModel, props: list[PropSpec],
 
 
 _SITE_GEOM = re.compile(r"^site_visual\d+_s(\d+)_t(-?\d+)_(-?\d+)$")
+_STAIR_GEOM = re.compile(r"^stair\d+$")
 
 
 def scene_info(model: mujoco.MjModel, robot: RobotModel, props: list[PropSpec],
@@ -208,11 +217,13 @@ def scene_info(model: mujoco.MjModel, robot: RobotModel, props: list[PropSpec],
         storey_bounds=list(storey_bounds),
         terrain_mocap_ids=np.array([model.body_mocapid[b] for b in terrain_bodies], dtype=int),
         terrain_geoms=np.array([model.body_geomadr[b] for b in terrain_bodies], dtype=int),
+        stair_geoms=[g for g in range(model.ngeom) if _STAIR_GEOM.match(model.geom(g).name)],
     )
 
 
 def scene_key(world: World, robot: RobotModel, props: list[PropSpec], timestep: float,
-              terrain_capacity: int, visual_mesh: str, cache_dir: str) -> str:
+              terrain_capacity: int, visual_mesh: str, cache_dir: str,
+              stairs: np.ndarray | None = None) -> str:
     """Everything the compiled scene depends on, as one string (cached_model)."""
     from . import pcd_mesh
     from .world import CACHE_FORMAT
@@ -235,6 +246,7 @@ def scene_key(world: World, robot: RobotModel, props: list[PropSpec], timestep: 
         "robot": [urdf.st_size, int(urdf.st_mtime), robot_cfg],
         "props": [asdict(p) for p in props], "timestep": timestep,
         "terrain_capacity": terrain_capacity, "site": site,
+        "stairs": [] if stairs is None else np.round(stairs, 4).tolist(),
     }, sort_keys=True, default=str)
 
 

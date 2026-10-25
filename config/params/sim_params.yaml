@@ -98,6 +98,11 @@
     locomotion: policy
     ppo_policy: /home/syncrobotic/sim/policy/ppo/policy7.onnx
     himloco_policy: /home/syncrobotic/sim/policy/isaacsim/policy_0812.onnx
+    # policy only. fitted: the flights surface_heights.py fitted are fixed boxes, one
+    # per tread at the fitted depth (stairs.py); voxels: the patch's 0.1 m boxes
+    # there too, which put every riser on the column grid (treads 0.20 / 0.30 m
+    # for dp's 0.22-0.255). voxels is the sim before 2026-10-25, for comparison.
+    stairs: fitted
 
     # --- rates -----------------------------------------------------------------
     # A multiple of the policies' 50 Hz. 2 ms: both policies walk the same at

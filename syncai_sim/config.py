@@ -93,7 +93,7 @@ def build_sim_config(ini: IniSettings, p: dict) -> SimConfig:
         switch_delay=p["mode_switch_delay"], initial_motion_state=p["initial_motion_state"],
         initial_policy=p["initial_policy"], props=props,
         locomotion=p["locomotion"], ppo_policy=p["ppo_policy"],
-        himloco_policy=p["himloco_policy"], visual_mesh=p["visual_mesh"],
+        himloco_policy=p["himloco_policy"], visual_mesh=p["visual_mesh"], stairs=p["stairs"],
     )
 
 
@@ -128,7 +128,7 @@ PARAM_DEFAULTS: dict = {
     "range_noise_sigma": 0.01,
     "mode_switch_delay": 1.0, "initial_motion_state": 1, "initial_policy": 0,
     "mode_publish_rate_hz": 2.0,
-    "locomotion": "policy",
+    "locomotion": "policy", "stairs": "fitted",
     "ppo_policy": "/home/syncrobotic/sim/policy/ppo/policy7.onnx",
     "himloco_policy": "/home/syncrobotic/sim/policy/isaacsim/policy_0812.onnx",
     "physics_hz": 500.0, "pose_publish_hz": 50.0, "imu_publish_hz": 50.0,

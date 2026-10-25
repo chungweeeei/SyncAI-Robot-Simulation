@@ -109,8 +109,8 @@ from .world import World, read_track
 
 # 2: smoothed; 3: every surface voxel, one point is enough; 4: the wide pass; 5: seams;
 # 6: an unmeasured voxel prefers its own layer; 7: seams keyed by column and band;
-# 8: flights fitted as staircases
-FORMAT = 8
+# 8: flights fitted as staircases; 9: the fits saved too (stairs.py builds them as boxes)
+FORMAT = 9
 WIDE_RADIUS = 6  # columns, the second pass (module docstring)
 
 # Seams (blend_track_seams). poses.txt is the IMU; its ground is z - this.
@@ -151,10 +151,12 @@ FLIGHT_END = 0.6  # m at most between a flight's end riser and the landing floor
 
 
 class SurfaceHeights:
-    def __init__(self, shape: tuple[int, int, int], keys: np.ndarray, tops: np.ndarray):
+    def __init__(self, shape: tuple[int, int, int], keys: np.ndarray, tops: np.ndarray,
+                 flights: list | None = None):
         self.shape = shape
         self.keys = keys  # sorted linear voxel indices (ix * ny + iy) * nz + iz
         self.tops = tops  # (K,) float32 real top, metres
+        self.flights: list[FlightFit] = flights or []  # fit_track_flights' fits
 
     def linear(self, idx: np.ndarray) -> np.ndarray:
         nx, ny, nz = self.shape
@@ -362,6 +364,18 @@ class FlightFit:
         self.err = err
         self.u_lo = self.u_hi = self.end_lo = self.end_hi = float("nan")
 
+    # The cache's row: every field, keyframes and n as floats.
+    def row(self) -> list[float]:
+        return [*self.keyframes, self.axis, self.sign, self.across, self.u0, self.tread, self.n,
+                self.bottom, self.top, self.err, self.u_lo, self.u_hi, self.end_lo, self.end_hi]
+
+    @classmethod
+    def from_row(cls, r) -> FlightFit:
+        f = cls((int(r[0]), int(r[1])), int(r[2]), float(r[3]), float(r[4]), float(r[5]),
+                float(r[6]), int(r[7]), float(r[8]), float(r[9]), float(r[10]))
+        f.u_lo, f.u_hi, f.end_lo, f.end_hi = (float(v) for v in r[11:15])
+        return f
+
     @property
     def riser(self) -> float:
         return (self.top - self.bottom) / self.n
@@ -568,7 +582,8 @@ def load_or_build(map_dir: str, cache_dir: str, world: World, log=print) -> Surf
         z = np.load(path)
         if str(z["key"]) == key:
             log(f"[surface] cached ({z['keys'].size} surface voxels with a measured top)")
-            return SurfaceHeights(tuple(int(s) for s in z["shape"]), z["keys"], z["tops"])
+            return SurfaceHeights(tuple(int(s) for s in z["shape"]), z["keys"], z["tops"],
+                                  [FlightFit.from_row(r) for r in z["flights"]])
     points = read_pcd(pcd_path)
     sh = build(points, world)
     g = world.grid
@@ -589,7 +604,9 @@ def load_or_build(map_dir: str, cache_dir: str, world: World, log=print) -> Surf
         log(f"[surface] flight at {s}; left as measured")
     os.makedirs(cache_dir, exist_ok=True)
     tmp = path + ".tmp.npz"
-    np.savez(tmp, key=key, shape=np.array(sh.shape), keys=sh.keys, tops=sh.tops)
+    sh.flights = fits
+    np.savez(tmp, key=key, shape=np.array(sh.shape), keys=sh.keys, tops=sh.tops,
+             flights=np.array([f.row() for f in fits], np.float64).reshape(-1, 15))
     os.replace(tmp, path)
     log(f"[surface] {sh.keys.size} surface voxels with a measured top (median of map.pcd)")
     return sh

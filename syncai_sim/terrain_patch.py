@@ -48,6 +48,10 @@ four times out of four. Without map.pcd the tops are the voxel tops, the
 height `VoxelGrid.ground_under` calls the ground. The boxes are
 2 mm smaller than a voxel so that neighbours' bounding boxes do not touch (no
 broadphase pairs between them); a 0.044 m foot does not notice the seam.
+
+The fitted flights are not built here: a box per column puts every riser on
+the column grid, so stairs.py makes them fixed boxes, and the `regions` it
+returns are left out of the patch.
 """
 
 from __future__ import annotations
@@ -74,10 +78,13 @@ class TerrainPatchConfig:
 
 
 class TerrainPatch:
-    def __init__(self, grid: VoxelGrid, cfg: TerrainPatchConfig | None = None, surface=None):
+    def __init__(self, grid: VoxelGrid, cfg: TerrainPatchConfig | None = None, surface=None,
+                 regions: np.ndarray | None = None):
         self.grid = grid
         self.cfg = cfg or TerrainPatchConfig()
         self.surface = surface  # surface_heights.SurfaceHeights or None
+        # (R, 6) x0 x1 y0 y1 z0 z1: left out, the fixed stairs stand there (stairs.py)
+        self.regions = np.zeros((0, 6)) if regions is None else np.asarray(regions, np.float64)
         self.centre: np.ndarray | None = None
         self.n_used = 0
         self.truncated = 0  # rebuilds that had more boxes than the pool
@@ -132,6 +139,10 @@ class TerrainPatch:
                     while h + 1 < occ.shape[2] and occ[a, b, h + 1]:
                         h += 1
                     centres[i, 2] += drop.get((a, b, h), 0.0)
+        for x0, x1, y0, y1, z0, z1 in self.regions:
+            centres = centres[~((centres[:, 0] > x0) & (centres[:, 0] < x1)
+                                & (centres[:, 1] > y0) & (centres[:, 1] < y1)
+                                & (centres[:, 2] > z0) & (centres[:, 2] < z1))]
         d = np.hypot(centres[:, 0] - x, centres[:, 1] - y)
         if centres.shape[0] > c.capacity:
             # Keep what a foot can reach first: near, and near the feet's height.
