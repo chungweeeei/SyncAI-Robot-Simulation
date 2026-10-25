@@ -25,7 +25,15 @@ of the track's line, and dp's flights are 1.4-1.6 m. Here each side grows a
 column at a time while the column still looks like the flight -- an occupied
 voxel within a step of the tread's height and nothing over it from
 `CLEAR_LOW` to `CLEAR_HIGH` (a wall or a handrail) -- at most `MAX_HALF_WIDTH`.
-A flight whose own line fails that test is left to the voxels.
+A flight whose own line fails that test is left to the voxels. On a stair
+walk's flight (surface_heights.read_stair_walks) a column with no voxel near
+the tread at all also counts, as long as it is clear above: those stairs were
+never walked, so the lidar saw them only from afar, and dp's north stair has
+no voxel at the tread in a third of its columns (the floor 2 m under it
+shows through; the boxes were 0.2 m wide). The walk was drawn down a stair
+someone looked at, and the walls either side still stop the growth. A track
+flight keeps the strict test: the well between a U stair's flights is just
+such a column.
 
 The lidar, the planner and the kinematic base still read the voxels
 (CLAUDE.md, rule 2): these boxes are what the feet touch, nothing else.
@@ -53,7 +61,9 @@ class StairBoxes:
 
 
 def _column_ok(occ: np.ndarray, origin: np.ndarray, res: float, f, c: float) -> bool:
-    """The column at `c` across the flight looks like the flight at most of its treads."""
+    """The column at `c` across the flight looks like the flight at most of its treads
+    (on a stair walk's flight, an unseen tread counts: module docstring)."""
+    unseen_ok = getattr(f, "walk", -1) >= 0
     hits = 0
     for k in range(f.n - 1):
         u = f.u0 + (k + 0.5) * f.tread
@@ -67,7 +77,7 @@ def _column_ok(occ: np.ndarray, origin: np.ndarray, res: float, f, c: float) -> 
         z = lambda v: int(np.clip(np.floor((v - origin[2]) / res), 0, occ.shape[2]))  # noqa: E731
         step = col[z(h - STEP_BELOW):z(h) + 1].any()
         clear = not col[z(h + CLEAR_LOW):z(h + CLEAR_HIGH) + 1].any()
-        hits += bool(step and clear)
+        hits += bool((step or unseen_ok) and clear)
     return hits >= COLUMN_OK * max(f.n - 1, 1)
 
 

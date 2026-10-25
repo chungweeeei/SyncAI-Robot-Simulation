@@ -24,3 +24,29 @@ walks:
       - [4.3, -7.8, 2.2]
       - [4.3, -12.8, 5.2]
       - [4.3, -14.0, 5.2]
+
+  # The north stair, straight: one well at x 11.2-12.6 between walls. From
+  # the corridor (x 13.2, floor -0.63) two steps up west (-0.42 at x 12.8) to
+  # a small platform at -0.25 (x 11.4-12.6, y 20.4-21.8; as on site), then up
+  # north with a landing at 2.0 from y 25.7 to 27.0, to the floor at 4.75 at
+  # y 32.1 that joins 2F westwards. Read off the planner's detected link (then "detected
+  # at (13.3, 22.1)", its points in octomap_planner_3d_cli --dump-html) and
+  # inspect_map.py, 2026-10-25. The lidar saw this stair only from afar: the
+  # lobby at its foot (x 11.4-12.8, y 20.4-21.8) had no voxel at all and a
+  # third of the treads showed the floor below, so the planner read flight 1
+  # as 0.7 m wide and the sim had a hole where the robot turns in. Filled in
+  # the octomap to this walk's fitted profile (755 + 22 columns, holes only;
+  # the platform at -0.2 voxel top, the first step at -0.4; 2026-10-25); the
+  # planner now reads 1.7 / 1.8 m ("detected at (12.7, 22.7)"). This line
+  # runs down the well's middle.
+  - name: dp north stair (planner's detected link at (12.7, 22.7))
+    points:
+      - [13.6, 21.0, -0.63]
+      - [13.1, 21.0, -0.63]
+      - [12.0, 21.0, -0.25]
+      - [11.95, 21.85, -0.25]
+      - [11.95, 25.7, 2.0]
+      - [11.95, 27.1, 2.0]
+      - [11.95, 32.1, 4.75]
+      - [11.95, 32.8, 4.75]
+      - [10.8, 32.8, 4.75]

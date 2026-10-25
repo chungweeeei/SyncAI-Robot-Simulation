@@ -83,3 +83,18 @@ def test_fit_row_round_trip():
     assert g.row() == f.row()
     u = np.linspace(0.5, 2.5, 50)
     assert np.allclose(g.height(u), f.height(u))
+
+
+def test_unseen_treads_count_on_a_stair_walk_only():
+    # Columns x 0.6 .. 0.9 with no voxel at the treads (the floor far below
+    # shows through): a track flight stops growing at them, a stair walk's
+    # flight takes them, and both stop at the wall.
+    f = _flight()
+    occ = _occ(f)
+    occ[6:10, 10:20, 1:] = False
+    track = stairs.build([f], occ, ORIGIN, RES, log=lambda *a: None)
+    assert np.isclose(track.regions[0][0], 1.0)
+    f.walk = 0
+    walk = stairs.build([f], occ, ORIGIN, RES, log=lambda *a: None)
+    assert np.isclose(walk.regions[0][0], 1.0 - stairs.MAX_HALF_WIDTH)
+    assert np.isclose(walk.regions[0][1], 1.7)
