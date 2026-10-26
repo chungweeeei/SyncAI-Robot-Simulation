@@ -45,6 +45,7 @@ syncai_sim/                        the Python package (python3 -m syncai_sim)
   greedy_mesh.py                     voxels -> boxes
   world.py                           octomap.bt -> VoxelGrid + visual mesh (as rectangles) + collision plates, cached
   pcd_mesh.py                        map.pcd -> a smooth viewer surface (Poisson, open3d), cached
+  tsdf_mesh.py                       the keyframes' patches + poses.txt -> a TSDF viewer surface (open3d), thin structure kept, cached
   visual.py                          the viewer's look: colour by height, shaded by the lidar's intensity
   voxel_intensity.py                 map.pcd -> the median intensity of each voxel, cached
   site_tiles.py                      the site for the browser: 10 m tiles, every voxel face a texel of its intensity, as GLB, cached
@@ -328,13 +329,19 @@ where the planner's and controllers' `lidar_height` is 0.481 — the value the
 kinematic body is built to. One of the two is not the robot; worth measuring
 on the real G23 before trusting the planner's ground estimate in this mode.
 
-**The picture** (`visual_mesh`, `--visual-mesh`; `site_tiles.py`). By default
-the viewer shows the octomap's voxels — the cubes the sim actually senses and
-stands on — and `pointcloud` shows instead a smooth surface reconstructed
-from the map's `map.pcd` (`pcd_mesh.py`:
-points kept only on the cleaned voxels, 4 cm, screened Poisson, 1.5 M
-triangles; dp builds in ~3.5 min once, then loads from the cache; build it
-ahead with `python3 -m syncai_sim.pcd_mesh map/dp`). Both are coloured by
+**The picture** (`visual_mesh`, `--visual-mesh`, the panel's Site switch;
+`site_tiles.py`). Three sites, each built once and cached: `voxels` (the
+default) is the octomap's cubes, what the sim actually senses and stands on;
+`pointcloud` is a smooth surface reconstructed from the map's `map.pcd`
+(`pcd_mesh.py`: points kept only on the cleaned voxels, 4 cm, screened
+Poisson, 1.5 M triangles; dp ~3.5 min; it blurs thin structure and bubbles
+where the cloud is sparse); `tsdf` is a truncated signed distance field
+integrated from the mapping run's own keyframe patches and poses
+(`tsdf_mesh.py`: each patch rendered to six cube-face depth images and
+integrated with open3d at 7 cm, free space carved along every ray, so
+handrails, door frames and tread edges keep their shape and unseen places
+stay open; built in 35 m blocks, dp 6 min and 2.5 GB at most, 2 M triangles; `python3 -m syncai_sim.tsdf_mesh map/dp` builds it
+ahead). All three are coloured by
 height — floors and treads along a ramp, walls a pale copy, undersides grey
 (`visual.py`) — and shaded by the lidar's intensity, which is what makes a
 lidar map legible: `voxel_intensity.py` keeps the median intensity of
@@ -346,8 +353,9 @@ The voxel mesh's faces are merged rectangles (a floor slab is one), so the
 shading goes on as a texture: each 10 m tile of each storey is one GLB with
 an atlas in which every rectangle has its own patch of texels, one per voxel
 face (dp: 179 tiles, 2.5 M triangles, 140 MB, built in 9 s once, cached).
-The surface's vertices are 6 cm apart, so there the intensity goes on the
-vertices. None of this is in the MuJoCo model: the MJB holds the robot, the
+The surfaces' vertices are a few centimetres apart, so there the intensity
+goes on the vertices. None of
+this is in the MuJoCo model: the MJB holds the robot, the
 plates, the props and the terrain pool, 20 MB that compile in a second. The
 robot's own STLs go over decimated (274 k → 29 k triangles, `robot.py`). Only
 the picture: the feet stand on the measured floor (`surface_heights.py`),

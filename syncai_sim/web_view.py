@@ -101,10 +101,13 @@ class WebView:
         self._terrain_handle = None
         self._next_terrain = 0.0
         self._next_status = 0.0
+        self._last_base: np.ndarray | None = None
+        self._site_lock = threading.Lock()
         self._gui()
         self._build_robot()
         self._build_props()
         self.server.on_client_connect(self._on_connect)
+        self.server.scene.on_click(modifier="shift")(self._recentre)
         if site_in_background:
             threading.Thread(target=self._build_site, daemon=True, name="web-site").start()
         else:
@@ -136,11 +139,16 @@ class WebView:
         if now >= self._next_status:
             self._next_status = now + 1.0 / STATUS_HZ
             self._push_status()
-        if self._follow.value:
-            for client in self.server.get_clients().values():
-                offset = client.camera.position - client.camera.look_at
-                client.camera.look_at = base
-                client.camera.position = base + offset
+        # Follow: the camera moves by what the robot moved, nothing else — a
+        # look-at pinned to the robot undid every pan the mouse made (the
+        # browser's right-drag), and a robot standing still sends nothing.
+        if self._follow.value and self._last_base is not None:
+            delta = base - self._last_base
+            if float(np.abs(delta).max()) > 1e-4:
+                for client in self.server.get_clients().values():
+                    client.camera.position = client.camera.position + delta
+                    client.camera.look_at = client.camera.look_at + delta
+        self._last_base = base.copy()
 
     def show_scan(self, sim) -> None:
         if not self._scan.value or sim.last_scan is None:
@@ -166,23 +174,40 @@ class WebView:
         scene.set_background_image(np.repeat(sky[:, None, :], 2, axis=1), format="png")
 
     def _build_site(self) -> None:
+        self._switch_site(self._site_mode.value)
+
+    def _switch_site(self, mode: str) -> None:
+        """Replace the site's tiles with `mode`'s (voxels / pointcloud / tsdf;
+        site_tiles.py builds a set once and caches it)."""
         from . import site_tiles
 
         world = getattr(self.sim, "world", None)
         if world is None:
             return
-        t0 = time.perf_counter()
-        cfg = self.sim.cfg
-        tiles = site_tiles.load_or_build(world, cfg.map_dir, cfg.cache_dir, cfg.visual_mesh,
-                                         log=self.log)
-        for tile in tiles:
-            handle = self.server.scene.add_glb(
-                tile.name, tile.glb, cast_shadow=False,
-                visible=self._shown is None or tile.storey in self._shown)
-            self._site.setdefault(tile.storey, []).append(handle)
-        self.log(f"[web] site: {len(tiles)} tiles, "
-                 f"{sum(t.triangles for t in tiles) / 1e6:.1f} M triangles sent in "
-                 f"{time.perf_counter() - t0:.1f} s")
+        if not self._site_lock.acquire(blocking=False):
+            self.log("[web] a site is still being built; try again when it is in")
+            return
+        try:
+            self._site_mode.disabled = True
+            t0 = time.perf_counter()
+            cfg = self.sim.cfg
+            tiles = site_tiles.load_or_build(world, cfg.map_dir, cfg.cache_dir, mode, log=self.log)
+            with self.server.atomic():
+                for handles in self._site.values():
+                    for h in handles:
+                        h.remove()
+                self._site = {}
+                for tile in tiles:
+                    handle = self.server.scene.add_glb(
+                        tile.name, tile.glb, cast_shadow=False,
+                        visible=self._shown is None or tile.storey in self._shown)
+                    self._site.setdefault(tile.storey, []).append(handle)
+            self.log(f"[web] site ({mode}): {len(tiles)} tiles, "
+                     f"{sum(t.triangles for t in tiles) / 1e6:.1f} M triangles sent in "
+                     f"{time.perf_counter() - t0:.1f} s")
+        finally:
+            self._site_mode.disabled = False
+            self._site_lock.release()
 
     def _build_robot(self) -> None:
         m, info = self.sim.model, self.sim.info
@@ -257,7 +282,20 @@ class WebView:
         self._storey_modes = ["auto"] + [f"{k + 1}F" for k in range(n)] + ["all"]
         self._storeys = gui.add_dropdown("Storeys", self._storey_modes, initial_value="auto",
                                          hint="auto: the robot's storey and those below it")
-        self._follow = gui.add_checkbox("Follow robot", True)
+        self._site_mode = gui.add_dropdown(
+            "Site", ["voxels", "pointcloud", "tsdf"],
+            initial_value=getattr(self.sim.cfg, "visual_mesh", "voxels"),
+            hint="voxels: what the sim senses; pointcloud: the Poisson surface; tsdf: the "
+                 "surface from the keyframes (each built once, minutes the first time)")
+
+        @self._site_mode.on_update
+        def _(_event) -> None:
+            threading.Thread(target=self._switch_site, args=(self._site_mode.value,),
+                             daemon=True, name="web-site").start()
+        self._follow = gui.add_checkbox("Follow robot", True,
+                                        hint="the camera moves with the robot; orbit (left-drag), "
+                                             "pan (right-drag, WASD, or shift-click a point to "
+                                             "centre on it) and zoom as you like meanwhile")
         self._scan = gui.add_checkbox("Lidar scan", True)
         self._terrain = gui.add_checkbox("Terrain boxes", False,
                                          hint="the voxel boxes and fitted stairs under the feet")
@@ -352,6 +390,31 @@ class WebView:
             f"ground z {st['z_ground']:.2f} pitch {math.degrees(st['pitch']):.1f}°  \n"
             f"motion state {st['motion_state']}  policy {st['policy']}  "
             f"falls {st['falls']}  collisions {st['collisions']}")
+
+    def _recentre(self, event) -> None:
+        """Shift + click: the clicked point of the site becomes that browser's
+        orbit centre, the camera moving by the same offset (a pan). viser's
+        own controls pan only by right-drag or the WASD keys, and a pan
+        with Follow on is kept (the follow adds the robot's motion to it)."""
+        o = np.asarray(event.ray_origin, dtype=np.float64)
+        d = np.asarray(event.ray_direction, dtype=np.float64)
+        d = d / max(float(np.linalg.norm(d)), 1e-9)
+        grid = getattr(self.sim, "grid", None)
+        hit = None
+        if grid is not None:
+            dist, pts = grid.cast(o, d[None, :], 200.0)
+            if dist[0] > 0:
+                hit = pts[0]
+        if hit is None and abs(d[2]) > 1e-6:  # off the map: the robot's floor level
+            t = (self.sim.state.z_ground - o[2]) / d[2]
+            if t > 0:
+                hit = o + t * d
+        if hit is None:
+            return
+        cam = event.client.camera
+        delta = hit - cam.look_at
+        cam.position = cam.position + delta
+        cam.look_at = hit
 
     def _on_connect(self, client) -> None:
         with self._lock:

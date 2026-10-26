@@ -2,7 +2,7 @@
 
     python3 -m syncai_sim [--teleop] [--headless] [--no-ros]
                           [--system-config INI] [--map DIR] [--seconds S]
-                          [--locomotion policy|kinematic] [--visual-mesh pointcloud|voxels]
+                          [--locomotion policy|kinematic] [--visual-mesh voxels|pointcloud|tsdf]
                           [--ros-args --params-file ... -p key:=value ...]
 
 Everything after `--ros-args` goes to rclpy (the params file is
@@ -46,8 +46,9 @@ def main(argv=None) -> int:
     ap.add_argument("--seconds", type=float, default=None, help="exit after this much wall time")
     ap.add_argument("--locomotion", choices=("policy", "kinematic"), default=None,
                     help="override the locomotion parameter (default: the params file's, policy)")
-    ap.add_argument("--visual-mesh", choices=("pointcloud", "voxels"), default=None,
-                    help="what the viewer draws of the site (default: the params file's, pointcloud)")
+    ap.add_argument("--visual-mesh", choices=("voxels", "pointcloud", "tsdf"), default=None,
+                    help="the site the viewer starts with (default: the params file's, voxels); "
+                         "the panel switches between them")
     a = ap.parse_args(own)
 
     from .config import read_ini

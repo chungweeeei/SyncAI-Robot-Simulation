@@ -26,12 +26,15 @@
     track_floor_fill_radius_m: 0.30       # put floor under the mapping robot where the map has none (world.py); 0 = off
     track_clear_radius_m: 0.30            # erase what stands where the mapping robot's body was (world.py); 0 = off
     floor_hole_max_cells: 25              # fill enclosed floor holes up to 0.25 m^2 (world.py); 0 = off
-    # What the viewer draws of the site: "voxels" = the octomap's cubes, what
-    # the sim senses and the planner plans on; "pointcloud" = a smooth surface
-    # built from <map>/map.pcd (pcd_mesh.py; dp ~3.5 min the first time, then
-    # cached). Voxels by default: the Poisson surface blurs thin structure and
-    # bubbles where the map is sparse, and Foxglove shows the point cloud
-    # itself. A picture either way.
+    # The site the viewer starts with (its panel switches between them; each
+    # is built once and cached, site_tiles.py): "voxels" = the octomap's cubes,
+    # what the sim senses and the planner plans on; "pointcloud" = a smooth
+    # Poisson surface from <map>/map.pcd (pcd_mesh.py; dp ~3.5 min the first
+    # time; blurs thin structure, bubbles where the map is sparse); "tsdf" = a
+    # TSDF surface integrated from the mapping run's own keyframe patches
+    # (tsdf_mesh.py; dp ~5 min the first time; keeps thin structure, leaves
+    # unseen places open). All three shaded by the lidar's intensity. A
+    # picture either way.
     visual_mesh: voxels
     # Foxglove's site (map_cloud.py): map.pcd thinned to 6 cm, latched once on
     # sim/map_cloud/storey<N> (dp: 3.7 M points, 59 MB; first build 11 s).

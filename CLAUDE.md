@@ -54,7 +54,7 @@ Python throughout (decided
 |---|---|
 | map -> world (parse, mesh, plates, cache) | `world.py`, `btree.py`, `greedy_mesh.py` |
 | Foxglove (map clouds, joint_states, bridge) | `map_cloud.py`, `config/foxglove/bridge.yaml`, `scripts/foxglove.sh`; mesh URIs in `launch/rsp.launch.py` |
-| the viewer's look (tiles, intensity shading, pcd surface, colours, storeys) | `site_tiles.py` (10 m tiles as GLB, a texel per voxel face), `voxel_intensity.py`, `pcd_mesh.py`, `visual.py`, `storeys.py` (picture only, never sensing); the storey switch and the layers are the panel in `web_view.py` |
+| the viewer's look (tiles, intensity shading, the Poisson and TSDF surfaces, colours, storeys) | `site_tiles.py` (10 m tiles as GLB, a texel per voxel face), `voxel_intensity.py`, `pcd_mesh.py`, `tsdf_mesh.py`, `visual.py`, `storeys.py` (picture only, never sensing); the site, storey and layer switches are the panel in `web_view.py` |
 | ray cast / ground / blocked | `voxel_grid.py` |
 | the policies (port of g2_deploy_rs) | `policy.py` (`tests/test_policy.py`; names the Rust source of every constant) |
 | joints per motion state, PD, the motor clamp, falls | `legged.py` (`tests/test_legged_motor.py`); the body's physics knobs (`motor_model`, `trunk_inertial`, contact, `actuator`, `integrator`, delays) are `RobotConfig` in `robot.py`, their A/B `scripts/gait_bench.py` |

@@ -13,8 +13,9 @@ texture coordinates (world.quad_corners says which corner is which), so the
 geometry stays what it was: two triangles per rectangle. A tile is ~1600
 rectangles and a 512 x 512 atlas on dp; the GLB's PNG is a few tens of KB.
 
-`visual_mesh: pointcloud` (pcd_mesh.py's Poisson surface) has no voxel faces:
-its vertices are ~6 cm apart, so there the intensity goes on the vertices.
+`visual_mesh: pointcloud` (pcd_mesh.py's Poisson surface) and `tsdf`
+(tsdf_mesh.py) have no voxel faces: their vertices are a few centimetres
+apart, so there the intensity goes on the vertices.
 
 Cached as cache/<map>/site_tiles-<visual_mesh>.npz (the GLB bytes of every
 tile), keyed on the world, the intensities, the look (visual.SHADE_VERSION)
@@ -209,9 +210,11 @@ def surface_tiles(mesh, origin_m: np.ndarray, lo: np.ndarray, resolution: float,
     vkind[f[:, 2]] = kinds
     floor_v = np.unique(f[kinds == visual.KIND_FLOOR])
     z_range = visual.height_range(v[floor_v][:, 2] if floor_v.size else np.zeros(0))
-    idx = np.floor((v.astype(np.float64) - origin_m[None, :]) / resolution).astype(np.int64) \
-        + lo[None, :]
-    intensity = lookup(idx) if lookup is not None else None
+    intensity = None
+    if lookup is not None:
+        idx = np.floor((v.astype(np.float64) - origin_m[None, :]) / resolution).astype(np.int64) \
+            + lo[None, :]
+        intensity = lookup(idx)
     colours = visual.shade(vkind, v[:, 2], intensity, z_range)
     groups, inverse = np.unique(np.column_stack((mesh.storeys.astype(np.int64), ix, iy)), axis=0,
                                 return_inverse=True)
@@ -238,8 +241,8 @@ def load_or_build(world: World, map_dir: str, cache_dir: str, visual_mesh: str,
     for the voxels; the surface adds pcd_mesh.py's own build the first time)."""
     from . import voxel_intensity
 
-    if visual_mesh not in ("voxels", "pointcloud"):
-        raise ValueError(f"visual_mesh {visual_mesh!r}: voxels | pointcloud")
+    if visual_mesh not in ("voxels", "pointcloud", "tsdf"):
+        raise ValueError(f"visual_mesh {visual_mesh!r}: voxels | pointcloud | tsdf")
     pcd_path = os.path.join(map_dir, "map.pcd")
     intensity_key = None
     if os.path.isfile(pcd_path):
@@ -247,15 +250,19 @@ def load_or_build(world: World, map_dir: str, cache_dir: str, visual_mesh: str,
         intensity_key = f"{st.st_size}-{int(st.st_mtime)}-{voxel_intensity.FORMAT}"
     surface_key = None
     surface = None
-    if visual_mesh == "pointcloud":
-        from .pcd_mesh import load_or_build as load_surface
+    if visual_mesh != "voxels":
+        if visual_mesh == "pointcloud":
+            from .pcd_mesh import load_or_build as load_surface
+            cache_file = "pcd_mesh.npz"
+        else:
+            from .tsdf_mesh import load_or_build as load_surface
+            cache_file = "tsdf_mesh.npz"
         surface = load_surface(map_dir, cache_dir, world, log=log)
         if surface is None:
             log("[tiles] no surface: the voxels are shown instead")
             visual_mesh = "voxels"
         else:
-            p = os.path.join(cache_dir, "pcd_mesh.npz")
-            st = os.stat(p)
+            st = os.stat(os.path.join(cache_dir, cache_file))
             surface_key = f"{st.st_size}-{int(st.st_mtime)}"
     key = _key(world, visual_mesh, intensity_key, surface_key)
     path = os.path.join(cache_dir, f"site_tiles-{visual_mesh}.npz")
