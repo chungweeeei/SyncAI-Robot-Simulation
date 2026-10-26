@@ -6,8 +6,10 @@ from syncai_sim.surface_heights import (
     blend_track_seams,
     build,
     fit_track_flights,
+    read_ramps,
     read_stair_walks,
     smooth,
+    smooth_ramps,
 )
 from syncai_sim.terrain_patch import TerrainPatch
 from syncai_sim.voxel_grid import VoxelGrid
@@ -245,3 +247,35 @@ def test_a_stair_walk_stands_in_for_the_track(tmp_path):
     assert f.n == 6 and abs(f.riser - 0.15) < 0.01 and abs(f.tread - 0.25) < 0.011
     assert type(f).from_row(f.row()).name == f.name
     assert read_stair_walks(str(tmp_path / "none.yaml")) == []
+
+
+def test_a_ramp_spreads_the_lips_of_a_quantised_hump(tmp_path):
+    # A hump whose measured tops jump 0.09 between two columns (a slope
+    # crossing a voxel boundary): inside the ramp's box every step is small,
+    # the arch stays, and a top outside the band (a pillar) is left alone.
+    nx, ny, nz = 40, 20, 10
+    sh = SurfaceHeights((nx, ny, nz), np.zeros(0, np.int64), np.zeros(0, np.float32))
+    ix, iy = (a.ravel() for a in np.meshgrid(np.arange(nx), np.arange(ny), indexing="ij"))
+    x = (ix + 0.5) * RES
+    top = np.where(x < 1.5, 0.0, np.where(x < 2.0, 0.09, 0.15))
+    top = np.where(x > 3.0, 0.0, top).astype(np.float32)
+    top[(ix == 20) & (iy == 10)] = 0.8  # a pillar
+    idx = np.stack([ix, iy, np.ones_like(ix)], axis=1)
+    keys = sh.linear(idx)
+    order = np.argsort(keys)
+    sh = SurfaceHeights(sh.shape, keys[order], top[order])
+    path = tmp_path / "site.yaml"
+    path.write_text("ramps:\n  - name: hump\n    box: [1.0, 3.5, 0.5, 1.5]\n"
+                    "    band: [-0.1, 0.3]\n")
+    (name, box), = read_ramps(str(path))
+    assert name == "hump" and box == (1.0, 3.5, 0.5, 1.5, -0.1, 0.3)
+    out = smooth_ramps(sh, np.zeros(3), RES, [(name, box)])
+    row = out.lookup(np.stack([np.arange(nx), np.full(nx, 10), np.ones(nx, np.int64)], axis=1))
+    inside = slice(10, 35)
+    assert np.max(np.abs(np.diff(row[inside][row[inside] < 0.5]))) < 0.03
+    assert row[23] > 0.12  # the top of the arch
+    assert row[20] == np.float32(0.8)  # the pillar
+    outside = sh.lookup(np.stack([np.arange(nx), np.full(nx, 2), np.ones(nx, np.int64)], axis=1))
+    assert np.array_equal(out.lookup(np.stack([np.arange(nx), np.full(nx, 2),
+                                               np.ones(nx, np.int64)], axis=1)), outside)
+    assert read_ramps(str(tmp_path / "none.yaml")) == []

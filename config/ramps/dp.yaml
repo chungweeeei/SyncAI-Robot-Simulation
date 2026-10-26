@@ -1,0 +1,16 @@
+# Floors that slope across voxel boundaries, for surface_heights.py's ramp
+# smoothing (its module docstring): per ramp a box [x0, x1, y0, y1] in the map
+# frame and the band [z0, z1] of tops that are its floor (walls, pillars and
+# anything else in the box stay out of it).
+
+ramps:
+  # 1F, between the middle stair and the east hall: an arched hump running
+  # north-south (on site "a small arched slope"), the floor at -0.44 rising to
+  # -0.24 over x 10.2-11.0 and falling back over 12.0-12.9, from the wall at
+  # y -1.6 to y 7.5 (pillars at y 1.0-1.6 and 4.6-4.9). The mapping track
+  # crossed it at y -0.5 (keyframes 849-854: ground -0.46, -0.34, -0.28,
+  # -0.29, -0.36, -0.49). PPO fell on its west flank 4 times and its east
+  # flank once in 19 crossings (step 19 of the dp patrol, 2026-10-25/26).
+  - name: dp 1F hump east of the middle stair
+    box: [9.9, 13.3, -1.55, 7.5]
+    band: [-0.6, -0.1]

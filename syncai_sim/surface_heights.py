@@ -100,6 +100,18 @@ stairs off the map since 2026-10-25 (`stair_detect`) and routes over them, so
 the robot climbs them; without a walk their treads stay the measured ones.
 dp's middle stair is the first (its walk is the planner's detected link).
 
+**Ramps** (`smooth_ramps`): a floor that slopes across voxel boundaries keeps
+a step at each, because the edge-preserving median above does not vote
+across one. dp's 1F has a long arched ridge (on site a gentle hump, 0.2 m
+over ~1.2 m each side, x 10-12.6 from y -1.5 to 7.5) between the middle
+stair and the east hall; walked across, the feet met 9 and 6 cm lips at x
+10.5 and 10.8 where the measured tops jumped a layer (-0.41 -> -0.32 ->
+-0.25), and PPO fell there 5 times in 19 crossings in the dp patrol batch
+(2026-10-25/26), never anywhere else on 1F. `config/ramps/<map>.yaml` lists
+such places as boxes with a height band; inside one every top in the band
+becomes the plain mean of the band's tops within `RAMP_RADIUS` columns
+(0.7 m), so a lip is spread over its neighbours and the arch stays.
+
 All of this moves where the feet touch, nothing else: the lidar, the planner
 and the kinematic base still read the voxels (CLAUDE.md, rule 2).
 
@@ -119,8 +131,8 @@ from .world import World, read_track
 # 2: smoothed; 3: every surface voxel, one point is enough; 4: the wide pass; 5: seams;
 # 6: an unmeasured voxel prefers its own layer; 7: seams keyed by column and band;
 # 8: flights fitted as staircases; 9: the fits saved too (stairs.py builds them as boxes);
-# 10: stair walks
-FORMAT = 10
+# 10: stair walks; 11: ramps
+FORMAT = 11
 WIDE_RADIUS = 6  # columns, the second pass (module docstring)
 
 # Seams (blend_track_seams). poses.txt is the IMU; its ground is z - this.
@@ -163,6 +175,11 @@ FLIGHT_END = 0.6  # m at most between a flight's end riser and the landing floor
 WALK_STEP = 0.2
 WALKS_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
                          "config", "stair_walks")
+
+# Ramps (smooth_ramps): the box mean's half width in columns. 0.7 m spreads a
+# 9 cm lip over seven columns (1.3 cm each) and is under half of dp's hump.
+RAMP_RADIUS = 3
+RAMPS_DIR = os.path.join(os.path.dirname(WALKS_DIR), "ramps")
 
 
 class SurfaceHeights:
@@ -608,8 +625,53 @@ def read_stair_walks(path: str) -> list[tuple[str, np.ndarray]]:
     return out
 
 
+def read_ramps(path: str) -> list[tuple[str, tuple[float, ...]]]:
+    """(name, (x0, x1, y0, y1, z0, z1)) per ramp in a ramps file (module
+    docstring); [] without one."""
+    if not os.path.isfile(path):
+        return []
+    import yaml
+
+    with open(path) as f:
+        spec = yaml.safe_load(f) or {}
+    return [(str(r["name"]), tuple(float(v) for v in list(r["box"]) + list(r["band"])))
+            for r in spec.get("ramps", [])]
+
+
+def smooth_ramps(sh: SurfaceHeights, origin: np.ndarray, res: float,
+                 ramps: list[tuple[str, tuple[float, ...]]]) -> SurfaceHeights:
+    """Every top inside a ramp's box and band becomes the mean of the band's
+    tops (the highest per column) within RAMP_RADIUS columns, read also from
+    the margin outside the box so that its edges meet the floor around it."""
+    if not ramps or sh.keys.size == 0:
+        return sh
+    nx, ny, nz = sh.shape
+    ix, iy = sh.keys // (nz * ny), (sh.keys // nz) % ny
+    tops = sh.tops.copy()
+    r = RAMP_RADIUS
+    for _, (x0, x1, y0, y1, z0, z1) in ramps:
+        i0, i1 = (int(np.floor((v - origin[0]) / res)) for v in (x0, x1))
+        j0, j1 = (int(np.floor((v - origin[1]) / res)) for v in (y0, y1))
+        band = (sh.tops >= z0) & (sh.tops <= z1)
+        near = band & (ix >= i0 - r) & (ix <= i1 + r) & (iy >= j0 - r) & (iy <= j1 + r)
+        w, h = i1 - i0 + 1, j1 - j0 + 1
+        top = np.full((w + 2 * r, h + 2 * r), np.nan)
+        np.fmax.at(top, (ix[near] - i0 + r, iy[near] - j0 + r), sh.tops[near])
+        have = ~np.isnan(top)
+        val = np.where(have, top, 0.0)
+        total, count = np.zeros((w, h)), np.zeros((w, h))
+        for a in range(2 * r + 1):
+            for b in range(2 * r + 1):
+                total += val[a:a + w, b:b + h]
+                count += have[a:a + w, b:b + h]
+        inner = near & (ix >= i0) & (ix <= i1) & (iy >= j0) & (iy <= j1)
+        tops[inner] = (total / np.maximum(count, 1))[ix[inner] - i0, iy[inner] - j0]
+    return SurfaceHeights(sh.shape, sh.keys, tops, sh.flights)
+
+
 def load_or_build(map_dir: str, cache_dir: str, world: World, log=print,
-                  walks_dir: str = WALKS_DIR) -> SurfaceHeights | None:
+                  walks_dir: str = WALKS_DIR, ramps_dir: str = RAMPS_DIR
+                  ) -> SurfaceHeights | None:
     """The cached heights, built first if needed; None without map.pcd (voxel tops then)."""
     pcd_path = os.path.join(map_dir, "map.pcd")
     if not os.path.isfile(pcd_path):
@@ -620,9 +682,12 @@ def load_or_build(map_dir: str, cache_dir: str, world: World, log=print,
     pst = os.stat(poses) if os.path.isfile(poses) else None
     walks_path = os.path.join(walks_dir, os.path.basename(os.path.normpath(map_dir)) + ".yaml")
     walks = read_stair_walks(walks_path)
+    ramps_path = os.path.join(ramps_dir, os.path.basename(os.path.normpath(map_dir)) + ".yaml")
+    ramps = read_ramps(ramps_path)
     key = json.dumps({"format": FORMAT, "pcd": [st.st_size, int(st.st_mtime)],
                       "poses": [pst.st_size, int(pst.st_mtime)] if pst else None,
                       "walks": [[n, np.round(kf, 4).tolist()] for n, kf in walks],
+                      "ramps": ramps,
                       "world": world.stats.cache_key, "world_options": world.stats.options},
                      sort_keys=True)
     path = os.path.join(cache_dir, "surface_heights.npz")
@@ -641,6 +706,9 @@ def load_or_build(map_dir: str, cache_dir: str, world: World, log=print,
         x, y = track[j, :2]
         log(f"[surface] seam between passes at keyframes {k}-{j} ({x:.2f}, {y:.2f}): "
             f"the floor jumps {jump:+.2f} m under a level track; ramped")
+    sh = smooth_ramps(sh, g.origin_m, g.res, ramps)
+    for name, box in ramps:
+        log(f"[surface] ramp: {name} ({ramps_path}), box {box[:4]}, band {box[4:]}")
     sh, fits, skipped = fit_track_flights(sh, g.grid, g.origin_m, g.res, track, points)
     for i, (name, kf) in enumerate(walks):
         log(f"[surface] stair walk {i}: {name} ({kf.shape[0]} keyframes, {walks_path})")

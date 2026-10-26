@@ -223,7 +223,10 @@ on dp's stairwell in 7 of 20 climbs before the fit and 3 of 10 after
 has, on a 33 deg flight. A stair the track never climbed but the planner
 detects and routes over (its `stair_detect`, 2026-10-25) gets the same fit
 from a stand-in walk in `config/stair_walks/<map>.yaml` (dp: the middle
-stair). Faults
+stair). A floor that slopes across voxel layers keeps a lip at each (dp's
+1F hump east of the middle stair: 9 and 6 cm, where PPO fell 5 times in 19
+crossings); `config/ramps/<map>.yaml` boxes such places, and their tops
+become a 0.7 m box mean. Faults
 in the octomap itself (unseen treads, two-level landings, a shut door) are
 fixed in the map: the workspace's `docs/octomap-repair.md`. With those and
 these, 10 of 10 alternating 1F <-> 2F navigations on dp (2026-10-24). On flat stretches
