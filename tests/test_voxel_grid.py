@@ -51,6 +51,21 @@ def test_cast_hits_wall_floor_and_misses():
     assert np.allclose(pts[1], [1.0, 3.0, -0.05], atol=1e-6)
 
 
+def test_cast_from_one_origin_per_ray():
+    g = make_room()
+    dirs = np.tile([1.0, 0.0, 0.0], (3, 1))
+    # The same rays from one origin and from three copies of it agree exactly.
+    one = np.array([1.0, 3.0, 0.5])
+    d1, p1 = g.cast(one, dirs, 40.0)
+    d3, p3 = g.cast(np.tile(one, (3, 1)), dirs, 40.0)
+    assert np.array_equal(d1, d3) and np.array_equal(p1, p3)
+    # Rays fired while the sensor moves towards the wall at x = 5 see it closer.
+    origins = np.array([[1.0, 3.0, 0.5], [2.0, 3.0, 0.5], [3.0, 3.0, 0.5]])
+    d, pts = g.cast(origins, dirs, 40.0)
+    assert np.allclose(d, [4.0, 3.0, 2.0], atol=2e-3)
+    assert np.allclose(pts[:, 0], 5.001, atol=1e-6)
+
+
 def test_cast_respects_max_range_and_grazing_down():
     g = make_room()
     d, _ = g.cast(np.array([1.0, 3.0, 0.5]), np.array([[1.0, 0.0, 0.0]]), 2.0)

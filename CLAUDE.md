@@ -63,7 +63,7 @@ Python throughout (decided
 | the step rule, gates, collisions (kinematic) | `kinematics.py` (pure Python, `tests/test_kinematics.py`) |
 | URDF -> MJCF, mocap weld, standing pose | `robot.py` (`DEFAULT_STANDING` was solved by FK, feet 0.372 m under the hips) |
 | MjSpec assembly, bitmasks, groups, site tiles, the MJB scene cache | `scene.py` (`scene_info` reads a loaded model back by name; `scene_key` lists what the cache depends on) |
-| the lidar pattern, prop rays | `lidar.py`, `prop_rays.py` |
+| the lidar pattern, prop rays | `lidar.py`, `prop_rays.py`; the recorded MID360 bank `config/lidar/mid360_pattern.npz` (built by `scripts/lidar_pattern.py` through `livox_bag.py`, which reads a rosbag2 sqlite without ROS) |
 | the gait controller on driver_manager's UDP link (the session) | `controller_link.py` (`tests/test_controller_link.py`), `config/params/driver_manager_sim.yaml` |
 | services and `mode` (driver_link: fake) | `fake_driver.py` |
 | one physics tick, scan, spawn, teleport | `simulator.py` |

@@ -14,6 +14,15 @@ def test_ray_aabb_hits_and_misses():
     assert np.isclose(t[3], 2.0)
 
 
+def test_one_origin_per_ray():
+    d = np.array([[1.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 0.0, -1.0]])
+    origins = np.array([[0.0, 0.0, 0.5], [1.0, 0.0, 0.5], [2.4, 0.0, 3.0]])
+    lo, hi = np.array([2.0, -0.5, 0.0]), np.array([3.0, 0.5, 1.0])
+    assert np.allclose(ray_aabb(origins, d, lo, hi), [2.0, 1.0, 2.0])
+    t = ray_vertical_cylinder(origins, d, np.array([3.0, 0.0]), 0.5, 0.0, 1.8)
+    assert np.allclose(t[:2], [2.5, 1.5]) and np.isinf(t[2])  # the third is outside the radius
+
+
 def test_ray_cylinder_side_and_cap():
     o = np.array([0.0, 0.0, 1.0])
     d = np.array([[1.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 0.0, -1.0]])

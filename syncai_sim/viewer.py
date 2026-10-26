@@ -257,7 +257,9 @@ class Viewer:
 
     def show_scan(self, sim, max_points: int = 400) -> None:
         """Draw a thinned copy of the last scan as small spheres in the body frame."""
-        xyzi = sim.scan()  # a fresh, independent draw is fine for a picture
+        # The scan the node just published; a fresh one would advance the
+        # recorded pattern's frame counter between the published scans.
+        xyzi = sim.last_scan if sim.last_scan is not None else sim.scan()
         T = sim.T_map_imu()
         pts = xyzi[:: max(1, xyzi.shape[0] // max_points), :3].astype(np.float64)
         with self._lock:

@@ -46,7 +46,7 @@ from . import scene as sc
 from .fake_driver import DAMPING, FakeDriver
 from .kinematics import BaseState, Event, KinematicsConfig, advance, place
 from .legged import LeggedController
-from .lidar import LidarConfig, LidarModel
+from .lidar import LidarConfig, LidarModel, rays_along_motion
 from .policy import load_policies
 from .prop_rays import ray_aabb, ray_vertical_cylinder
 from .robot import RobotConfig, RobotModel, load_robot
@@ -186,6 +186,12 @@ class Simulator:
             self._stair_geoms = set(self.info.stair_geoms)
         self.grid = self.world.grid
         self.lidar = LidarModel(cfg.lidar, cfg.seed)
+        # Where the lidar was at each physics step of the last scan window
+        # (lidar.rays_along_motion): a ring, `_lidar_i` steps written so far.
+        self._steps_per_scan = max(1, int(round(cfg.physics_hz / cfg.lidar.scan_rate_hz)))
+        self._lidar_poses = np.tile(np.eye(4), (self._steps_per_scan, 1, 1))
+        self._lidar_i = 0
+        self.last_scan: np.ndarray | None = None  # the cloud `scan()` last returned
         self.driver = FakeDriver(switch_delay=cfg.switch_delay,
                                  motion_state=cfg.initial_motion_state, policy=cfg.initial_policy)
         self.state = BaseState()
@@ -220,6 +226,7 @@ class Simulator:
         for m in self.movers:
             self._place_mover(m, m.waypoints[0])
         mujoco.mj_forward(self.model, self.data)
+        self._lidar_poses[:] = self.T_map_lidar()
         self.T_map_odom = planar(self.T_map_imu())
         self.log(f"[sim] spawned at ({x:.2f}, {y:.2f}, yaw {yaw:.2f}) on ground z "
                  f"{self.state.z_ground:.2f}")
@@ -229,6 +236,7 @@ class Simulator:
         before = planar(self.T_map_imu())
         self.state = place(self.state, self.grid, self.cfg.kin, x, y, yaw, z_hint)
         self._put_body()
+        self._lidar_poses[:] = self.T_map_lidar()  # a kidnap: no motion to smear over
         after = planar(self.T_map_imu())
         self.T_map_odom = after @ np.linalg.inv(before) @ self.T_map_odom
         self.log(f"[sim] teleported to ({x:.2f}, {y:.2f}, yaw {yaw:.2f}), ground z "
@@ -310,6 +318,7 @@ class Simulator:
             self._walk_mover(m, dt)
         mujoco.mj_step(self.model, self.data)
         self.sim_time += dt
+        self._record_lidar_pose()
 
         # A prop in the way holds the trunk back from its target; after a few cm
         # of lag give in — snap the kinematic state to where the body really is,
@@ -339,6 +348,7 @@ class Simulator:
             self._walk_mover(m, dt)
         mujoco.mj_step(self.model, self.data)
         self.sim_time += dt
+        self._record_lidar_pose()
         self._read_state(cmd)
         for name, (bid, pos) in self._free_props.items():
             if self.data.xpos[bid][2] < pos[2] - 3.0:
@@ -462,36 +472,46 @@ class Simulator:
         return np.linalg.inv(self.T_map_odom) @ self.T_map_imu()
 
     # -- sensors -----------------------------------------------------------------
+    def _record_lidar_pose(self) -> None:
+        self._lidar_poses[self._lidar_i % self._steps_per_scan] = self.T_map_lidar()
+        self._lidar_i += 1
+
     def scan(self) -> np.ndarray:
-        """One lidar scan as (K, 4) float32 xyz+intensity in the pointlio_body frame."""
-        T_l = self.T_map_lidar()
-        origin = T_l[:3, 3]
-        dirs_l = self.lidar.directions()
-        dirs_w = dirs_l @ T_l[:3, :3].T
-        dist, pts = self.grid.cast(origin, dirs_w, self.cfg.lidar.max_range)
+        """One lidar scan as (K, 4) float32 xyz+intensity in the pointlio_body
+        frame, at the scan's end. Each ray is cast from where the lidar was
+        when it fired during the scan window (the last `_steps_per_scan`
+        steps), then the cloud is expressed in the end-of-scan body frame:
+        the motion-compensated cloud Point-LIO publishes."""
+        k = self._steps_per_scan
+        chrono = (np.arange(k) + self._lidar_i) % k  # ring slots, oldest first
+        dirs_l, t = self.lidar.directions()
+        origins, dirs_w = rays_along_motion(self._lidar_poses[chrono], t,
+                                            self.model.opt.timestep, dirs_l)
+        dist, pts = self.grid.cast(origins, dirs_w, self.cfg.lidar.max_range)
         dist = np.where(dist < 0, np.inf, dist)
-        for t in self._prop_distances(origin, dirs_w):
-            nearer = t < dist
+        for tp in self._prop_distances(origins, dirs_w):
+            nearer = tp < dist
             if np.any(nearer):
-                pts[nearer] = origin[None, :] + dirs_w[nearer] * t[nearer, None]
-                dist = np.where(nearer, t, dist)
+                pts[nearer] = origins[nearer] + dirs_w[nearer] * tp[nearer, None]
+                dist = np.where(nearer, tp, dist)
         dist = np.where(np.isfinite(dist), dist, -1.0)
         pts_w = self.lidar.returns(dirs_w, dist, pts)
-        return self.lidar.cloud_xyzi(pts_w, self.T_map_imu())
+        self.last_scan = self.lidar.cloud_xyzi(pts_w, self.T_map_imu())
+        return self.last_scan
 
-    def _prop_distances(self, origin: np.ndarray, dirs_w: np.ndarray):
+    def _prop_distances(self, origins: np.ndarray, dirs_w: np.ndarray):
         m, d = self.model, self.data
         for bid in self.info.prop_bodies.values():
             g = m.body_geomadr[bid]
             size = m.geom_size[g]
             pos = d.geom_xpos[g]
             if m.geom_type[g] == mujoco.mjtGeom.mjGEOM_CYLINDER:
-                yield ray_vertical_cylinder(origin, dirs_w, pos[:2], float(size[0]),
+                yield ray_vertical_cylinder(origins, dirs_w, pos[:2], float(size[0]),
                                             float(pos[2] - size[1]), float(pos[2] + size[1]))
             else:
                 R = d.geom_xmat[g].reshape(3, 3)
                 ext = np.abs(R) @ size  # world-axis half extents of the rotated box
-                yield ray_aabb(origin, dirs_w, pos - ext, pos + ext)
+                yield ray_aabb(origins, dirs_w, pos - ext, pos + ext)
 
     def imu_sample(self) -> tuple[np.ndarray, np.ndarray]:
         """(gyro rad/s, accel in g) in the IMU frame: the yaw rate and gravity,

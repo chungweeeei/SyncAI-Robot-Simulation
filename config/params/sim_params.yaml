@@ -56,9 +56,16 @@
     in_place_wz_min: 0.0         # 0 = off; MPPI in_place_wz_min is 0.45
 
     # --- lidar (Livox MID360, bringup.yaml publish_freq 10) -------------------
-    points_per_scan: 20000
+    # mid360: the directions and firing times the robot's own lidar fired, from
+    # a recording (config/lidar/mid360_pattern.npz, built by
+    # scripts/lidar_pattern.py from the workspace's record/dp; lidar.py), frame
+    # after frame, each ray cast from where the lidar was when it fired.
+    # random: fresh uniform directions every scan, the sim before 2026-10-26.
+    lidar_pattern: mid360
+    lidar_pattern_file: ""       # "" = config/lidar/mid360_pattern.npz
+    points_per_scan: 20000       # random: exactly; mid360: at most (a frame fires ~16 k that return)
     scan_rate_hz: 10.0
-    fov_lower_deg: -7.0
+    fov_lower_deg: -7.0          # random only: the recording fires what the MID360 fires (-7.0..52.7)
     fov_upper_deg: 52.0
     lidar_min_range: 0.1
     lidar_max_range: 40.0

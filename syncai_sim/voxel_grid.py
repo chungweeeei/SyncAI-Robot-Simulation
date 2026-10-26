@@ -63,7 +63,9 @@ class VoxelGrid:
 
     # -- queries ---------------------------------------------------------------
     def cast(self, origin_m, dirs: np.ndarray, max_range: float) -> tuple[np.ndarray, np.ndarray]:
-        """Ray-cast unit `dirs` (N, 3) from `origin_m`. Returns (dist, points):
+        """Ray-cast unit `dirs` (N, 3) from `origin_m` — one point (3,) for all
+        rays, or one per ray (N, 3): a lidar scan is 0.1 s long and the sensor
+        moves meanwhile (lidar.rays_along_motion). Returns (dist, points):
         the distance along each ray to the first occupied voxel (-1 where
         nothing is hit within `max_range` metres) and the return point (N, 3)
         in metres (undefined where dist < 0).
@@ -82,7 +84,10 @@ class VoxelGrid:
         n = dirs.shape[0]
         dist = np.empty(n, dtype=np.float64)
         pts = np.empty((n, 3), dtype=np.float64)
-        _cast(self.grid, self.origin_m, self.res, np.asarray(origin_m, dtype=np.float64),
+        origins = np.asarray(origin_m, dtype=np.float64)
+        if origins.ndim == 1:
+            origins = np.broadcast_to(origins, (n, 3))
+        _cast(self.grid, self.origin_m, self.res, np.ascontiguousarray(origins),
               np.ascontiguousarray(dirs, dtype=np.float64), float(max_range), dist, pts)
         return dist, pts
 
@@ -117,14 +122,14 @@ class VoxelGrid:
 # --- numba kernels -----------------------------------------------------------
 
 @nb.njit(cache=True, parallel=True, fastmath=True)
-def _cast(grid, origin, res, pnt, dirs, max_range, out, pts):
+def _cast(grid, origin, res, pnts, dirs, max_range, out, pts):
     nx, ny, nz = grid.shape
-    px = (pnt[0] - origin[0]) / res
-    py = (pnt[1] - origin[1]) / res
-    pz = (pnt[2] - origin[2]) / res
     tmax_v = max_range / res
     inf = 1e30
     for r in nb.prange(dirs.shape[0]):
+        px = (pnts[r, 0] - origin[0]) / res
+        py = (pnts[r, 1] - origin[1]) / res
+        pz = (pnts[r, 2] - origin[2]) / res
         dx = dirs[r, 0]
         dy = dirs[r, 1]
         dz = dirs[r, 2]
@@ -146,9 +151,9 @@ def _cast(grid, origin, res, pnt, dirs, max_range, out, pts):
             if 0 <= ix < nx and 0 <= iy < ny and 0 <= iz < nz:
                 if grid[ix, iy, iz]:
                     hit = t * res + 0.001  # a millimetre inside: see VoxelGrid.cast
-                    px_m = pnt[0] + dx * hit
-                    py_m = pnt[1] + dy * hit
-                    pz_m = pnt[2] + dz * hit
+                    px_m = pnts[r, 0] + dx * hit
+                    py_m = pnts[r, 1] + dy * hit
+                    pz_m = pnts[r, 2] + dz * hit
                     surface = iz + 1 >= nz or not grid[ix, iy, iz + 1]
                     if surface:
                         pz_m = origin[2] + (iz + 0.5) * res

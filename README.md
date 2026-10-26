@@ -13,7 +13,8 @@ What the simulator is, in one paragraph: the site's `octomap.bt` (written by
 walks through it on `cmd_vel` with its own ONNX locomotion policies — PPO for
 flat ground, HimLoco when the stair policy has been requested — driving twelve
 PD joints the way the robot's Rust controller (`g2_deploy_rs`) does;
-a Livox MID360 is ray-cast against the voxels at 10 Hz; and one ROS 2 node
+a Livox MID360 is ray-cast against the voxels at 10 Hz, firing the scan
+pattern recorded from the real one; and one ROS 2 node
 publishes exactly what the Livox driver, Point-LIO, the localizer and
 `driver_manager` publish on the robot, so the planner, costmaps, controller,
 task_runner and lio_bridge run **unchanged, from the workspace's own
@@ -56,7 +57,10 @@ scripts/foxglove.sh                foxglove_bridge (+ robot_state_publisher) for
   legged.py                          motion state -> policy / stand / lie / damping, PD, the fall check
   terrain_patch.py                   the voxels around the robot as collision boxes for its feet
   kinematics.py                      the kinematic base: ground following, the step rule, blocking, gates
-  lidar.py, prop_rays.py             the MID360 pattern; analytic rays for props
+  lidar.py, prop_rays.py             the MID360: its recorded pattern fired frame by frame, rays from where it was when each fired; analytic rays for props
+  livox_bag.py                       CustomMsg frames straight out of a rosbag2 sqlite (no ROS) -> the pattern bank
+config/lidar/mid360_pattern.npz    that bank, from the workspace's record/dp (config/lidar/README.md)
+scripts/lidar_pattern.py           rebuilds it from any MID360 recording
   fake_driver.py                     set_motion_key / set_policy_mode / mode
   simulator.py                       the ROS-free core (step, scan, imu, spawn, teleport)
   ros_node.py, viewer.py, __main__.py the node, the viewer (a GLFW window of our own: frame cap, tiles within reach) with teleop, the CLI
@@ -183,6 +187,26 @@ mesh as its convex hull, `mj_multiRay` scans every geom per ray (18 k plates
 would cost hundreds of milliseconds a scan) and even against the site as one
 mesh its BVH needed 325 ms for 20 k rays; against the voxels the same 20 k
 rays are 1.3 ms. Numbers for dp are in `cache/dp/world.json`.
+
+**Lidar** (`lidar_pattern`, `lidar.py`). The scan fires the directions the
+robot's own MID360 fired: twenty consecutive frames of the workspace's
+`record/dp` (`livox_ros_driver2` CustomMsg, read out of the rosbag2 sqlite by
+`livox_bag.py` with no ROS), ~16 k samples a frame that returned, cycled
+frame after frame, so the clouds have the sensor's rosette — four lasers
+sweeping 1.2° a sample, dense along the sweep and sparse across it, never the
+same spots in two scans — instead of the uniform random directions of before
+(`random` keeps those). Every sample has its firing time (its place in the
+frame: the recording's per-point `offset_time` turned out not to be one,
+`livox_bag.build_pattern` says why), and each ray is cast from where the
+lidar was at that time during the 100 ms scan (`rays_along_motion`; the
+simulator keeps the lidar pose of every physics step of the window): at
+0.4 m/s the sensor moves 4 cm during a scan, turning at 1 rad/s 5.7°, and
+the pattern smears over the world as it does on the robot. The cloud is then
+expressed in the end-of-scan body frame — motion-compensated, which is what
+Point-LIO's `body_cloud` is. The 20 k rays cost the same 1.3 ms.
+`scripts/lidar_pattern.py` rebuilds `config/lidar/mid360_pattern.npz` from
+any few seconds of MID360 recording (the pattern is the sensor's, not the
+site's).
 
 **Walking** (`locomotion: policy`). `policy.py` is a line-by-line port of the
 runners in `g2_deploy_rs` (`src/policy_runner.rs`, `src/himloco_policy_runner.rs`:
