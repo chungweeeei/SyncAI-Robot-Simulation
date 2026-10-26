@@ -19,3 +19,9 @@ onnxruntime==1.19.2
 # reconstruction). 0.18.0 is the version tested here (py310 aarch64 wheel,
 # numpy stays 1.x). Optional: without it the viewer shows the voxels.
 open3d==0.18.0
+# The browser viewer (syncai_sim/web_view.py, --web-view): a Python server in
+# the container, the picture drawn by three.js in the host's browser on its
+# GPU — llvmpipe over VNC managed 10 frames a second of the site. Pulls
+# trimesh (the site tiles and the robot go over as GLB), websockets, msgspec,
+# zstandard, imageio; all pure Python or with aarch64 wheels (2026-10-26).
+viser==1.1.1

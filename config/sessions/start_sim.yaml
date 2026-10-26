@@ -56,11 +56,13 @@ windows:
   # ---------- Window 2: the simulator ----------
   # MuJoCo + the ROS face of pointlio / localizer / driver_manager. Needs the
   # static TF from window 0 only to confirm the frames; the robot's extrinsics
-  # are read from the URDF itself.
+  # are read from the URDF itself. --web-view serves the browser viewer on
+  # port 8080 (web_view.py) beside the VNC window; an image without viser
+  # logs that and runs without it.
   - name: sim
     panes:
       - cmd: >-
-          python3 -m syncai_sim --ros-args
+          python3 -m syncai_sim --web-view --ros-args
           --params-file /home/syncrobotic/sim/config/params/sim_params.yaml
           -p driver_link:=udp
         sleep: 2

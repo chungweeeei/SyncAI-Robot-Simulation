@@ -89,6 +89,9 @@ class Teleop:
         self._held: set[str] | None = None  # None: no viewer, use the press timers
         self._pressed_until: dict[str, float] = {}
         self._driving = False
+        # The browser viewer's sliders (web_view.py): a command held until the
+        # next slider move or its Stop; None = the keys decide.
+        self.web_cmd: tuple[float, float, float] | None = None
 
     def set_held(self, held: set[str]) -> None:
         self._held = held
@@ -136,6 +139,11 @@ class Teleop:
         h = self.held() if self.drive else set()
         self.vx = self.vx_speed * (("up" in h) - ("down" in h))
         self.wz = self.wz_speed * (("left" in h) - ("right" in h))
+        if h:
+            self.web_cmd = None  # a key takes over from the sliders
+        elif self.web_cmd is not None and self.drive:
+            self.vx, _, self.wz = self.web_cmd
+            h = {"web"} if any(abs(v) > 1e-9 for v in self.web_cmd) else set()
         # Only while driving, and one stop on release: a teleop that set 0
         # every loop would override cmd_vel / the driver's AXES with the keys
         # untouched (the viewer and the nav stack can run together).
@@ -389,6 +397,32 @@ class Viewer:
         with self._lock:
             mujoco.mjv_moveCamera(self.sim.model, mujoco.mjtMouse.mjMOUSE_ZOOM, 0.0,
                                   -0.05 * yoff, self.cam)
+
+
+class Viewers:
+    """Several viewers as one for the main loop (the GLFW window and the
+    browser's, web_view.py): synced at the fastest rate, running while all
+    are, the scan drawn by those in `scan`."""
+
+    def __init__(self, members: list, scan: list | None = None):
+        self.members = members
+        self.scan = members if scan is None else scan
+        self.rate_hz = max(v.rate_hz for v in members)
+
+    def is_running(self) -> bool:
+        return all(v.is_running() for v in self.members)
+
+    def sync(self, sim) -> None:
+        for v in self.members:
+            v.sync(sim)
+
+    def show_scan(self, sim) -> None:
+        for v in self.scan:
+            v.show_scan(sim)
+
+    def close(self) -> None:
+        for v in self.members:
+            v.close()
 
 
 def yaw_of(sim) -> float:
