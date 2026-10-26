@@ -35,6 +35,9 @@
     # Foxglove's site (map_cloud.py): map.pcd thinned to 6 cm, latched once on
     # sim/map_cloud/storey<N> (dp: 3.7 M points, 59 MB; first build 11 s).
     publish_map_cloud: true
+    # The browser viewer (--web-view, web_view.py): its port inside the
+    # container (docker-compose.yml maps it to SIM_WEB_VIEW_PORT, 8080).
+    web_view_port: 8080
 
     # --- spawn ---------------------------------------------------------------
     # Default: the INI's [initial_pose] (x, y, z = ground, yaw). z is a hint for
@@ -110,6 +113,21 @@
     # there too, which put every riser on the column grid (treads 0.20 / 0.30 m
     # for dp's 0.22-0.255). voxels is the sim before 2026-10-25, for comparison.
     stairs: fitted
+
+    # --- the walking body's physics (policy only) --------------------------------
+    # Knobs for the A/B against the robot (scripts/gait_bench.py; docs/findings.md
+    # finding 5: HimLoco's stair falls are pitch swings the sim's idealised
+    # body may be making up). Each default is the sim before 2026-10-26; the
+    # alternatives are what g2_deploy_rs's own MuJoCo simulation of the G23
+    # uses (robot.py and legged.py cite the lines).
+    motor_model: ideal           # ideal: URDF effort clamp, armature 0.01 | j60: the J60's torque-speed envelope, armature, friction, damping
+    trunk_inertial: urdf         # urdf: base_link 8.03 kg | vendor: the vendor MJCF's TORSO, 9.368 kg, 2.5x the pitch inertia
+    foot_solref: [0.02, 1.0]     # legs / feet / terrain boxes contact; the vendor sim has [0.005, 1.0]
+    foot_friction: [1.0, 0.005, 0.0001]   # sliding, torsional, rolling; the vendor sim has [1.0, 0.01, 0.01]
+    actuator: qfrc               # qfrc: PD torque computed in legged.py | position: MuJoCo position actuators (gains from legged.py)
+    integrator: euler            # euler | implicitfast (the pair for actuator position: -kd dq integrated implicitly)
+    cmd_delay_ms: 0.0            # motor commands held back this long (G2_SIM_CMD_DELAY_MS there)
+    torque_bw_hz: 0.0            # first-order torque filter, qfrc only; 0 = off (G2_SIM_TORQUE_BW_HZ)
 
     # --- rates -----------------------------------------------------------------
     # A multiple of the policies' 50 Hz. 2 ms: both policies walk the same at

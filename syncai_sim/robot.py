@@ -31,13 +31,18 @@ sim needs:
   frame's height over the ground when standing, which fixes the body height.
 
 With `articulated` (the `policy` locomotion, legged.py) the model is the robot
-instead of a statue: the twelve joints stay, with `JOINT_ARMATURE`; there is
+instead of a statue: the twelve joints stay, with the motor model's armature
+(and, `j60`, its friction and damping; the constants below); there is
 no mocap or weld, the free base is carried by its legs; every leg and foot
 primitive collides with the terrain patch (terrain_patch.py) and the trunk
 with the patch and the props; a gyro and an accelerometer sit on
 `lidar_top_imu`. The legs never collide with each other or the trunk (the
 URDF's hip cylinders overlap its trunk boxes), and not with props (a leg in a
-prop would need a contact model the props were never tuned for).
+prop would need a contact model the props were never tuned for). What else
+the walking body can be given — the vendor's trunk inertial, the vendor's
+contact parameters, MuJoCo position actuators — is `RobotConfig`, each a
+knob for the A/B against the robot (scripts/gait_bench.py) with the sim of
+before as its default.
 """
 
 from __future__ import annotations
@@ -62,11 +67,38 @@ DEFAULT_STANDING = {"HipX": 0.0, "HipY": -0.447, "Knee": 0.867}
 TRUNK_CONTYPE = 2
 TRUNK_CONAFFINITY = 2
 TERRAIN_BIT = 4
-# Rotor inertia reflected to each joint (kg m^2). Not in the URDF; the
-# policies walk the same with 0.005 and 0.01 (flat harness, 2026-10-23), and
-# without any the PD at kp 30 rings at a 1 ms step.
+# Rotor inertia reflected to each joint (kg m^2), motor_model `ideal`. Not in
+# the URDF; the policies walk the same with 0.005 and 0.01 (flat harness,
+# 2026-10-23), and without any the PD at kp 30 rings at a 1 ms step.
 JOINT_ARMATURE = 0.01
-FOOT_FRICTION = 1.0
+
+# Motor model `j60` (RobotConfig.motor_model): the G23's J60 actuators as
+# g2_deploy_rs's own MuJoCo simulation models them
+# (interface/robot/simulation/mujoco_simulation_G23.py, its J60_* constants
+# and j60_torque_limits, 2026-10), per [HipX, HipY, Knee]: a DC motor's
+# torque-speed envelope — driving, at most peak * (1 - |dq| / wmax); braking,
+# the full peak (legged.py applies it every step) — and, on the joint, the
+# rotor's inertia through the gear (1.1e-4 kg m^2 * 6^2 / 6^2 / 9^2), dry
+# friction and viscous damping fitted so that the loss at top speed is
+# 0.81 / 0.81 / 0.92 Nm. `ideal` (the default) is the sim before 2026-10-26:
+# JOINT_ARMATURE everywhere, no friction, the URDF's effort as a flat clamp.
+J60_PEAK_TORQUE = (19.94, 19.94, 30.50)  # Nm
+J60_MAX_SPEED = (24.18, 24.18, 15.49)  # rad/s
+J60_ARMATURE = (1.1e-4 * 36, 1.1e-4 * 36, 1.1e-4 * 81)
+J60_FRICTIONLOSS = (0.40, 0.40, 0.45)  # Nm
+J60_DAMPING = ((0.81 - 0.40) / 24.6, (0.81 - 0.40) / 24.6, (0.92 - 0.45) / 15.5)  # Nm s/rad
+JOINT_KINDS = ("HipX", "HipY", "Knee")  # the suffix each joint name carries
+
+# Trunk inertial `vendor` (RobotConfig.trunk_inertial): the TORSO of
+# g2_deploy_rs's G23 MJCF (robot/g23/mjcf/g23_mjcf.xml), 9.368 kg against the
+# workspace URDF's 8.03 and a pitch inertia 2.5x the URDF's (0.1425 vs 0.058
+# kg m^2) — the URDF's base_link looks like the bare torso without the lidar
+# head and the computer. Which is the robot is to be weighed (findings.md 5:
+# the sim's stair falls are pitch swings); until then `urdf` is the default.
+VENDOR_TRUNK_INERTIAL = {
+    "pos": "0.023640945 0.001529477 0.033866753", "mass": "9.368",
+    "fullinertia": "0.058025245 0.142509325 0.150322311 0 -0.014586129 0",
+}
 
 
 @dataclass
@@ -81,6 +113,21 @@ class RobotConfig:
     mocap_name: str = "base_mocap"
     articulated: bool = False
     imu_site: str = "imu_site"
+    # The walking body (articulated only; the constants above say what each is):
+    motor_model: str = "ideal"  # ideal | j60
+    trunk_inertial: str = "urdf"  # urdf | vendor
+    # The legs' and feet's contact with the terrain boxes (scene.py gives the
+    # boxes the same solref, so the pair's mean is this). The defaults are
+    # MuJoCo's solref and a 1.0 sliding friction; g2_deploy_rs's MuJoCo sim
+    # has solref (0.005, 1) and friction (1, 0.01, 0.01).
+    foot_solref: tuple[float, float] = (0.02, 1.0)
+    foot_friction: tuple[float, float, float] = (1.0, 0.005, 0.0001)
+    # qfrc: the PD torque computed in legged.py every step and applied as a
+    # generalized force (the sim before 2026-10-26). position: a MuJoCo
+    # position actuator per joint, gains written by legged.py, meant for the
+    # implicitfast integrator (scene.py) which integrates the -kd dq term
+    # implicitly instead of relying on armature to keep it from ringing.
+    actuator: str = "qfrc"  # qfrc | position
     # Visual STLs decimated (open3d quadric) into this directory, each to
     # `mesh_decimation` of its triangles, never under `mesh_min_triangles`.
     # The URDF's meshes are 274 k triangles (body 100 k, each shank 27 k):
@@ -210,13 +257,52 @@ def load_robot(cfg: RobotConfig, log=print) -> RobotModel:
                       base_to_lidar=base_to_lidar, base_to_imu=base_to_imu, h_stand=h_stand)
 
 
+def joint_kind(name: str) -> int:
+    """0 HipX, 1 HipY, 2 Knee, by the suffix the URDF's joint names carry."""
+    for k, suffix in enumerate(JOINT_KINDS):
+        if suffix in name:
+            return k
+    raise ValueError(f"joint {name!r} is none of {JOINT_KINDS}")
+
+
 def _articulated(root: ET.Element, base: ET.Element, cfg: RobotConfig,
                  base_to_lidar: np.ndarray, base_to_imu: np.ndarray) -> RobotModel:
     from .policy import Q_DEFAULT
 
-    for joint in root.iter("joint"):
-        if joint.get("type", "hinge") == "hinge":
+    if cfg.motor_model not in ("ideal", "j60"):
+        raise ValueError(f"motor_model {cfg.motor_model!r}: ideal | j60")
+    if cfg.trunk_inertial not in ("urdf", "vendor"):
+        raise ValueError(f"trunk_inertial {cfg.trunk_inertial!r}: urdf | vendor")
+    if cfg.actuator not in ("qfrc", "position"):
+        raise ValueError(f"actuator {cfg.actuator!r}: qfrc | position")
+    hinges = [j for j in root.iter("joint") if j.get("type", "hinge") == "hinge"]
+    for joint in hinges:
+        if cfg.motor_model == "j60":
+            k = joint_kind(joint.get("name", ""))
+            joint.set("armature", f"{J60_ARMATURE[k]:.6g}")
+            joint.set("frictionloss", f"{J60_FRICTIONLOSS[k]:.6g}")
+            joint.set("damping", f"{J60_DAMPING[k]:.6g}")
+        else:
             joint.set("armature", str(JOINT_ARMATURE))
+    if cfg.trunk_inertial == "vendor":
+        inertial = base.find("inertial")
+        if inertial is None:
+            inertial = ET.SubElement(base, "inertial")
+        for attr in ("quat", "diaginertia", "fullinertia"):
+            inertial.attrib.pop(attr, None)
+        for attr, value in VENDOR_TRUNK_INERTIAL.items():
+            inertial.set(attr, value)
+    if cfg.actuator == "position":
+        # Gains 0 until legged.py writes the state's kp / kd into gainprm and
+        # biasprm; the force range is written every step too (the j60
+        # envelope), so the compiled range only has to exist.
+        act = root.find("actuator")
+        if act is None:
+            act = ET.SubElement(root, "actuator")
+        for joint in hinges:
+            name = joint.get("name", "")
+            ET.SubElement(act, "position", name=f"act_{name}", joint=name, kp="0", kv="0",
+                          forcerange="-100 100")
     for body in root.iter("body"):
         for geom in body.findall("geom"):
             if geom.get("type") == "mesh":
@@ -232,7 +318,8 @@ def _articulated(root: ET.Element, base: ET.Element, cfg: RobotConfig,
             else:
                 geom.set("contype", str(TERRAIN_BIT))
                 geom.set("conaffinity", "0")
-                geom.set("friction", f"{FOOT_FRICTION:g} 0.005 0.0001")
+                geom.set("friction", _fmt(cfg.foot_friction))
+                geom.set("solref", _fmt(cfg.foot_solref))
     imu = next(b for b in root.iter("body") if b.get("name") == cfg.imu_body)
     ET.SubElement(imu, "site", name=cfg.imu_site, size="0.01")
     sensor = root.find("sensor")

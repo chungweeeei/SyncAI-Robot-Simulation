@@ -54,7 +54,8 @@ scripts/foxglove.sh                foxglove_bridge (+ robot_state_publisher) for
   robot.py                           the workspace URDF -> MJCF: articulated, or rigid with a mocap handle
   scene.py                           robot + site (in 10 m tiles) + props (+ the terrain pool) in one MjSpec; the compiled model cached as MJB
   policy.py                          g2_deploy_rs's PPO / HimLoco runners, ported (onnxruntime)
-  legged.py                          motion state -> policy / stand / lie / damping, PD, the fall check
+  legged.py                          motion state -> policy / stand / lie / damping, PD (qfrc or MuJoCo actuators), the motor clamp, the fall check
+scripts/gait_bench.py              the walking body against a scripted command, ROS-free: the A/B of the body's physics knobs
   terrain_patch.py                   the voxels around the robot as collision boxes for its feet
   kinematics.py                      the kinematic base: ground following, the step rule, blocking, gates
   lidar.py, prop_rays.py             the MID360: its recorded pattern fired frame by frame, rays from where it was when each fired; analytic rays for props
@@ -64,6 +65,7 @@ scripts/lidar_pattern.py           rebuilds it from any MID360 recording
   fake_driver.py                     set_motion_key / set_policy_mode / mode
   simulator.py                       the ROS-free core (step, scan, imu, spawn, teleport)
   ros_node.py, viewer.py, __main__.py the node, the viewer (a GLFW window of our own: frame cap, tiles within reach) with teleop, the CLI
+  web_view.py                        the browser viewer (--web-view): the site and the robot sent once, poses streamed, drawn by the host's GPU
 policy/                            the G23's ONNX policies, gitignored: copy them in (policy/README.md)
 tests/                             pytest; ROS-free except test_simulator_synthetic (needs the ROS env + workspace install)
 docs/findings.md                   what the sim found about the navigation stack
@@ -124,10 +126,21 @@ handle), `h` lists the teleop keys. In the session (no `--teleop`: the nav
 stack owns `cmd_vel`) only `t` and `h` answer: `t` puts the robot back on the
 spawn, standing.
 
+**The browser viewer** (`--web-view`, `web_view.py`): the same scene drawn by
+the host's GPU at `http://localhost:8080` (compose maps the container's
+`web_view_port`; `SIM_WEB_VIEW_PORT` moves it). The site's tiles and the
+robot's meshes go over once, then only poses at 20 Hz, so it draws at the
+browser's frame rate with shadows where llvmpipe over VNC managed ten frames a
+second; the panel has the storey switch, follow-robot, the last scan, the
+terrain boxes and fitted stairs under the feet, the lidar map per storey, and
+with `--teleop` sliders and the motion keys. It needs no display in the
+container (`--headless --web-view`) and runs beside the GLFW window otherwise.
+
 The simulator alone, without the stack:
 
 ```bash
 python3 -m syncai_sim --no-ros --teleop            # drive with the arrow keys in the viewer window (press h for help)
+python3 -m syncai_sim --no-ros --teleop --headless --web-view   # the same in the browser: http://localhost:8080
 python3 -m syncai_sim --headless --seconds 30      # as a ROS node, no window (CI)
 python3 -m syncai_sim.world map/dp                 # (re)build a map's cache and print its stats
 python3 -m pytest /home/syncrobotic/sim/tests      # unit tests; the synthetic-stairs one needs the workspace install
@@ -262,6 +275,50 @@ PPO 0.4 m/s at a 0.5 command, 1.0 rad/s yaw; HimLoco climbs the planner CLI's
 synthetic flight and dp's first flight to the landing (1.2 m); PPO falls at
 the first riser. A collision is the trunk touching the site.
 
+**The body's physics, as knobs** (`motor_model`, `trunk_inertial`,
+`foot_solref`, `foot_friction`, `actuator`, `integrator`, `cmd_delay_ms`,
+`torque_bw_hz` in the params; `robot.py`, `legged.py`). The sim's body was
+idealised — a flat torque clamp at the URDF's effort, armature 0.01, MuJoCo's
+default contact, the PD recomputed every 2 ms on exact joint states — and
+finding 5 of `docs/findings.md` (HimLoco tipping over on dp's stairwell in a
+third of the climbs, at pitch swings the posture check does not forgive)
+could not say whether that was the sim's doing. `g2_deploy_rs` ships its own
+MuJoCo simulation of the G23 (`mujoco_simulation_G23.py`), and what it
+models the robot with is now available here, each as a parameter whose
+default is the sim as it was: the J60 motor's torque-speed envelope, rotor
+inertia, dry friction and viscous damping (`j60`); the vendor MJCF's torso
+(`vendor`: 9.368 kg against the URDF's 8.03, and 2.5x the pitch inertia —
+which of the two is the robot is to be weighed); its contact parameters
+(`[0.005, 1]`, `[1, 0.01, 0.01]`); MuJoCo position actuators under the
+implicitfast integrator in place of the hand-computed torque; a command delay
+and a torque bandwidth, off like there. `scripts/gait_bench.py` is the
+ROS-free A/B: it spawns the robot before a fitted flight (or past it, to walk
+down backwards), drives a scripted command for N jittered runs and reports
+what finding 5 asks the robot for — falls, the pitch's mean / 5th / 95th
+percentile / extremes, roll, stalls, speed, heading drift — so a knob's
+effect and the robot's numbers can be read side by side. First matrix
+(2026-10-26, dp's first flight, HimLoco at 0.5 m/s for 10 s then 2 s still,
+up from 1 m before it and down backwards from 0.5 m past it, ten runs each
+with 3 cm / 2° of start jitter): no configuration fell in any of its 140
+runs, and the pitch barely moved between them — one flight on its own does
+not reproduce finding 5, whose falls came one flight in ten through the
+stack. What did move is the stalling under the 0.5 m/s command:
+
+| configuration | up: climbed in 10 s / stalls per run / pitch p5, min | down: speed / pitch p5, min |
+|---|---|---|
+| as it was | 0.79 m / 3.1 / −27, −31° | 0.33 m/s / −31, −38° |
+| `motor_model j60` | 0.97 m / 2.7 / −26, −30° | 0.29 / −30, −37° |
+| `trunk_inertial vendor` | 0.71 m / 4.4 / −26, −30° | 0.35 / −27, −31° |
+| j60 + vendor contact | 0.89 m / 6.8 / −25, −28° | 0.29 / −30, −33° |
+| + vendor trunk | 0.79 m / 7.0 / −26, −29° | 0.33 / −28, −31° |
+| + position actuators, implicitfast | 0.82 m / 7.6 / −26, −28° | 0.32 / −29, −32° |
+| + 1 kHz physics | 0.61 m / 11.4 / −25, −27° | 0.32 / −27, −30° |
+
+The stiffer contact and the finer step make the robot stall more under the
+same command, not fall; the vendor's heavier trunk changes the pitch
+envelope by a degree. The defaults stay as they were until the stack's own
+1F ↔ 2F batches say otherwise.
+
 The walking body is lower than the statue: `lidar_top_imu` rides **~0.44 m**
 over the ground in PPO's gait (0.444 standing at its default pose on dp),
 where the planner's and controllers' `lidar_height` is 0.481 — the value the
@@ -379,6 +436,16 @@ python3 -m syncai_sim --ros-args --params-file ... -p mode_switch_delay:=4.0
   Rendering is Mesa's llvmpipe; the full dp mesh is ~180 ms a frame at
   1280x720, the default 3 m height band (`visual_max_height_above_column_floor_m`)
   ~120 ms. The lidar and the collision queries never depend on it.
+* **The detailed picture is drawn in the browser, not in the container.**
+  llvmpipe over VNC is bounded by the CPU: ~120 ms a frame for the 3 m band,
+  at 10 fps with three cores busy. `--web-view` (viser: a websocket server
+  and a bundled three.js client, 2026-10-26) sends the site's tiles and the
+  robot's meshes once and then only poses, and the host's GPU draws them at
+  the browser's own rate with shadows. MuJoCo's own ways out were looked at:
+  its Filament renderer (3.17 has it) needs a GPU the container does not have,
+  and MuJoCo Studio's web mode ships without its `headless_ui` module in the
+  3.13–3.17 wheels (issue #3580). The GLFW window stays for a container
+  with a display; the two run together.
 * **The viewer is a GLFW window of our own, not `launch_passive`.** On
   llvmpipe the passive viewer paced itself on a vsync Xvnc does not have, so
   it rendered flat out (7-11 fps for ~3 cores, moving or not), its `sync()`

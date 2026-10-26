@@ -84,6 +84,17 @@ class SimConfig:
     # Walking only: fitted = the fitted flights as fixed boxes (stairs.py); voxels = the
     # patch's boxes there too, risers on the 0.1 m column grid (the sim before 2026-10-25)
     stairs: str = "fitted"
+    # Walking only, the body's physics (robot.py RobotConfig and legged.py say
+    # what each is; the defaults are the sim before 2026-10-26, the A/B
+    # against the robot is scripts/gait_bench.py):
+    motor_model: str = "ideal"  # ideal | j60
+    trunk_inertial: str = "urdf"  # urdf | vendor
+    foot_solref: tuple[float, float] = (0.02, 1.0)
+    foot_friction: tuple[float, float, float] = (1.0, 0.005, 0.0001)
+    actuator: str = "qfrc"  # qfrc | position
+    integrator: str = "euler"  # euler | implicitfast (scene.py)
+    cmd_delay_ms: float = 0.0
+    torque_bw_hz: float = 0.0
 
 
 @dataclass
@@ -137,7 +148,11 @@ class Simulator:
         cache_root = os.path.dirname(os.path.abspath(cfg.cache_dir))
         self.robot: RobotModel = load_robot(RobotConfig(
             urdf_path=cfg.urdf_path, lidar_height=cfg.lidar_height, articulated=self.legged,
-            mesh_cache_dir=os.path.join(cache_root, "robot")), log=log)
+            mesh_cache_dir=os.path.join(cache_root, "robot"),
+            motor_model=cfg.motor_model, trunk_inertial=cfg.trunk_inertial,
+            foot_solref=tuple(float(v) for v in cfg.foot_solref),
+            foot_friction=tuple(float(v) for v in cfg.foot_friction),
+            actuator=cfg.actuator), log=log)
         site = None
         if cfg.visual_mesh == "pointcloud":
             from .pcd_mesh import load_or_build
@@ -160,12 +175,15 @@ class Simulator:
                 g = self.world.grid
                 stairs = st.build(self.surface.flights, g.grid, g.origin_m, g.res, log=log)
         boxes = None if stairs is None else stairs.boxes
+        solref = tuple(float(v) for v in cfg.foot_solref)
         key = sc.scene_key(self.world, self.robot, cfg.props, timestep, capacity, cfg.visual_mesh,
-                           cfg.cache_dir, stairs=boxes)
+                           cfg.cache_dir, stairs=boxes, integrator=cfg.integrator,
+                           terrain_solref=solref)
         self.model = sc.cached_model(
             cfg.cache_dir, key,
             lambda: sc.build_scene(self.world, self.robot, cfg.props, timestep=timestep,
-                                   terrain_capacity=capacity, site=site, stairs=boxes)[0], log=log)
+                                   terrain_capacity=capacity, site=site, stairs=boxes,
+                                   integrator=cfg.integrator, terrain_solref=solref)[0], log=log)
         self.info = sc.scene_info(self.model, self.robot, cfg.props, capacity,
                                   list(self.world.storey_bounds))
         self.data = mujoco.MjData(self.model)
@@ -177,7 +195,9 @@ class Simulator:
         if self.legged:
             self.legs = LeggedController(self.model, self.data, self.info.base_body,
                                          load_policies(cfg.ppo_policy, cfg.himloco_policy, log=log),
-                                         log=log)
+                                         log=log, motor_model=cfg.motor_model,
+                                         actuator=cfg.actuator, cmd_delay_s=cfg.cmd_delay_ms / 1000.0,
+                                         torque_bw_hz=cfg.torque_bw_hz)
             self.patch = TerrainPatch(self.world.grid, cfg.terrain, self.surface,
                                       None if stairs is None else stairs.regions)
             self._gyro = self.model.sensor("imu_gyro").adr[0]
@@ -447,7 +467,7 @@ class Simulator:
         if self.legged:
             omega = self.data.qvel[self.legs.omega_adr:self.legs.omega_adr + 3].copy()
             dq = self.legs.dq()
-            tau = self.data.qfrc_applied[self.legs.vadr].copy()
+            tau = self.legs.tau()
         else:
             moving = self.state.last_event is Event.MOVED
             omega = R.T @ np.array([0.0, 0.0, self.cmd[2] if moving else 0.0])

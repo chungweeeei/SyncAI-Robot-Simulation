@@ -99,13 +99,26 @@ class SceneInfo:
     stair_geoms: list[int] = field(default_factory=list)  # the fixed stairs (stairs.py)
 
 
+INTEGRATORS = {"euler": mujoco.mjtIntegrator.mjINT_EULER,
+               "implicitfast": mujoco.mjtIntegrator.mjINT_IMPLICITFAST}
+
+
 def build_scene(world: World, robot: RobotModel, props: list[PropSpec],
                 timestep: float = 0.005, terrain_capacity: int = 0, site=None,
-                stairs: np.ndarray | None = None) -> tuple[mujoco.MjModel, SceneInfo]:
+                stairs: np.ndarray | None = None, integrator: str = "euler",
+                terrain_solref: tuple[float, float] = (0.02, 1.0)) -> tuple[mujoco.MjModel, SceneInfo]:
     """`site`: a pcd_mesh.PcdMesh to draw instead of the voxel mesh; `stairs`:
-    (K, 6) boxes, centre and half-sizes (stairs.StairBoxes.boxes)."""
+    (K, 6) boxes, centre and half-sizes (stairs.StairBoxes.boxes);
+    `integrator`: euler (MuJoCo's default) or implicitfast, which integrates
+    velocity-dependent forces — joint damping, a position actuator's kv —
+    implicitly (the pair for `actuator: position`, robot.py);
+    `terrain_solref`: the terrain and stair boxes' contact solref, the feet's
+    (RobotConfig.foot_solref) so that the pair's mean is that value."""
+    if integrator not in INTEGRATORS:
+        raise ValueError(f"integrator {integrator!r}: {' | '.join(INTEGRATORS)}")
     spec = mujoco.MjSpec.from_string(robot.mjcf)
     spec.option.timestep = timestep
+    spec.option.integrator = INTEGRATORS[integrator]
     spec.option.gravity[:] = (0.0, 0.0, -9.81)
     spec.visual.global_.offwidth = 1280
     spec.visual.global_.offheight = 720
@@ -161,12 +174,14 @@ def build_scene(world: World, robot: RobotModel, props: list[PropSpec],
                                        pos=(float(i), 0.0, TERRAIN_PARK_Z))
         body.add_geom(name=f"terrain{i}_geom", type=mujoco.mjtGeom.mjGEOM_BOX,
                       size=(half, half, half), contype=TERRAIN_CONTYPE,
-                      conaffinity=TERRAIN_CONAFFINITY, group=3, rgba=(0.9, 0.4, 0.2, 0.5))
+                      conaffinity=TERRAIN_CONAFFINITY, group=3, rgba=(0.9, 0.4, 0.2, 0.5),
+                      solref=terrain_solref)
     for i, b in enumerate(np.zeros((0, 6)) if stairs is None else stairs):
         spec.worldbody.add_geom(name=f"stair{i}", type=mujoco.mjtGeom.mjGEOM_BOX,
                                 pos=tuple(float(v) for v in b[:3]),
                                 size=tuple(float(v) for v in b[3:]), contype=TERRAIN_CONTYPE,
-                                conaffinity=TERRAIN_CONAFFINITY, group=3, rgba=(0.2, 0.6, 0.9, 0.5))
+                                conaffinity=TERRAIN_CONAFFINITY, group=3, rgba=(0.2, 0.6, 0.9, 0.5),
+                                solref=terrain_solref)
 
     for name, d, diffuse in (("sun", (0.35, 0.6, -1.0), 0.45), ("fill", (-0.6, -0.25, -0.8), 0.25)):
         spec.worldbody.add_light(name=name, pos=(0.0, 0.0, 30.0), dir=d,
@@ -223,8 +238,11 @@ def scene_info(model: mujoco.MjModel, robot: RobotModel, props: list[PropSpec],
 
 def scene_key(world: World, robot: RobotModel, props: list[PropSpec], timestep: float,
               terrain_capacity: int, visual_mesh: str, cache_dir: str,
-              stairs: np.ndarray | None = None) -> str:
-    """Everything the compiled scene depends on, as one string (cached_model)."""
+              stairs: np.ndarray | None = None, integrator: str = "euler",
+              terrain_solref: tuple[float, float] = (0.02, 1.0)) -> str:
+    """Everything the compiled scene depends on, as one string (cached_model).
+    The robot's config is in it whole (asdict), so every RobotConfig knob —
+    motor model, inertial, contact, actuators — is a different scene."""
     from . import pcd_mesh
     from .world import CACHE_FORMAT
 
@@ -247,6 +265,7 @@ def scene_key(world: World, robot: RobotModel, props: list[PropSpec], timestep: 
         "props": [asdict(p) for p in props], "timestep": timestep,
         "terrain_capacity": terrain_capacity, "site": site,
         "stairs": [] if stairs is None else np.round(stairs, 4).tolist(),
+        "integrator": integrator, "terrain_solref": list(terrain_solref),
     }, sort_keys=True, default=str)
 
 

@@ -3,6 +3,7 @@ the flight without the stair policy (refused), with it (climbed). Needs the
 workspace's octomap_planner_3d_cli (built in install/) and MuJoCo, so it runs
 in the container and skips elsewhere."""
 
+import math
 import os
 import shutil
 import subprocess
@@ -91,16 +92,51 @@ POLICY_DIR = os.environ.get("SYNCAI_POLICY_DIR",
                             os.path.join(os.path.dirname(__file__), "..", "policy"))
 
 
-def make_walking_sim(stairs_map, tmp_path):
+def make_walking_sim(stairs_map, tmp_path, **body):
     pytest.importorskip("onnxruntime")
     ppo = os.path.join(POLICY_DIR, "ppo", "policy7.onnx")
     him = os.path.join(POLICY_DIR, "isaacsim", "policy_0812.onnx")
     if not (os.path.isfile(ppo) and os.path.isfile(him)):
         pytest.skip(f"policies not under {POLICY_DIR} (policy/README.md)")
     cfg = SimConfig(map_dir=stairs_map, cache_dir=str(tmp_path / "cache"), urdf_path=URDF,
-                    locomotion="policy", physics_hz=500.0, ppo_policy=ppo, himloco_policy=him)
+                    locomotion="policy", physics_hz=500.0, ppo_policy=ppo, himloco_policy=him,
+                    **body)
     cfg.lidar.points_per_scan = 2000
     return Simulator(cfg, log=lambda *a: None)
+
+
+def test_walking_body_knobs_compile_into_the_model(stairs_map, tmp_path):
+    """The vendor's motor model, trunk and contact, MuJoCo actuators and the
+    implicit integrator: each lands in the compiled model and the robot
+    still stands and walks on the flat."""
+    import mujoco
+    from syncai_sim.robot import J60_ARMATURE, J60_FRICTIONLOSS
+    sim = make_walking_sim(stairs_map, tmp_path, motor_model="j60", trunk_inertial="vendor",
+                           foot_solref=(0.005, 1.0), foot_friction=(1.0, 0.01, 0.01),
+                           actuator="position", integrator="implicitfast", cmd_delay_ms=4.0)
+    m = sim.model
+    assert m.opt.integrator == mujoco.mjtIntegrator.mjINT_IMPLICITFAST
+    assert m.nu == 12 and sim.legs.act is not None
+    assert math.isclose(m.body_mass[sim.info.base_body], 9.368, abs_tol=1e-6)
+    knee = m.joint("FL_Knee_joint")
+    assert math.isclose(m.dof_armature[knee.dofadr[0]], J60_ARMATURE[2], rel_tol=1e-6)
+    assert math.isclose(m.dof_frictionloss[knee.dofadr[0]], J60_FRICTIONLOSS[2], rel_tol=1e-6)
+    foot = m.geom("FL_FOOT_collision") if "FL_FOOT_collision" in [m.geom(i).name for i in range(m.ngeom)] \
+        else None
+    terrain = m.geom(int(sim.info.terrain_geoms[0]))
+    assert np.allclose(terrain.solref, [0.005, 1.0])
+    if foot is not None:
+        assert np.allclose(foot.solref, [0.005, 1.0]) and np.allclose(foot.friction, [1.0, 0.01, 0.01])
+    first, y, low = foot_of_flight(sim)
+    sim.spawn(first - 3.0, y, 0.0, low)
+    drive(sim, 0.3, 4.0)
+    st = sim.status()
+    assert st["falls"] == 0, st
+    # The actuators carry it: torque on the joints, the trunk up on its legs, and
+    # it went forward (how fast is scripts/gait_bench.py's business).
+    assert np.abs(sim.legs.tau()).max() > 1.0
+    assert sim.data.xpos[sim.info.base_body][2] - sim.state.z_ground > 0.2, st
+    assert sim.state.x > first - 3.0 + 0.2, st
 
 
 def foot_of_flight(sim):

@@ -57,7 +57,7 @@ Python throughout (decided
 | the viewer's look (pcd surface, colours, storeys) | `pcd_mesh.py`, `visual.py`, `storeys.py` (picture only, never sensing); `StoreyView` in `viewer.py` |
 | ray cast / ground / blocked | `voxel_grid.py` |
 | the policies (port of g2_deploy_rs) | `policy.py` (`tests/test_policy.py`; names the Rust source of every constant) |
-| joints per motion state, PD, falls | `legged.py` |
+| joints per motion state, PD, the motor clamp, falls | `legged.py` (`tests/test_legged_motor.py`); the body's physics knobs (`motor_model`, `trunk_inertial`, contact, `actuator`, `integrator`, delays) are `RobotConfig` in `robot.py`, their A/B `scripts/gait_bench.py` |
 | the feet's ground (voxels -> boxes) | `terrain_patch.py` (numba, `tests/test_terrain_patch.py`) |
 | the feet's floor heights, flights fitted as staircases | `surface_heights.py`, `stairs.py`; stairs the track never climbed: `config/stair_walks/<map>.yaml`; slopes across voxel layers: `config/ramps/<map>.yaml` |
 | the step rule, gates, collisions (kinematic) | `kinematics.py` (pure Python, `tests/test_kinematics.py`) |
@@ -67,7 +67,7 @@ Python throughout (decided
 | the gait controller on driver_manager's UDP link (the session) | `controller_link.py` (`tests/test_controller_link.py`), `config/params/driver_manager_sim.yaml` |
 | services and `mode` (driver_link: fake) | `fake_driver.py` |
 | one physics tick, scan, spawn, teleport | `simulator.py` |
-| publishers, subscribers, the main loop | `ros_node.py`; CLI in `__main__.py` (sets `OPENBLAS_NUM_THREADS=1` before numpy); the viewer (own GLFW thread, `SiteView`) + teleop in `viewer.py` |
+| publishers, subscribers, the main loop | `ros_node.py`; CLI in `__main__.py` (sets `OPENBLAS_NUM_THREADS=1` before numpy); the viewer (own GLFW thread, `SiteView`) + teleop in `viewer.py`; the browser viewer (`--web-view`, viser, the site as GLB tiles once, poses at 20 Hz) in `web_view.py`, both at once through `Viewers` |
 | the session, the display, the test driver | `scripts/run_session.sh`, `scripts/vnc.sh`, `scripts/nav_test.py` |
 
 ## Running and testing (inside the container)

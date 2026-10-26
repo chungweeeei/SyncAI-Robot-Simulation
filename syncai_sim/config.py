@@ -95,6 +95,10 @@ def build_sim_config(ini: IniSettings, p: dict) -> SimConfig:
         initial_policy=p["initial_policy"], props=props,
         locomotion=p["locomotion"], ppo_policy=p["ppo_policy"],
         himloco_policy=p["himloco_policy"], visual_mesh=p["visual_mesh"], stairs=p["stairs"],
+        motor_model=p["motor_model"], trunk_inertial=p["trunk_inertial"],
+        foot_solref=tuple(p["foot_solref"]), foot_friction=tuple(p["foot_friction"]),
+        actuator=p["actuator"], integrator=p["integrator"],
+        cmd_delay_ms=p["cmd_delay_ms"], torque_bw_hz=p["torque_bw_hz"],
     )
 
 
@@ -116,7 +120,7 @@ PARAM_DEFAULTS: dict = {
     "visual_max_height_above_column_floor_m": 3.0, "plate_min_voxels": 16,
     "clip_spikes_above_neighbours_m": 0.2, "track_clear_radius_m": 0.30, "track_floor_fill_radius_m": 0.30,
     "floor_hole_max_cells": 25,
-    "visual_mesh": "voxels", "publish_map_cloud": True,
+    "visual_mesh": "voxels", "publish_map_cloud": True, "web_view_port": 8080,
     "driver_link": "fake", "controller_command_port": 50051, "controller_telemetry_port": 50010,
     "controller_telemetry_hz": 50.0, "battery_soc": 90.0, "battery_drain_per_hour": 0.0,
     "use_ini_initial_pose": True, "spawn": [0.0, 0.0, 0.0, 0.0],
@@ -130,6 +134,9 @@ PARAM_DEFAULTS: dict = {
     "mode_switch_delay": 1.0, "initial_motion_state": 1, "initial_policy": 0,
     "mode_publish_rate_hz": 2.0,
     "locomotion": "policy", "stairs": "fitted",
+    "motor_model": "ideal", "trunk_inertial": "urdf", "foot_solref": [0.02, 1.0],
+    "foot_friction": [1.0, 0.005, 0.0001], "actuator": "qfrc", "integrator": "euler",
+    "cmd_delay_ms": 0.0, "torque_bw_hz": 0.0,
     "ppo_policy": "/home/syncrobotic/sim/policy/ppo/policy7.onnx",
     "himloco_policy": "/home/syncrobotic/sim/policy/isaacsim/policy_0812.onnx",
     "physics_hz": 500.0, "pose_publish_hz": 50.0, "imu_publish_hz": 50.0,
