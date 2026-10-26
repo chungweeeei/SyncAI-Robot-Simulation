@@ -1,26 +1,28 @@
 """The browser viewer: the sim's picture drawn by the host's GPU.
 
-The GLFW window (viewer.py) renders on llvmpipe inside the container and
-reaches the browser as VNC video: 10 frames a second of the site at best,
-no shadows, the far tiles cut. This one keeps nothing of the rendering in
-the container. A viser server (a websocket plus a bundled three.js client)
-hands the browser the site once — every tile of the visual mesh as a GLB
-with vertex colours, the same height ramp visual.py paints — and the robot's
-decimated STLs once, then only poses: the robot's bodies and the props at
-`VIEW_HZ`, the last lidar scan as a point cloud, the terrain boxes under the
-feet when asked. The browser draws it all at its own frame rate with the
-Mac's GPU, orbits and zooms itself, and follows the robot by moving its
-look-at point while keeping whatever offset the mouse gave the camera.
+Nothing renders in the container. A viser server (a websocket plus a
+bundled three.js client) hands the browser the site once — every tile of
+the visual mesh as a GLB with vertex colours, the height ramp visual.py
+defines — and the robot's decimated STLs once, then only poses: the robot's
+bodies and the props at `VIEW_HZ`, the last lidar scan as a point cloud,
+the terrain boxes under the feet when asked. The browser draws it all at
+its own frame rate with the host's GPU, orbits and zooms itself, and follows
+the robot by moving its look-at point while keeping whatever offset the
+mouse gave the camera. The panel holds the storey switch, the layers, the
+status, the teleport, and with --teleop the sliders and motion keys
+(teleop.py applies them under the sim lock).
 
 Foxglove is still the stack's view (plans, costmaps, the map clouds); this
 one shows what the sim itself is made of — which tiles exist, what the feet
-stand on, where the rays went — and runs without a display in the container
-(`--headless --web-view`).
+stand on, where the rays went.
 
-The same surface as `Viewer` (`rate_hz`, `is_running`, `sync`, `show_scan`,
-`close`) so the main loop treats them alike; `Viewers` in viewer.py runs
-both at once. The site tiles are exported in a background thread so the sim
-starts at once; a browser that connects before they are in sees them arrive.
+Until 2026-10-26 the picture was a GLFW window of our own on the container's
+Xvnc display, Mesa's llvmpipe behind it, served by noVNC: ten frames a
+second of the site at best, no shadows, the far tiles cut, three cores busy
+(README, "Decisions worth knowing"). The main loop's contract is what that
+window had: `rate_hz`, `is_running`, `sync`, `show_scan`, `close`. The site
+tiles are exported in a background thread so the sim starts at once; a
+browser that connects before they are in sees them arrive.
 """
 
 from __future__ import annotations
@@ -35,7 +37,7 @@ import numpy as np
 from . import scene as sc
 from . import visual
 
-VIEW_HZ = 20.0  # poses to the browser per second (viewer.VIEW_HZ)
+VIEW_HZ = 20.0  # poses to the browser per second: a state copy is ~0.3 ms, 20 keep the gait fluid
 TERRAIN_HZ = 2.0  # the terrain boxes, when shown
 STATUS_HZ = 2.0
 SCAN_COLOUR = (255, 90, 30)
@@ -296,31 +298,35 @@ class WebView:
             for k, h in self._map.items():
                 h.visible = self._map_cloud.value and (self._shown is None or k in self._shown)
 
-        if self.teleop is not None and self.teleop.drive:
-            with gui.add_folder("Teleop"):
-                vx = gui.add_slider("vx m/s", -0.6, 0.8, 0.05, 0.0)
-                wz = gui.add_slider("wz rad/s", -1.5, 1.5, 0.05, 0.0)
-                stop = gui.add_button("Stop")
-                key1 = gui.add_button("Motion key 1 (RL)")
-                key5 = gui.add_button("Motion key 5 (MPC)")
-                policy = gui.add_button("Toggle policy 0 / 1")
-                home = gui.add_button("Teleport to the spawn")
-            from .viewer import KEY_1, KEY_5, KEY_P, KEY_T
+        if self.teleop is None:
+            return
+        # The teleport is wanted in the session too (a fall leaves the robot
+        # in Damping; teleop.py); the rest only when the sim is driven by hand.
+        home = gui.add_button("Teleport to the spawn", hint="back on the spawn, standing")
+        home.on_click(lambda _e: self.teleop.teleport_home())
+        if not self.teleop.drive:
+            return
+        with gui.add_folder("Teleop"):
+            vx = gui.add_slider("vx m/s", -0.6, 0.8, 0.05, 0.0)
+            wz = gui.add_slider("wz rad/s", -1.5, 1.5, 0.05, 0.0)
+            stop = gui.add_button("Stop")
+            key1 = gui.add_button("Motion key 1 (RL)")
+            key5 = gui.add_button("Motion key 5 (MPC)")
+            policy = gui.add_button("Toggle policy 0 / 1")
 
-            def drive(_event=None) -> None:
-                self.teleop.web_cmd = (float(vx.value), 0.0, float(wz.value))
-            vx.on_update(drive)
-            wz.on_update(drive)
+        def drive(_event=None) -> None:
+            self.teleop.set_cmd(vx.value, wz.value)
+        vx.on_update(drive)
+        wz.on_update(drive)
 
-            @stop.on_click
-            def _(_event) -> None:
-                vx.value = 0.0
-                wz.value = 0.0
-                self.teleop.web_cmd = (0.0, 0.0, 0.0)
-            key1.on_click(lambda _e: self.teleop.key(KEY_1))
-            key5.on_click(lambda _e: self.teleop.key(KEY_5))
-            policy.on_click(lambda _e: self.teleop.key(KEY_P))
-            home.on_click(lambda _e: self.teleop.key(KEY_T))
+        @stop.on_click
+        def _(_event) -> None:
+            vx.value = 0.0
+            wz.value = 0.0
+            self.teleop.stop()
+        key1.on_click(lambda _e: self.teleop.motion_key("1"))
+        key5.on_click(lambda _e: self.teleop.motion_key("5"))
+        policy.on_click(lambda _e: self.teleop.toggle_policy())
 
     def _wanted(self) -> set[int]:
         n = len(self.sim.info.storey_bounds) + 1

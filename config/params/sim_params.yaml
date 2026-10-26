@@ -16,9 +16,10 @@
     map_dir: ""
     cache_dir: ""         # default: <sim repo>/cache/<map name>
     # Viewer mesh only (world.py): faces higher than this above their column's
-    # lowest voxel are not drawn. Measured on dp at 1280x720 on llvmpipe: every
-    # face = 3.5 M triangles = 181 ms a frame; 2.5 m = 1.9 M = 119 ms. The lidar
-    # and the collision queries read the full grid regardless. 0 = draw all.
+    # lowest voxel are not in the picture (dp: every face is 3.5 M triangles,
+    # 3 m keeps 2.5 M; what the browser is sent, and what the llvmpipe window
+    # of before drew at 181 / 119 ms a frame). The lidar and the collision
+    # queries read the full grid regardless. 0 = draw all.
     visual_max_height_above_column_floor_m: 3.0
     plate_min_voxels: 16         # 18 k plates on dp; the floor under a prop is covered at 16, not at 100
     clip_spikes_above_neighbours_m: 0.2   # the mapping robot's own feet (world.py); 0 keeps them

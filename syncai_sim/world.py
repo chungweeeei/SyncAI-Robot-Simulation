@@ -8,8 +8,9 @@
 Why three forms. The *voxel grid* is what the lidar, the ground query and the
 trunk's blocking test read (`voxel_grid.py`): exact, fast, and the same tree
 the Octo3D planner plans on. MuJoCo never sees it. The *visual mesh* is only
-for the viewer — MuJoCo renders it, with contype 0 so nothing collides with its
-convex hull — and is the exposed voxel faces merged into rectangles (dp: 4.2 M
+for the picture — it sits in the MJCF with contype 0 so nothing collides with
+its convex hull, and web_view.py sends its tiles to the browser — and is the
+exposed voxel faces merged into rectangles (dp: 4.2 M
 faces -> 1.75 M quads -> 3.5 M triangles, under 2 M with the height band). The
 *plates* are the few large boxes the greedy merge produces (floor slabs, long
 walls) kept as real collision geoms so that props — the box the robot pushes,
@@ -42,7 +43,8 @@ class WorldOptions:
     # Visual mesh only: drop faces of voxels higher than this above the LOWEST
     # voxel of their (x, y) column. 0 keeps every face. Ceilings and high walls
     # are most of a lidar map's triangles and matter to nothing the viewer
-    # shows about navigation, so this is the frame-rate knob; the voxel grid
+    # shows about navigation, so this is the size knob (what the browser is
+    # sent, and what the llvmpipe window of before had to draw); the voxel grid
     # the sensors read is never filtered. The column's lowest voxel is a crude
     # "ground" (under a balcony it is the floor below), hence a knob, not a
     # default.

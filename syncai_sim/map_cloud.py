@@ -1,8 +1,8 @@
 """The site as a point cloud for Foxglove: `map.pcd`, thinned, one per storey.
 
-The MuJoCo viewer renders in software (llvmpipe over VNC), so the detail of a
-lidar map is out of its reach; Foxglove on the host draws millions of points
-on the GPU. The sim publishes this once, latched (`sim/map_cloud/storey<N>`,
+Foxglove on the host draws millions of points on the GPU (and the browser
+viewer, web_view.py, shows the same clouds on request). The sim publishes
+this once, latched (`sim/map_cloud/storey<N>`,
 frame `map`), with the points' intensity, which is what makes a lidar map
 legible — floor markings, signs, glass — and a colour-by-height mode is one
 click in the panel.

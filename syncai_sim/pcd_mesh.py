@@ -21,7 +21,8 @@ next to the world:
    0.25 m keep the floor whole across the lidar's blind cone under the
    mapper; 10 % and 8 cm cut it full of holes (same date).
 4. Quadric decimation to `target_triangles`, the voxel mesh's size (dp: 1.8 M
-   voxel triangles; llvmpipe draws ~120 ms per 2 M).
+   voxel triangles; a size the browser takes in a second, and that the
+   llvmpipe window of before drew at ~120 ms per 2 M).
 
 dp: ~3.5 min and ~4 GB. The surface is a picture: the lidar, the feet and the
 planner still read the voxels (CLAUDE.md, rule 2), whose floor tops are up

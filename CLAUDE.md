@@ -54,7 +54,7 @@ Python throughout (decided
 |---|---|
 | map -> world (parse, mesh, plates, cache) | `world.py`, `btree.py`, `greedy_mesh.py` |
 | Foxglove (map clouds, joint_states, bridge) | `map_cloud.py`, `config/foxglove/bridge.yaml`, `scripts/foxglove.sh`; mesh URIs in `launch/rsp.launch.py` |
-| the viewer's look (pcd surface, colours, storeys) | `pcd_mesh.py`, `visual.py`, `storeys.py` (picture only, never sensing); `StoreyView` in `viewer.py` |
+| the viewer's look (pcd surface, colours, storeys) | `pcd_mesh.py`, `visual.py`, `storeys.py` (picture only, never sensing); the storey switch and the layers are the panel in `web_view.py` |
 | ray cast / ground / blocked | `voxel_grid.py` |
 | the policies (port of g2_deploy_rs) | `policy.py` (`tests/test_policy.py`; names the Rust source of every constant) |
 | joints per motion state, PD, the motor clamp, falls | `legged.py` (`tests/test_legged_motor.py`); the body's physics knobs (`motor_model`, `trunk_inertial`, contact, `actuator`, `integrator`, delays) are `RobotConfig` in `robot.py`, their A/B `scripts/gait_bench.py` |
@@ -67,16 +67,15 @@ Python throughout (decided
 | the gait controller on driver_manager's UDP link (the session) | `controller_link.py` (`tests/test_controller_link.py`), `config/params/driver_manager_sim.yaml` |
 | services and `mode` (driver_link: fake) | `fake_driver.py` |
 | one physics tick, scan, spawn, teleport | `simulator.py` |
-| publishers, subscribers, the main loop | `ros_node.py`; CLI in `__main__.py` (sets `OPENBLAS_NUM_THREADS=1` before numpy); the viewer (own GLFW thread, `SiteView`) + teleop in `viewer.py`; the browser viewer (`--web-view`, viser, the site as GLB tiles once, poses at 20 Hz) in `web_view.py`, both at once through `Viewers` |
-| the session, the display, the test driver | `scripts/run_session.sh`, `scripts/vnc.sh`, `scripts/nav_test.py` |
+| publishers, subscribers, the main loop | `ros_node.py`; CLI in `__main__.py` (sets `OPENBLAS_NUM_THREADS=1` before numpy); the viewer (viser: the site as GLB tiles once, poses at 20 Hz, drawn by the host's browser; nothing renders in the container) in `web_view.py`, its panel's driving in `teleop.py` |
+| the session, the test driver | `scripts/run_session.sh`, `scripts/nav_test.py` |
 
 ## Running and testing (inside the container)
 
 ```bash
 docker compose up -d && docker compose exec sim bash
 source /opt/ros/humble/setup.bash && source /opt/ros2_rust_underlay/install/setup.bash && source install/setup.bash
-/home/syncrobotic/sim/scripts/vnc.sh                 # http://localhost:6080/vnc.html?autoconnect=1&resize=remote
-/home/syncrobotic/sim/scripts/run_session.sh         # logs: log/stack/sim01/sim/<pane>/current
+/home/syncrobotic/sim/scripts/run_session.sh         # logs: log/stack/sim01/sim/<pane>/current; the picture: http://localhost:8080
 python3 /home/syncrobotic/sim/scripts/nav_test.py --goal 3 0 0
 python3 -m pytest /home/syncrobotic/sim/tests
 ```

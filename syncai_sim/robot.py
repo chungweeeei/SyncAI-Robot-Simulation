@@ -131,9 +131,10 @@ class RobotConfig:
     # Visual STLs decimated (open3d quadric) into this directory, each to
     # `mesh_decimation` of its triangles, never under `mesh_min_triangles`.
     # The URDF's meshes are 274 k triangles (body 100 k, each shank 27 k):
-    # on llvmpipe the robot alone cost ~50 ms a frame at 1600x1000, as much
-    # as a storey of the site (2026-10-24). Collision is primitives, so this
-    # is the picture only. None = the URDF's files as they are.
+    # 29 k look the same in the browser viewer (web_view.py sends them once
+    # as GLB) and cost the llvmpipe window of before ~50 ms a frame less
+    # (2026-10-24). Collision is primitives, so this is the picture only.
+    # None = the URDF's files as they are.
     mesh_cache_dir: str | None = None
     mesh_decimation: float = 0.15
     mesh_min_triangles: int = 3000

@@ -9,18 +9,19 @@ wants touch:
     world plates   1 / 1      the few big boxes; stop props, never the trunk
     trunk boxes    2 / 2      meet props only (the world is VoxelGrid's job)
     props          2 / 3      meet plates (1 & 3) and the trunk (2 & 2)
-    visual mesh    0 / 0      the viewer's copy of the site; collides with nothing
+    visual mesh    0 / 0      the picture's copy of the site; collides with nothing
     terrain patch  0 / 4      articulated robot only: voxel boxes the legs (4 / 0)
                               and the trunk (6 / 2) stand on (terrain_patch.py)
     stairs         0 / 4      the same, the fitted flights as fixed boxes (stairs.py)
 
-Geom groups (the viewer toggles them with keys 0-5): 0 site mesh, 1 robot STL
-visuals, 2 props, 3 collision primitives and plates (hidden), 4 the mocap
-handle (hidden), 5 the hidden part of the site (the viewer moves the storeys
-and tiles it does not draw there, viewer.SiteView). The lidar never asks MuJoCo
-about any of them — rays go to VoxelGrid for the site and to `prop_rays.py`
-for the props (mj_multiRay scans every geom per ray; 18 k plates would cost
-hundreds of milliseconds a scan).
+Geom groups: 0 site mesh (the tiles web_view.py sends the browser), 1 robot
+STL visuals (sent too), 2 props, 3 collision primitives and plates, 4 the
+mocap handle. Nothing renders in the container; the groups are what the
+browser viewer picks its meshes by, and what MuJoCo's own viewer would show
+if the MJB were opened in it. The lidar never asks MuJoCo about any of them —
+rays go to VoxelGrid for the site and to `prop_rays.py` for the props
+(mj_multiRay scans every geom per ray; 18 k plates would cost hundreds of
+milliseconds a scan).
 
 Props come from the params as a list of dicts (see `PropSpec`): a pushable box
 is a free body with mass; a "person" is a mocap cylinder the node walks between
@@ -46,11 +47,12 @@ from . import visual
 from .robot import TERRAIN_BIT, RobotModel
 from .world import World
 
-# The site's visual meshes are cut into squares of this side, one geom each,
-# so the viewer can draw only those near the robot (viewer.SiteView): llvmpipe's
-# cost is per triangle and dp's ground floor is 1.4 M of them. 10 m: ~100
-# tiles a storey on dp, a few hundred geoms in all, nothing mjv_updateScene
-# notices (0.1 ms for 20 k geoms).
+# The site's visual meshes are cut into squares of this side, one geom each:
+# the browser viewer (web_view.py) sends each as its own GLB and shows or
+# hides them by storey, and a tile is a message a websocket takes in its
+# stride (dp: ~1000 tiles for 2.5 M triangles, under a second). The GLFW
+# window of before drew only the tiles within 30 m for the same reason
+# (llvmpipe's cost was per triangle).
 TILE_M = 10.0
 # Bumped when the compiled scene changes without any input changing: the MJB
 # cache (cached_model) is keyed on it.
@@ -124,9 +126,11 @@ def build_scene(world: World, robot: RobotModel, props: list[PropSpec],
     spec.visual.global_.offheight = 720
     spec.visual.map.znear = 0.02
     spec.visual.map.zfar = 400.0  # a site is 100 m across; the default 50 clips it
-    # A dim headlight plus two oblique suns from different azimuths (below):
-    # walls facing x and facing y then differ in brightness, which is most of
-    # what makes a voxel site read as 3D. No shadows: llvmpipe.
+    # Lights, sky and haze for whoever opens the MJB in MuJoCo's own viewer
+    # (nothing in the container renders it; the browser viewer lights its
+    # own scene): a dim headlight plus two oblique suns from different
+    # azimuths (below), so walls facing x and facing y differ in brightness,
+    # which is most of what makes a voxel site read as 3D.
     spec.visual.headlight.ambient[:] = (0.30, 0.30, 0.30)
     spec.visual.headlight.diffuse[:] = (0.35, 0.35, 0.35)
     spec.visual.headlight.specular[:] = (0.0, 0.0, 0.0)
@@ -135,7 +139,7 @@ def build_scene(world: World, robot: RobotModel, props: list[PropSpec],
                            builtin=mujoco.mjtBuiltin.mjBUILTIN_GRADIENT, width=256, height=256)
     sky.rgb1[:] = visual.SKY_TOP
     sky.rgb2[:] = visual.SKY_BOTTOM
-    spec.stat.extent = 60.0  # frames the whole site in the viewer's default zoom
+    spec.stat.extent = 60.0  # frames the whole site in MuJoCo's viewer's default zoom
     spec.stat.center[:] = (np.array(world.stats.bounds_min_m) + world.stats.bounds_max_m) / 2
 
     # The site, visual only: one mesh per face direction, coloured by height (visual.py).

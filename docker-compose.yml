@@ -64,24 +64,13 @@ services:
     #     listen on the host directly; OrbStack forwards them to macOS).
     network_mode: "${SIM_NETWORK_MODE:-bridge}"
     ports:
-      - "6080:6080"   # noVNC: the MuJoCo viewer in a browser, http://localhost:6080/vnc.html?autoconnect=1&resize=remote
-      - "5901:5901"   # the same display for a native VNC client
+      - "${SIM_WEB_VIEW_PORT:-8080}:8080"   # the sim's browser viewer (web_view.py), http://localhost:8080
       - "8765:8765"   # foxglove_bridge: Foxglove on the host, ws://localhost:8765
-      - "${SIM_WEB_VIEW_PORT:-8080}:8080"   # the sim's browser viewer (--web-view, web_view.py), http://localhost:8080
     environment:
       HOME: /home/syncrobotic
       ROS_DOMAIN_ID: "${SIM_ROS_DOMAIN_ID:-42}"
       RMW_IMPLEMENTATION: rmw_cyclonedds_cpp
       CYCLONEDDS_URI: "${SIM_CYCLONEDDS_URI:-/home/syncrobotic/sim/config/cyclonedds.xml}"
-      # The container's own X server (scripts/vnc.sh starts Xvnc on :1 and
-      # serves it to a browser on 6080). Not ${DISPLAY}: on a Mac that is
-      # XQuartz's launchd socket path and means nothing in here.
-      DISPLAY: "${SIM_DISPLAY:-:1}"
-      # Xvnc's starting screen size (scripts/vnc.sh); the browser URL resizes it.
-      SIM_VNC_GEOMETRY: "${SIM_VNC_GEOMETRY:-1600x1000}"
-      # Mesa software rendering for the MuJoCo viewer; GLFW over X11.
-      LIBGL_ALWAYS_SOFTWARE: "1"
-      MUJOCO_GL: glfw
       # numba's parallel ray caster: the image's TBB is older than numba wants
       # (a warning per process otherwise); OpenMP is there via gcc's libgomp.
       NUMBA_THREADING_LAYER: omp

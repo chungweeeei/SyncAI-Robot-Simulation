@@ -1,73 +1,71 @@
-"""Hold-to-drive teleop (viewer.py): a velocity only while an arrow is down."""
+"""Teleop (teleop.py): a held command from the browser's panel, a stop once,
+the keys as closures under the lock, and the session's teleport-only mode."""
 
-import time
+from syncai_sim.teleop import Teleop
 
-import pytest
 
-viewer = pytest.importorskip("syncai_sim.viewer")
+class FakeDriver:
+    policy = 0
+
+    def set_motion_key(self, key):
+        return f"ok {key}"
+
+    def set_policy_mode(self, mode):
+        FakeDriver.policy = mode
+        return "ok"
 
 
 class FakeSim:
     def __init__(self):
-        self.cmd = None
+        self.cmds = []
+        self.driver = FakeDriver()
+        self.teleported = None
 
     def set_cmd(self, vx, vy, wz):
-        self.cmd = (vx, vy, wz)
+        self.cmds.append((vx, vy, wz))
+
+    def teleport(self, x, y, yaw, z):
+        self.teleported = (x, y, yaw, z)
 
 
-def test_keymap_held_drives_and_release_stops():
-    t = viewer.Teleop((0, 0, 0, 0), log=lambda *a: None)
+def test_command_is_held_and_the_stop_sent_once():
+    t = Teleop((0, 0, 0, 0), log=lambda *a: None)
     sim = FakeSim()
-    t.set_held({"up", "left"})
     t.apply(sim)
-    assert sim.cmd == (t.vx_speed, 0.0, t.wz_speed)
-    t.set_held({"down", "right"})
+    assert sim.cmds == []  # nothing touched: the nav stack's cmd_vel stands
+    t.set_cmd(0.4, -0.2)
     t.apply(sim)
-    assert sim.cmd == (-t.vx_speed, 0.0, -t.wz_speed)
-    t.set_held({"up", "down"})  # opposite keys cancel
     t.apply(sim)
-    assert sim.cmd == (0.0, 0.0, 0.0)
-    t.set_held(set())  # released
+    assert sim.cmds == [(0.4, 0.0, -0.2)] * 2  # every loop while moving
+    t.stop()
     t.apply(sim)
-    assert sim.cmd == (0.0, 0.0, 0.0)
+    t.apply(sim)
+    assert sim.cmds == [(0.4, 0.0, -0.2)] * 2 + [(0.0, 0.0, 0.0)]  # one stop, then nothing
 
 
-def test_without_keymap_a_press_lapses():
-    t = viewer.Teleop((0, 0, 0, 0), log=lambda *a: None)
+def test_keys_run_under_the_lock_in_order():
+    logged = []
+    t = Teleop((0, 0, 0, 0), log=logged.append)
     sim = FakeSim()
-    t.key(viewer.KEY_UP)
+    t.motion_key("1")
+    t.toggle_policy()
+    t.toggle_policy()
+    t.teleport_home()
+    assert sim.teleported is None  # queued, not run
     t.apply(sim)
-    assert sim.cmd[0] == pytest.approx(t.vx_speed)
-    assert t.held(time.monotonic() + viewer.PRESS_HOLD_S + 0.01) == set()
-    t.key(viewer.KEY_UP)
-    t.key(viewer.KEY_SPACE)  # space drops the pending presses
-    t.apply(sim)
-    assert sim.cmd == (0.0, 0.0, 0.0)
+    assert logged[0] == "[teleop] key 1 -> ok 1"
+    assert FakeDriver.policy == 0 and "policy -> 1" in logged[1] and "policy -> 0" in logged[2]
+    assert sim.teleported == (0, 0, 0, 0)
 
 
-def test_speed_keys_scale_and_clamp():
-    t = viewer.Teleop((0, 0, 0, 0), log=lambda *a: None)
-    v0 = t.vx_speed
-    t.key(viewer.KEY_EQUAL)
-    assert t.vx_speed == pytest.approx(v0 * 1.25)
-    for _ in range(20):
-        t.key(viewer.KEY_EQUAL)
-    assert t.vx_speed == 0.8
-    for _ in range(40):
-        t.key(viewer.KEY_MINUS)
-    assert t.vx_speed == 0.1
-
-
-def test_without_drive_only_teleport():
-    # The session (no --teleop): arrows and motion keys are the nav stack's.
-    t = viewer.Teleop((1.0, 2.0, 0.0, 0.5), log=lambda *a: None, drive=False)
+def test_without_drive_only_the_teleport():
+    # The session (no --teleop): the command and the keys are the nav stack's.
+    t = Teleop((1.0, 2.0, 0.0, 0.5), log=lambda *a: None, drive=False)
     sim = FakeSim()
-    sim.teleported = None
-    sim.teleport = lambda x, y, yaw, z: setattr(sim, "teleported", (x, y, yaw, z))
-    t.set_held({"up"})
-    t.key(viewer.KEY_UP)
-    t.key(viewer.KEY_P)
-    t.key(viewer.KEY_T)
+    t.set_cmd(0.5, 0.0)
+    t.motion_key("5")
+    t.toggle_policy()
+    t.teleport_home()
     t.apply(sim)
-    assert sim.cmd is None
+    assert sim.cmds == []
     assert sim.teleported == (1.0, 2.0, 0.5, 0.0)

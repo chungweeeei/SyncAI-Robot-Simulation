@@ -1,6 +1,6 @@
 """python3 -m syncai_sim: run the simulator, as a ROS 2 node by default.
 
-    python3 -m syncai_sim [--teleop] [--headless] [--web-view] [--show-scan] [--no-ros]
+    python3 -m syncai_sim [--teleop] [--headless] [--no-ros]
                           [--system-config INI] [--map DIR] [--seconds S]
                           [--locomotion policy|kinematic] [--visual-mesh pointcloud|voxels]
                           [--ros-args --params-file ... -p key:=value ...]
@@ -9,6 +9,8 @@ Everything after `--ros-args` goes to rclpy (the params file is
 config/params/sim_params.yaml; see it for every setting). The INI
 (config/system.ini relative to the cwd, i.e. the workspace root) gives the
 robot_id, the map and the spawn pose, as it does for every launch file.
+The browser viewer (web_view.py, the `web_view_port` parameter) is served
+unless --headless; --teleop puts the driving controls on its panel.
 """
 
 from __future__ import annotations
@@ -36,11 +38,8 @@ def main(argv=None) -> int:
         own, ros_args = argv, []
     ap = argparse.ArgumentParser(prog="python3 -m syncai_sim", description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--teleop", action="store_true", help="drive with the viewer's keyboard")
-    ap.add_argument("--headless", action="store_true", help="no viewer window")
-    ap.add_argument("--web-view", action="store_true",
-                    help="serve the browser viewer (web_view.py) on the web_view_port parameter")
-    ap.add_argument("--show-scan", action="store_true", help="draw a thinned lidar scan in the viewer")
+    ap.add_argument("--teleop", action="store_true", help="driving controls on the viewer's panel")
+    ap.add_argument("--headless", action="store_true", help="no browser viewer")
     ap.add_argument("--no-ros", action="store_true", help="run without ROS (viewer / teleop only)")
     ap.add_argument("--system-config", default=None, help="the instance INI (default config/system.ini)")
     ap.add_argument("--map", default=None, help="map/<name> directory (default: the INI's [map])")
@@ -87,9 +86,9 @@ def main(argv=None) -> int:
             node.publish_map_clouds(clouds)
     spinner = Spinner(node)
     spinner.start()
-    teleop, viewer_factory = _viewers(a, sim, spawn, params["web_view_port"], log)
+    teleop, viewer_factory = _viewer(a, sim, spawn, params["web_view_port"], log)
     try:
-        run_loop(node, viewer_factory, teleop, a.show_scan or a.web_view, a.seconds, log)
+        run_loop(node, viewer_factory, teleop, True, a.seconds, log)
     except KeyboardInterrupt:
         pass
     finally:
@@ -103,39 +102,23 @@ def main(argv=None) -> int:
     return 0
 
 
-def _viewers(a, sim, spawn, web_port: int, log):
-    """(teleop, viewer factory) for the flags: the GLFW window unless
-    --headless, the browser viewer with --web-view, both as one (Viewers);
-    the scan is drawn in the window only with --show-scan, in the browser
-    always (its checkbox)."""
-    if a.headless and not a.web_view:
+def _viewer(a, sim, spawn, web_port: int, log):
+    """(teleop, viewer factory): the browser viewer unless --headless; its
+    panel drives the robot with --teleop, teleports in any case."""
+    if a.headless:
         return None, None
-    from .viewer import HELP, Teleop, Viewer, Viewers
+    from .teleop import Teleop
     teleop = Teleop(spawn, log=log, drive=a.teleop)
-    if a.teleop:
-        log(HELP)
 
     def factory():
-        members, scan = [], []
-        if not a.headless:
-            v = Viewer(sim, teleop, log=log)
-            members.append(v)
-            if a.show_scan:
-                scan.append(v)
-        if a.web_view:
-            try:
-                from .web_view import WebView
-                w = WebView(sim, teleop, port=web_port, log=log)
-            except ImportError as err:
-                # The session asks for it on every start; an image built
-                # before viser was in requirements.txt runs without it.
-                log(f"[web] no browser viewer: {err} (pip install viser, or rebuild the image)")
-            else:
-                members.append(w)
-                scan.append(w)
-        if not members:
+        try:
+            from .web_view import WebView
+        except ImportError as err:
+            # An image built before viser was in requirements.txt runs without
+            # a picture rather than not at all.
+            log(f"[web] no browser viewer: {err} (rebuild the image)")
             return None
-        return Viewers(members, scan)
+        return WebView(sim, teleop, port=web_port, log=log)
     return teleop, factory
 
 
@@ -162,9 +145,8 @@ def _run_without_ros(ini, a) -> int:
     sim = Simulator(cfg)
     spawn = _spawn_pose(ini, params)
     sim.spawn(*spawn[:2], spawn[3], spawn[2])
-    teleop, factory = _viewers(a, sim, spawn, params["web_view_port"], print)
+    teleop, factory = _viewer(a, sim, spawn, params["web_view_port"], print)
     viewer = factory() if factory else None
-    show_scan = a.show_scan or a.web_view
     dt = sim.model.opt.timestep
     t_start = time.perf_counter()
     next_t = t_start
@@ -192,7 +174,7 @@ def _run_without_ros(ini, a) -> int:
                 xyzi = sim.scan()
                 n = xyzi.shape[0]
                 scan_ms = (time.perf_counter() - t0) * 1000
-                if viewer is not None and show_scan:
+                if viewer is not None:
                     viewer.show_scan(sim)
             if viewer is not None and now >= next_view:
                 next_view = now + 1 / viewer.rate_hz

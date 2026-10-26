@@ -6,7 +6,7 @@ site**, built so the navigation stack in
 — above all its 3D branch: the `Octo3D` planner, the `TerrainLayer`, stair
 mode and the `*_3d.xml` behaviour trees — can run **end to end without a
 robot**. One container holds the workspace's own nav stack and the simulator,
-on a DDS domain of its own; the viewer is served to a browser.
+on a DDS domain of its own; the picture is served to a browser.
 
 What the simulator is, in one paragraph: the site's `octomap.bt` (written by
 `syncai_mapping`'s `clean_map --octomap 1`) becomes a voxel world; the G23
@@ -18,7 +18,8 @@ pattern recorded from the real one; and one ROS 2 node
 publishes exactly what the Livox driver, Point-LIO, the localizer and
 `driver_manager` publish on the robot, so the planner, costmaps, controller,
 task_runner and lio_bridge run **unchanged, from the workspace's own
-`install/`**.
+`install/`**. The picture is drawn by the host's browser (`web_view.py`):
+nothing renders in the container.
 
 Two locomotions, `locomotion` in the params: **policy** (the default, above)
 and **kinematic** — the robot as a rigid statue carried along the ground by
@@ -30,15 +31,14 @@ motion state MPC walk on PPO).
 ## Layout
 
 ```
-Dockerfile, docker-compose.yml     one container: FROM the workspace's syncai-robot-base + MuJoCo + numba + Xvnc/noVNC
-.env.example                       ROBOT_WS (the workspace checkout to mount) and the display
+Dockerfile, docker-compose.yml     one container: FROM the workspace's syncai-robot-base + MuJoCo + numba + viser; no display, no GPU
+.env.example                       ROBOT_WS (the workspace checkout to mount), the viewer's port, the network mode
 config/instances/sim01.ini         the instance INI bind-mounted over the workspace's config/system.ini
 config/cyclonedds.xml              the robot's DDS config with Domain Id="any" (ROS_DOMAIN_ID 42 in compose)
 config/params/sim_params.yaml      every sim_node parameter, with the stack value each one mirrors
 config/sessions/start_sim.yaml     the session spec (start_nav.yaml with the hardware replaced)
 launch/rsp.launch.py               robot_state_publisher alone (bringup.launch.py would start the lidar)
 scripts/run_session.sh             runs a spec as process groups with logs, no byobu (the CI smoke test's loop)
-scripts/vnc.sh                     the container's display: Xvnc :1 + noVNC on 6080
 scripts/nav_test.py                sends a NavigateToGoal and reports collisions / result
 syncai_sim/                        the Python package (python3 -m syncai_sim)
   btree.py                           OctoMap .bt reader (no octomap dependency)
@@ -64,8 +64,8 @@ config/lidar/mid360_pattern.npz    that bank, from the workspace's record/dp (co
 scripts/lidar_pattern.py           rebuilds it from any MID360 recording
   fake_driver.py                     set_motion_key / set_policy_mode / mode
   simulator.py                       the ROS-free core (step, scan, imu, spawn, teleport)
-  ros_node.py, viewer.py, __main__.py the node, the viewer (a GLFW window of our own: frame cap, tiles within reach) with teleop, the CLI
-  web_view.py                        the browser viewer (--web-view): the site and the robot sent once, poses streamed, drawn by the host's GPU
+  ros_node.py, __main__.py           the node and the CLI
+  web_view.py, teleop.py             the viewer: the site and the robot sent to the browser once, poses streamed, drawn by the host's GPU; its panel's driving
 policy/                            the G23's ONNX policies, gitignored: copy them in (policy/README.md)
 tests/                             pytest; ROS-free except test_simulator_synthetic (needs the ROS env + workspace install)
 docs/findings.md                   what the sim found about the navigation stack
@@ -110,8 +110,7 @@ root, after sourcing the ROS environment):
 
 ```bash
 source /opt/ros/humble/setup.bash && source /opt/ros2_rust_underlay/install/setup.bash && source install/setup.bash
-/home/syncrobotic/sim/scripts/vnc.sh               # the display; then open http://localhost:6080/vnc.html?autoconnect=1&resize=remote on the host (the picture follows the browser window)
-/home/syncrobotic/sim/scripts/run_session.sh       # the whole stack + the sim, logs under log/stack/sim01/sim/<pane>/current
+/home/syncrobotic/sim/scripts/run_session.sh       # the whole stack + the sim, logs under log/stack/sim01/sim/<pane>/current; the picture at http://localhost:8080 on the host
 python3 /home/syncrobotic/sim/scripts/nav_test.py --goal 3.0 0.0 0.0     # send the robot 3 m ahead
 /home/syncrobotic/sim/scripts/run_session.sh --stop
 ```
@@ -119,29 +118,29 @@ python3 /home/syncrobotic/sim/scripts/nav_test.py --goal 3.0 0.0 0.0     # send 
 The first run on a map builds its cache (dp: ~12 s — parsing 1.6 M occupied
 leaves, merging faces into a 3.5 M-triangle viewer mesh, 18 k collision
 plates, a 133 MB voxel grid) and compiles the scene (~5 s; cached as an
-MJB, so later starts take about a second). The viewer follows the robot:
-left-drag orbits, scroll zooms, `9` cycles the storeys, keys `0 2 3 4`
-toggle geom groups (0 the site, 2 props, 3 collision shapes, 4 the mocap
-handle), `h` lists the teleop keys. In the session (no `--teleop`: the nav
-stack owns `cmd_vel`) only `t` and `h` answer: `t` puts the robot back on the
-spawn, standing.
+MJB, so later starts take about a second).
 
-**The browser viewer** (`--web-view`, `web_view.py`): the same scene drawn by
-the host's GPU at `http://localhost:8080` (compose maps the container's
-`web_view_port`; `SIM_WEB_VIEW_PORT` moves it). The site's tiles and the
-robot's meshes go over once, then only poses at 20 Hz, so it draws at the
-browser's frame rate with shadows where llvmpipe over VNC managed ten frames a
-second; the panel has the storey switch, follow-robot, the last scan, the
-terrain boxes and fitted stairs under the feet, the lidar map per storey, and
-with `--teleop` sliders and the motion keys. It needs no display in the
-container (`--headless --web-view`) and runs beside the GLFW window otherwise.
+**The viewer** (`web_view.py`) is a page the host's browser draws:
+`http://localhost:8080` (compose maps the container's `web_view_port`;
+`SIM_WEB_VIEW_PORT` moves it; with a host network the sim listens on 8080
+itself). The site's tiles and the robot's meshes go over once (dp: 1078
+tiles, 2.5 M triangles, in a second), then only poses at 20 Hz, so it draws
+at the browser's own frame rate with shadows, on the host's GPU; nothing
+renders in the container. Left-drag orbits, scroll zooms; the panel has the
+storey switch (auto: the robot's storey and those below it, so the floor
+above never hides the robot), follow-robot (the camera's look-at follows,
+the offset the mouse gave it stays), the last lidar scan, the terrain boxes
+and fitted stairs under the feet, the lidar map per storey, the status, and
+the teleport back to the spawn — wanted after a fall in the session too.
+With `--teleop` it also has the driving sliders and the motion keys
+(`teleop.py`; in the session the nav stack owns `cmd_vel`, so there are
+none). `--headless` serves no viewer.
 
 The simulator alone, without the stack:
 
 ```bash
-python3 -m syncai_sim --no-ros --teleop            # drive with the arrow keys in the viewer window (press h for help)
-python3 -m syncai_sim --no-ros --teleop --headless --web-view   # the same in the browser: http://localhost:8080
-python3 -m syncai_sim --headless --seconds 30      # as a ROS node, no window (CI)
+python3 -m syncai_sim --no-ros --teleop            # drive from the panel at http://localhost:8080
+python3 -m syncai_sim --headless --seconds 30      # as a ROS node, no viewer (CI)
 python3 -m syncai_sim.world map/dp                 # (re)build a map's cache and print its stats
 python3 -m pytest /home/syncrobotic/sim/tests      # unit tests; the synthetic-stairs one needs the workspace install
 ```
@@ -325,20 +324,20 @@ where the planner's and controllers' `lidar_height` is 0.481 — the value the
 kinematic body is built to. One of the two is not the robot; worth measuring
 on the real G23 before trusting the planner's ground estimate in this mode.
 
-**The picture** (`visual_mesh`, `--visual-mesh`). By default the viewer draws
-the octomap's voxels; `pointcloud` draws instead a smooth surface reconstructed
+**The picture** (`visual_mesh`, `--visual-mesh`). By default the viewer shows
+the octomap's voxels; `pointcloud` shows instead a smooth surface reconstructed
 from the map's `map.pcd` (`pcd_mesh.py`:
 points kept only on the cleaned voxels, 4 cm, screened Poisson, 1.5 M
 triangles; dp builds in ~3.5 min once, then loads from the cache; build it
-ahead with `python3 -m syncai_sim.pcd_mesh map/dp`). `voxels` draws the
+ahead with `python3 -m syncai_sim.pcd_mesh map/dp`). `voxels` shows the
 cubes the sim actually senses and stands on. Both are coloured by height —
-floors and treads along a ramp, walls a pale copy, undersides grey — and lit
-by two oblique suns (`visual.py`). The site is cut into 10 m tiles and the
-viewer draws only those within 30 m of the robot on the storeys it shows
-(`SiteView`), at most 10 frames a second; the robot's own STLs are drawn
-decimated (274 k → 29 k triangles, `robot.py`). Only the picture: the feet
-stand on the measured floor (`surface_heights.py`), the voxels are drawn at
-their tops, so the robot can look a few centimetres off the drawn floor.
+floors and treads along a ramp, walls a pale copy, undersides grey
+(`visual.py`, the ramp as vertex colours in the browser). The site is cut
+into 10 m tiles (`scene.py`), one GLB each, shown by storey; the robot's own
+STLs go over decimated (274 k → 29 k triangles, `robot.py`). Only the
+picture: the feet stand on the measured floor (`surface_heights.py`), the
+voxels are drawn at their tops, so the robot can look a few centimetres off
+the drawn floor.
 
 **Foxglove** (the GPU view, on the host). The MuJoCo viewer renders in
 software; for a detailed picture of the site and the stack, `foxglove_bridge`
@@ -364,7 +363,7 @@ spent most of its keyframes; dp: 1F at −1.0…−0.2 m, 2F at 4.4…5.6 m, spl
 `visual_max_height_above_column_floor_m` over its own floor, so an upper
 floor is drawn whole, and the viewer shows by default the robot's storey and
 those below it (the floor above never hides the robot; walking up brings the
-next one in). Key `9` cycles auto / 1F / 2F / … / all.
+next one in). The panel's Storeys switch: auto / 1F / 2F / … / all.
 
 **Robot.** The workspace's `G23.urdf` is loaded by MuJoCo itself with two
 compiler switches injected (`fusestatic=false` so `base_link` can get a free
@@ -431,34 +430,29 @@ python3 -m syncai_sim --ros-args --params-file ... -p mode_switch_delay:=4.0
   DDS domain with the stack it tests; that stack is started here from the
   mounted workspace on domain 42 with loopback-only DDS, so nothing can be
   heard outside the container and a live robot01 is never disturbed.
-* **The display is Xvnc + noVNC, not X11 to XQuartz.** XQuartz was tried: it
-  offers only indirect GLX (OpenGL 1.4), below what MuJoCo's renderer needs.
-  Rendering is Mesa's llvmpipe; the full dp mesh is ~180 ms a frame at
-  1280x720, the default 3 m height band (`visual_max_height_above_column_floor_m`)
-  ~120 ms. The lidar and the collision queries never depend on it.
-* **The detailed picture is drawn in the browser, not in the container.**
-  llvmpipe over VNC is bounded by the CPU: ~120 ms a frame for the 3 m band,
-  at 10 fps with three cores busy. `--web-view` (viser: a websocket server
-  and a bundled three.js client, 2026-10-26) sends the site's tiles and the
-  robot's meshes once and then only poses, and the host's GPU draws them at
-  the browser's own rate with shadows. MuJoCo's own ways out were looked at:
-  its Filament renderer (3.17 has it) needs a GPU the container does not have,
-  and MuJoCo Studio's web mode ships without its `headless_ui` module in the
-  3.13–3.17 wheels (issue #3580). The GLFW window stays for a container
-  with a display; the two run together.
-* **The viewer is a GLFW window of our own, not `launch_passive`.** On
-  llvmpipe the passive viewer paced itself on a vsync Xvnc does not have, so
-  it rendered flat out (7-11 fps for ~3 cores, moving or not), its `sync()`
-  copied the model and the 18 MB MjData 60 times a second (12-15 ms each,
-  most of the main thread), every letter was one of its display toggles, and
-  its window and held keys were only reachable through libX11 by ctypes.
-  `viewer.py` is one thread with a 10 fps cap, state-only copies at 20 Hz
-  (0.3 ms), `glfw.get_key`, and the site drawn by tile within 30 m.
+* **Nothing renders in the container; the browser draws the picture.**
+  `web_view.py` (viser: a websocket server and a bundled three.js client,
+  2026-10-26) sends the site's tiles and the robot's meshes once and then
+  only poses, and the host's GPU draws them at the browser's own rate with
+  shadows. The road here, each step measured: X11 to XQuartz fails at GLX
+  context creation (indirect GLX, OpenGL 1.4, below what MuJoCo's renderer
+  needs); an Xvnc display of the container's own with Mesa's llvmpipe behind
+  it and noVNC in front drew the full dp mesh at ~180 ms a frame (1280x720),
+  the 3 m band at ~120 ms; MuJoCo's `launch_passive` on it paced itself on a
+  vsync Xvnc does not have, rendered flat out at 7-11 fps for ~3 cores, and
+  copied the 18 MB MjData 60 times a second (12-15 ms each); a GLFW window of
+  our own with a 10 fps cap, state-only copies at 20 Hz (0.3 ms) and the site
+  drawn by tile within 30 m was the best llvmpipe allowed. MuJoCo's own ways
+  out were looked at: its Filament renderer (3.17 has it) needs a GPU the
+  container does not have, and MuJoCo Studio's web mode ships without its
+  `headless_ui` module in the 3.13–3.17 wheels (issue #3580). With the
+  browser drawing, the display, the window and the VNC packages went
+  (2026-10-26); `libgl1` stays because open3d's wheel links it to import.
 * **Where the CPU went (2026-10-24).** The node in the session used ~7 cores;
   three sinks, none of them physics (a walking step is 0.23 ms): numpy's
   OpenBLAS workers spin-waiting between the 50 Hz 4x4 TF inversions (350 %
   for the headless node; `OPENBLAS_NUM_THREADS=1`, set in `__main__.py`:
-  47 %), the viewer above, and `PointCloud2.data` set from `bytes`, which the
+  47 %), the GLFW viewer of the time (above), and `PointCloud2.data` set from `bytes`, which the
   generated setter validates byte by byte (13.7 ms of a 20 ms scan publish;
   `array('B')`: 0.03 ms). After: ~1.2 cores, scan 3.7 ms, `Simulator()` in
   1.1 s from the caches.
