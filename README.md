@@ -43,16 +43,18 @@ scripts/nav_test.py                sends a NavigateToGoal and reports collisions
 syncai_sim/                        the Python package (python3 -m syncai_sim)
   btree.py                           OctoMap .bt reader (no octomap dependency)
   greedy_mesh.py                     voxels -> boxes
-  world.py                           octomap.bt -> VoxelGrid + visual mesh + collision plates, cached
+  world.py                           octomap.bt -> VoxelGrid + visual mesh (as rectangles) + collision plates, cached
   pcd_mesh.py                        map.pcd -> a smooth viewer surface (Poisson, open3d), cached
-  visual.py                          the viewer's look: colour by height, flat-shaded voxel faces, sky
+  visual.py                          the viewer's look: colour by height, shaded by the lidar's intensity
+  voxel_intensity.py                 map.pcd -> the median intensity of each voxel, cached
+  site_tiles.py                      the site for the browser: 10 m tiles, every voxel face a texel of its intensity, as GLB, cached
   storeys.py                         the site's storeys from poses.txt (the viewer's 1F / 2F switch)
   map_cloud.py                       map.pcd thinned per storey for Foxglove (sim/map_cloud/storey<N>)
 config/foxglove/bridge.yaml        foxglove_bridge's settings (port 8765, the .STL asset allowlist)
 scripts/foxglove.sh                foxglove_bridge (+ robot_state_publisher) for a sim run by hand
   voxel_grid.py                      the numba ray caster, ground query, blocking test
   robot.py                           the workspace URDF -> MJCF: articulated, or rigid with a mocap handle
-  scene.py                           robot + site (in 10 m tiles) + props (+ the terrain pool) in one MjSpec; the compiled model cached as MJB
+  scene.py                           robot + collision plates + props (+ the terrain pool) in one MjSpec, no picture in it; the compiled model cached as MJB
   policy.py                          g2_deploy_rs's PPO / HimLoco runners, ported (onnxruntime)
   legged.py                          motion state -> policy / stand / lie / damping, PD (qfrc or MuJoCo actuators), the motor clamp, the fall check
 scripts/gait_bench.py              the walking body against a scripted command, ROS-free: the A/B of the body's physics knobs
@@ -69,7 +71,7 @@ scripts/lidar_pattern.py           rebuilds it from any MID360 recording
 policy/                            the G23's ONNX policies, gitignored: copy them in (policy/README.md)
 tests/                             pytest; ROS-free except test_simulator_synthetic (needs the ROS env + workspace install)
 docs/findings.md                   what the sim found about the navigation stack
-cache/                             per-map build products (gitignored): the world, the compiled scene (scene-*.mjb, 628 MB on dp), the decimated robot meshes (robot/)
+cache/                             per-map build products (gitignored): the world, the compiled scene (scene-*.mjb, 20 MB on dp), the voxel intensities, the browser's tiles (140 MB), the decimated robot meshes (robot/)
 ```
 
 ## Setup
@@ -115,10 +117,12 @@ python3 /home/syncrobotic/sim/scripts/nav_test.py --goal 3.0 0.0 0.0     # send 
 /home/syncrobotic/sim/scripts/run_session.sh --stop
 ```
 
-The first run on a map builds its cache (dp: ~12 s — parsing 1.6 M occupied
-leaves, merging faces into a 3.5 M-triangle viewer mesh, 18 k collision
-plates, a 133 MB voxel grid) and compiles the scene (~5 s; cached as an
-MJB, so later starts take about a second).
+The first run on a map builds its cache (dp: ~15 s — parsing 1.6 M occupied
+leaves, merging faces into a 2.5 M-triangle viewer mesh, 19 k collision
+plates, a 133 MB voxel grid) and compiles the scene (~1 s, 20 MB as an
+MJB); the browser's tiles are built behind the running sim the first time
+(dp: the voxel intensities in 4 s, the 179 textured tiles in 9 s) and cached
+too, so later starts take about a second and the picture is up in two.
 
 **The viewer** (`web_view.py`) is a page the host's browser draws:
 `http://localhost:8080` (compose maps the container's `web_view_port`;
@@ -324,20 +328,31 @@ where the planner's and controllers' `lidar_height` is 0.481 — the value the
 kinematic body is built to. One of the two is not the robot; worth measuring
 on the real G23 before trusting the planner's ground estimate in this mode.
 
-**The picture** (`visual_mesh`, `--visual-mesh`). By default the viewer shows
-the octomap's voxels; `pointcloud` shows instead a smooth surface reconstructed
+**The picture** (`visual_mesh`, `--visual-mesh`; `site_tiles.py`). By default
+the viewer shows the octomap's voxels — the cubes the sim actually senses and
+stands on — and `pointcloud` shows instead a smooth surface reconstructed
 from the map's `map.pcd` (`pcd_mesh.py`:
 points kept only on the cleaned voxels, 4 cm, screened Poisson, 1.5 M
 triangles; dp builds in ~3.5 min once, then loads from the cache; build it
-ahead with `python3 -m syncai_sim.pcd_mesh map/dp`). `voxels` shows the
-cubes the sim actually senses and stands on. Both are coloured by height —
-floors and treads along a ramp, walls a pale copy, undersides grey
-(`visual.py`, the ramp as vertex colours in the browser). The site is cut
-into 10 m tiles (`scene.py`), one GLB each, shown by storey; the robot's own
-STLs go over decimated (274 k → 29 k triangles, `robot.py`). Only the
-picture: the feet stand on the measured floor (`surface_heights.py`), the
-voxels are drawn at their tops, so the robot can look a few centimetres off
-the drawn floor.
+ahead with `python3 -m syncai_sim.pcd_mesh map/dp`). Both are coloured by
+height — floors and treads along a ramp, walls a pale copy, undersides grey
+(`visual.py`) — and shaded by the lidar's intensity, which is what makes a
+lidar map legible: `voxel_intensity.py` keeps the median intensity of
+`map.pcd`'s points in each voxel (a voxel with none takes its neighbours';
+dp: 1.675 M of 1.683 M occupied voxels shaded), and the ramp's colour is
+scaled by it, dark for a matt floor's 15-30, up to a third brighter for a
+marking's 90-150 — floor lines, door frames, stair nosings, signs show.
+The voxel mesh's faces are merged rectangles (a floor slab is one), so the
+shading goes on as a texture: each 10 m tile of each storey is one GLB with
+an atlas in which every rectangle has its own patch of texels, one per voxel
+face (dp: 179 tiles, 2.5 M triangles, 140 MB, built in 9 s once, cached).
+The surface's vertices are 6 cm apart, so there the intensity goes on the
+vertices. None of this is in the MuJoCo model: the MJB holds the robot, the
+plates, the props and the terrain pool, 20 MB that compile in a second. The
+robot's own STLs go over decimated (274 k → 29 k triangles, `robot.py`). Only
+the picture: the feet stand on the measured floor (`surface_heights.py`),
+the voxels are drawn at their tops, so the robot can look a few centimetres
+off the drawn floor.
 
 **Foxglove** (the GPU view, on the host). The MuJoCo viewer renders in
 software; for a detailed picture of the site and the stack, `foxglove_bridge`
@@ -448,6 +463,9 @@ python3 -m syncai_sim --ros-args --params-file ... -p mode_switch_delay:=4.0
   `headless_ui` module in the 3.13–3.17 wheels (issue #3580). With the
   browser drawing, the display, the window and the VNC packages went
   (2026-10-26); `libgl1` stays because open3d's wheel links it to import.
+  The site's mesh left the MuJoCo model the same day: it was only ever there
+  to be rendered, cost 628 MB of MJB and 5 s of compile for its BVHs, and
+  the browser takes its tiles from the world's own cache (`site_tiles.py`).
 * **Where the CPU went (2026-10-24).** The node in the session used ~7 cores;
   three sinks, none of them physics (a walking step is 0.23 ms): numpy's
   OpenBLAS workers spin-waiting between the 50 Hz 4x4 TF inversions (350 %

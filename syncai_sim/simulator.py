@@ -80,7 +80,7 @@ class SimConfig:
     ppo_policy: str = ""
     himloco_policy: str = ""
     terrain: TerrainPatchConfig = field(default_factory=TerrainPatchConfig)
-    visual_mesh: str = "voxels"  # voxels | pointcloud (pcd_mesh.py)
+    visual_mesh: str = "voxels"  # the browser's site: voxels | pointcloud (site_tiles.py)
     # Walking only: fitted = the fitted flights as fixed boxes (stairs.py); voxels = the
     # patch's boxes there too, risers on the 0.1 m column grid (the sim before 2026-10-25)
     stairs: str = "fitted"
@@ -153,11 +153,7 @@ class Simulator:
             foot_solref=tuple(float(v) for v in cfg.foot_solref),
             foot_friction=tuple(float(v) for v in cfg.foot_friction),
             actuator=cfg.actuator), log=log)
-        site = None
-        if cfg.visual_mesh == "pointcloud":
-            from .pcd_mesh import load_or_build
-            site = load_or_build(cfg.map_dir, cfg.cache_dir, self.world, log=log)
-        elif cfg.visual_mesh != "voxels":
+        if cfg.visual_mesh not in ("voxels", "pointcloud"):
             raise ValueError(f"visual_mesh {cfg.visual_mesh!r}: voxels | pointcloud")
         capacity = cfg.terrain.capacity if self.legged else 0
         timestep = 1.0 / cfg.physics_hz
@@ -176,13 +172,12 @@ class Simulator:
                 stairs = st.build(self.surface.flights, g.grid, g.origin_m, g.res, log=log)
         boxes = None if stairs is None else stairs.boxes
         solref = tuple(float(v) for v in cfg.foot_solref)
-        key = sc.scene_key(self.world, self.robot, cfg.props, timestep, capacity, cfg.visual_mesh,
-                           cfg.cache_dir, stairs=boxes, integrator=cfg.integrator,
-                           terrain_solref=solref)
+        key = sc.scene_key(self.world, self.robot, cfg.props, timestep, capacity, stairs=boxes,
+                           integrator=cfg.integrator, terrain_solref=solref)
         self.model = sc.cached_model(
             cfg.cache_dir, key,
             lambda: sc.build_scene(self.world, self.robot, cfg.props, timestep=timestep,
-                                   terrain_capacity=capacity, site=site, stairs=boxes,
+                                   terrain_capacity=capacity, stairs=boxes,
                                    integrator=cfg.integrator, terrain_solref=solref)[0], log=log)
         self.info = sc.scene_info(self.model, self.robot, cfg.props, capacity,
                                   list(self.world.storey_bounds))

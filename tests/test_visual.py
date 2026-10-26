@@ -6,21 +6,9 @@ from syncai_sim.map_cloud import thin
 from syncai_sim.pcd_mesh import read_pcd
 
 
-def test_texture_rows_and_ramp_ends():
-    rgb = visual.texture_rgb()
-    assert rgb.shape == (3 * visual.ROW_H, visual.TEX_W, 3) and rgb.dtype == np.uint8
-    floor = rgb[0, :, :] / 255.0
-    assert np.allclose(floor[0], visual.PALETTE[0][1], atol=1 / 255)
-    assert np.allclose(floor[-1], visual.PALETTE[-1][1], atol=1 / 255)
-    under = rgb[-1, :, :] / 255.0
-    assert np.allclose(under, visual.UNDER_GREY, atol=1 / 255)
-
-
-def test_texcoords_clamp_and_pick_the_row():
-    uv = visual.texcoords(np.array([-5.0, 0.0, 1.5, 3.0, 99.0]), visual.KIND_WALL, (0.0, 3.0))
-    assert np.all((uv[:, 0] > 0) & (uv[:, 0] < 1))
-    assert uv[2, 0] == pytest.approx(0.5)
-    assert np.allclose(uv[:, 1], 0.5)  # the middle of three rows
+def test_ramp_ends():
+    assert np.allclose(visual.ramp(np.array([0.0]))[0], visual.PALETTE[0][1])
+    assert np.allclose(visual.ramp(np.array([1.0, 7.0]))[1], visual.PALETTE[-1][1])
 
 
 def test_height_range_is_clamped():
@@ -28,6 +16,29 @@ def test_height_range_is_clamped():
     assert lo == pytest.approx(0.0, abs=0.01) and hi - lo == pytest.approx(visual.MIN_RANGE_M)
     lo, hi = visual.height_range(np.linspace(0.0, 30.0, 1000))
     assert hi - lo == pytest.approx(visual.MAX_RANGE_M)
+
+
+def test_intensity_factor_spans_dark_to_bright_and_defaults_unknown():
+    f = visual.intensity_factor(np.array([0.0, visual.INTENSITY_LO, visual.INTENSITY_HI, 250.0,
+                                          np.nan]))
+    assert f[0] == pytest.approx(visual.FACTOR_LO) and f[1] == pytest.approx(visual.FACTOR_LO)
+    assert f[2] == pytest.approx(visual.FACTOR_HI) and f[3] == pytest.approx(visual.FACTOR_HI)
+    assert f[4] == pytest.approx(visual.UNKNOWN_FACTOR)
+    assert np.all(np.diff(visual.intensity_factor(np.linspace(0, 150, 30))) >= 0)
+
+
+def test_shade_by_kind_height_and_intensity():
+    kind = np.array([visual.KIND_FLOOR, visual.KIND_FLOOR, visual.KIND_WALL, visual.KIND_UNDER])
+    z = np.array([0.0, 10.0, 0.0, 0.0])
+    plain = visual.shade(kind, z, None, (0.0, 10.0))
+    assert plain.dtype == np.uint8 and plain.shape == (4, 3)
+    assert np.array_equal(plain[0], (np.array(visual.PALETTE[0][1]) * 255 + 0.5).astype(np.uint8))
+    assert np.array_equal(plain[1], (np.array(visual.PALETTE[-1][1]) * 255 + 0.5).astype(np.uint8))
+    assert np.all(plain[2] > plain[0])  # the wall is a pale copy
+    assert np.array_equal(plain[3], (visual.UNDER_GREY * 255 + 0.5).astype(np.uint8))
+    shaded = visual.shade(kind, z, np.array([10.0, 120.0, 10.0, 10.0]), (0.0, 10.0))
+    assert np.all(shaded[0] < plain[0])  # a dark floor voxel
+    assert np.all(shaded[1] >= plain[1])  # a marking: brighter, clipped at white
 
 
 def test_surface_kinds_by_normal():

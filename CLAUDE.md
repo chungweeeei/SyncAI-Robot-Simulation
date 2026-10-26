@@ -54,7 +54,7 @@ Python throughout (decided
 |---|---|
 | map -> world (parse, mesh, plates, cache) | `world.py`, `btree.py`, `greedy_mesh.py` |
 | Foxglove (map clouds, joint_states, bridge) | `map_cloud.py`, `config/foxglove/bridge.yaml`, `scripts/foxglove.sh`; mesh URIs in `launch/rsp.launch.py` |
-| the viewer's look (pcd surface, colours, storeys) | `pcd_mesh.py`, `visual.py`, `storeys.py` (picture only, never sensing); the storey switch and the layers are the panel in `web_view.py` |
+| the viewer's look (tiles, intensity shading, pcd surface, colours, storeys) | `site_tiles.py` (10 m tiles as GLB, a texel per voxel face), `voxel_intensity.py`, `pcd_mesh.py`, `visual.py`, `storeys.py` (picture only, never sensing); the storey switch and the layers are the panel in `web_view.py` |
 | ray cast / ground / blocked | `voxel_grid.py` |
 | the policies (port of g2_deploy_rs) | `policy.py` (`tests/test_policy.py`; names the Rust source of every constant) |
 | joints per motion state, PD, the motor clamp, falls | `legged.py` (`tests/test_legged_motor.py`); the body's physics knobs (`motor_model`, `trunk_inertial`, contact, `actuator`, `integrator`, delays) are `RobotConfig` in `robot.py`, their A/B `scripts/gait_bench.py` |
@@ -62,7 +62,7 @@ Python throughout (decided
 | the feet's floor heights, flights fitted as staircases | `surface_heights.py`, `stairs.py`; stairs the track never climbed: `config/stair_walks/<map>.yaml`; slopes across voxel layers: `config/ramps/<map>.yaml` |
 | the step rule, gates, collisions (kinematic) | `kinematics.py` (pure Python, `tests/test_kinematics.py`) |
 | URDF -> MJCF, mocap weld, standing pose | `robot.py` (`DEFAULT_STANDING` was solved by FK, feet 0.372 m under the hips) |
-| MjSpec assembly, bitmasks, groups, site tiles, the MJB scene cache | `scene.py` (`scene_info` reads a loaded model back by name; `scene_key` lists what the cache depends on) |
+| MjSpec assembly, bitmasks, groups, the MJB scene cache | `scene.py` (`scene_info` reads a loaded model back by name; `scene_key` lists what the cache depends on; the site's picture is not in the model) |
 | the lidar pattern, prop rays | `lidar.py`, `prop_rays.py`; the recorded MID360 bank `config/lidar/mid360_pattern.npz` (built by `scripts/lidar_pattern.py` through `livox_bag.py`, which reads a rosbag2 sqlite without ROS) |
 | the gait controller on driver_manager's UDP link (the session) | `controller_link.py` (`tests/test_controller_link.py`), `config/params/driver_manager_sim.yaml` |
 | services and `mode` (driver_link: fake) | `fake_driver.py` |

@@ -35,7 +35,6 @@ import mujoco
 import numpy as np
 
 from . import scene as sc
-from . import visual
 
 VIEW_HZ = 20.0  # poses to the browser per second: a state copy is ~0.3 ms, 20 keep the gait fluid
 TERRAIN_HZ = 2.0  # the terrain boxes, when shown
@@ -46,20 +45,16 @@ STAIR_COLOUR = (60, 150, 230)
 ROBOT_DEFAULT_COLOUR = (70, 70, 78)  # the URDF's visuals carry no colour (visual.py: "dark STL")
 MAP_POINT_M = 0.04
 MAP_INTENSITY_MAX = 150.0  # Foxglove's layout clamps the clouds' intensity here too
-
-
-def tile_colours(vertices: np.ndarray, kind: int, z_range: tuple[float, float]) -> np.ndarray:
-    """(N, 3) uint8 per vertex: visual.py's ramp by height for floors, the pale
-    copy for walls, grey undersides — what the GLFW viewer's texture gives."""
-    lo, hi = z_range
-    t = np.clip((vertices[:, 2] - lo) / max(hi - lo, 1e-6), 0.0, 1.0)
-    if kind == visual.KIND_FLOOR:
-        rgb = visual.ramp(t)
-    elif kind == visual.KIND_WALL:
-        rgb = visual.WALL_TINT * visual.ramp(t) + (1.0 - visual.WALL_TINT) * visual.WALL_GREY
-    else:
-        rgb = np.tile(visual.UNDER_GREY, (vertices.shape[0], 1))
-    return (rgb * 255.0 + 0.5).astype(np.uint8)
+# The light: an HDRI environment for the ambient and the reflections, the
+# default directional lights with shadows (the robot on the floor, the
+# treads on each other), a pale sky as the background and a fog of the same
+# colour from FOG_NEAR to FOG_FAR so the far end of a 100 m site fades
+# instead of cluttering the horizon.
+ENVIRONMENT = "city"
+ENVIRONMENT_INTENSITY = 0.55
+SKY_TOP = (168, 190, 214)
+SKY_BOTTOM = (226, 230, 236)
+FOG_NEAR, FOG_FAR = 35.0, 130.0
 
 
 def mesh_of(model: mujoco.MjModel, geom: int) -> tuple[np.ndarray, np.ndarray]:
@@ -92,6 +87,7 @@ class WebView:
         self.rate_hz = VIEW_HZ
         self.server = viser.ViserServer(host=host, port=port, verbose=False)
         self.server.scene.set_up_direction("+z")
+        self._light()
         self._d = mujoco.MjData(sim.model)  # the render copy, state only (viewer.py)
         self._spec = mujoco.mjtState.mjSTATE_INTEGRATION
         self._state = np.empty(mujoco.mj_stateSize(sim.model, self._spec))
@@ -159,39 +155,33 @@ class WebView:
         self.server.stop()
 
     # -- the scene ----------------------------------------------------------------
-    def _build_site(self) -> None:
-        import trimesh
+    def _light(self) -> None:
+        scene = self.server.scene
+        scene.configure_environment_map(hdri=ENVIRONMENT, background=False,
+                                        environment_intensity=ENVIRONMENT_INTENSITY)
+        scene.configure_default_lights(enabled=True, cast_shadow=True)
+        scene.configure_fog(near=FOG_NEAR, far=FOG_FAR, color=SKY_BOTTOM, enabled=True)
+        t = np.linspace(0.0, 1.0, 64)[:, None]
+        sky = (np.array(SKY_TOP) * (1.0 - t) + np.array(SKY_BOTTOM) * t).astype(np.uint8)
+        scene.set_background_image(np.repeat(sky[:, None, :], 2, axis=1), format="png")
 
-        m, info = self.sim.model, self.sim.info
-        if not info.site_geoms:
+    def _build_site(self) -> None:
+        from . import site_tiles
+
+        world = getattr(self.sim, "world", None)
+        if world is None:
             return
         t0 = time.perf_counter()
-        d = mujoco.MjData(m)
-        mujoco.mj_forward(m, d)  # the tiles are static: their world pose is in geom_xpos now
-        kind_of = visual.kind_of if self.sim.cfg.visual_mesh == "voxels" else (lambda k: k)
-        tiles = []
-        for g in info.site_geoms:
-            mt = sc._SITE_GEOM.match(m.geom(g).name)
-            if mt is None:
-                continue
-            storey, ix, iy = (int(v) for v in mt.groups())
-            k = int(m.geom(g).name[len("site_visual"):].split("_")[0])
-            v, f = mesh_of(m, g)
-            vw = v @ d.geom_xmat[g].reshape(3, 3).T + d.geom_xpos[g]
-            tiles.append((storey, ix, iy, k, kind_of(k), vw, f))
-        floor_z = np.concatenate([t[5][:, 2] for t in tiles if t[4] == visual.KIND_FLOOR]
-                                 or [np.zeros(0)])
-        z_range = visual.height_range(floor_z)
-        n_tri = 0
-        for storey, ix, iy, k, kind, vw, f in tiles:
-            mesh = trimesh.Trimesh(vw, f, vertex_colors=tile_colours(vw, kind, z_range),
-                                   process=False)
-            handle = self.server.scene.add_mesh_trimesh(
-                f"/site/s{storey}/t{ix}_{iy}/k{k}", mesh, cast_shadow=False,
-                visible=self._shown is None or storey in self._shown)
-            self._site.setdefault(storey, []).append(handle)
-            n_tri += f.shape[0]
-        self.log(f"[web] site: {len(tiles)} tiles, {n_tri / 1e6:.1f} M triangles sent in "
+        cfg = self.sim.cfg
+        tiles = site_tiles.load_or_build(world, cfg.map_dir, cfg.cache_dir, cfg.visual_mesh,
+                                         log=self.log)
+        for tile in tiles:
+            handle = self.server.scene.add_glb(
+                tile.name, tile.glb, cast_shadow=False,
+                visible=self._shown is None or tile.storey in self._shown)
+            self._site.setdefault(tile.storey, []).append(handle)
+        self.log(f"[web] site: {len(tiles)} tiles, "
+                 f"{sum(t.triangles for t in tiles) / 1e6:.1f} M triangles sent in "
                  f"{time.perf_counter() - t0:.1f} s")
 
     def _build_robot(self) -> None:

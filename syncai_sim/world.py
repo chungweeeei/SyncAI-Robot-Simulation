@@ -24,11 +24,12 @@ map is processed once (dp: ~15 s) and loads in about a second afterwards.
 
 from __future__ import annotations
 
+import glob
 import json
 import math
 import os
 import time
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 
 import numba as nb
 import numpy as np
@@ -120,8 +121,9 @@ class WorldOptions:
 
 # Bumped when the cache's contents change shape without an option changing
 # (2: the visual mesh's per-face directions, visual.py; 3: storeys; 4: the
-# track's one-voxel ridges cut, _cut_track_ridges).
-CACHE_FORMAT = 4
+# track's one-voxel ridges cut, _cut_track_ridges; 5: the mesh's rectangles,
+# exposed_face_rects, for the picture's textures).
+CACHE_FORMAT = 5
 
 
 @dataclass
@@ -154,6 +156,10 @@ class World:
     mesh_dirs: np.ndarray  # (F,) int8, visual.DIRECTIONS
     mesh_storeys: np.ndarray  # (F,) int8, 0 = the lowest storey
     storey_bounds: list[float]  # heights between storeys (storeys.py); [] = one
+    # The same faces as rectangles (exposed_face_rects), what site_tiles.py
+    # paints: (Q, 7) int32 and each rectangle's storey.
+    mesh_rects: np.ndarray = field(default_factory=lambda: np.zeros((0, 7), np.int32))
+    mesh_rect_storeys: np.ndarray = field(default_factory=lambda: np.zeros(0, np.int8))
 
     def plates_metres(self) -> tuple[np.ndarray, np.ndarray]:
         """(centre (P, 3), half-size (P, 3)) in metres."""
@@ -430,15 +436,16 @@ def _fill_band(grid, z0, z1, max_cells):
                 grid[cells[k] // ny, cells[k] % ny, h] = True
 
 
-def exposed_face_mesh(voxels: np.ndarray, resolution: float
-                      ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-    """Triangles of every voxel face that borders empty space, with coplanar
-    neighbours merged into rectangles. Returns (vertices (V, 3) float32 metres,
-    faces (F, 3) int32 wound counter-clockwise seen from outside, directions
-    (F,) int8 indexing visual.DIRECTIONS). Vertices are shared only between
-    faces of one direction, so that per-vertex normals stay flat (visual.py)."""
+def exposed_face_rects(voxels: np.ndarray, resolution: float) -> np.ndarray:
+    """Every voxel face that borders empty space, with coplanar neighbours
+    merged into rectangles: (Q, 7) int32 rows (axis, sign, b1, b2, plane, n1,
+    n2) — the face's normal axis and sign (visual.DIRECTIONS), the rectangle's
+    lowest absolute voxel index along the two other axes (a1, a2: the axes
+    other than `axis`, in order), the voxel's own index along `axis`, and the
+    extents in voxels. `quad_corners` turns them into geometry; site_tiles.py
+    paints each voxel face of them."""
     if voxels.shape[0] == 0:
-        return np.zeros((0, 3), np.float32), np.zeros((0, 3), np.int32), np.zeros(0, np.int8)
+        return np.zeros((0, 7), np.int32)
     lo = voxels.min(axis=0) - 1  # one voxel of padding so every face has a neighbour
     hi = voxels.max(axis=0) + 2
     grid = np.zeros(tuple((hi - lo).tolist()), dtype=bool)
@@ -465,36 +472,93 @@ def exposed_face_mesh(voxels: np.ndarray, resolution: float
             # its last ("z") column so the runs form along the other two.
             others = [i for i in range(3) if i != axis]
             rects = greedy_mesh.merge_voxels(cells[:, others + [axis]])
-            quads.append((axis, sign, rects))
+            a1, a2 = others
+            rows = np.empty((rects.shape[0], 7), np.int64)
+            rows[:, 0] = axis
+            rows[:, 1] = sign
+            rows[:, 2] = rects[:, 0] + lo[a1]
+            rows[:, 3] = rects[:, 1] + lo[a2]
+            # The voxel the face belongs to (a -side cell was shifted onto its
+            # voxel above, so this holds for both signs).
+            rows[:, 4] = rects[:, 2] + lo[axis]
+            rows[:, 5] = rects[:, 3]
+            rows[:, 6] = rects[:, 4]
+            quads.append(rows)
+    if not quads:
+        return np.zeros((0, 7), np.int32)
+    return np.concatenate(quads).astype(np.int32)
 
-    verts = []
-    dirs = []
-    for axis, sign, rects in quads:
-        others = [i for i in range(3) if i != axis]
-        a1, a2 = others
-        n = rects.shape[0]
-        # rect columns: o1, o2, plane, n1, n2, 1  (in the permuted order)
-        corner = np.zeros((n, 4, 3), dtype=np.float64)
-        base = np.zeros((n, 3))
-        base[:, a1] = rects[:, 0]
-        base[:, a2] = rects[:, 1]
-        base[:, axis] = rects[:, 2] + (1 if sign > 0 else 0)
-        e1 = np.zeros((n, 3))
-        e1[:, a1] = rects[:, 3]
-        e2 = np.zeros((n, 3))
-        e2[:, a2] = rects[:, 4]
-        # CCW seen from +normal when (a1, a2, axis) is a right-handed triple.
-        right_handed = (a1, a2) in ((1, 2), (2, 0), (0, 1))
-        flip = (sign > 0) != right_handed
-        c0, c1, c2, c3 = base, base + e1, base + e1 + e2, base + e2
-        if flip:
-            c1, c3 = c3, c1
-        corner[:, 0], corner[:, 1], corner[:, 2], corner[:, 3] = c0, c1, c2, c3
-        verts.append(corner.reshape(-1, 3))
-        dirs.append(np.full(n, visual.DIRECTIONS.index((axis, sign)), np.int8))
-    v = np.concatenate(verts)
-    v = (v + lo[None, :] - btree.TREE_MAX_VAL) * resolution
-    quad_dir = np.concatenate(dirs)
+
+def quad_corners(rects: np.ndarray, resolution: float) -> tuple[np.ndarray, np.ndarray]:
+    """The rectangles of `exposed_face_rects` as geometry: (corners (Q, 4, 3)
+    float64 metres, wound counter-clockwise seen from outside; texels (Q, 4, 2)
+    int32: each corner's place on the rectangle in voxels along (a1, a2),
+    from (0, 0) to (n1, n2), so a texture laid over the rectangle knows which
+    corner is which)."""
+    q = rects.shape[0]
+    corners = np.zeros((q, 4, 3), np.float64)
+    texels = np.zeros((q, 4, 2), np.int32)
+    if q == 0:
+        return corners, texels
+    for axis in range(3):
+        a1, a2 = [i for i in range(3) if i != axis]
+        for sign in (1, -1):
+            sel = np.flatnonzero((rects[:, 0] == axis) & (rects[:, 1] == sign))
+            if sel.size == 0:
+                continue
+            r = rects[sel].astype(np.float64)
+            n = sel.size
+            base = np.zeros((n, 3))
+            base[:, a1] = r[:, 2]
+            base[:, a2] = r[:, 3]
+            base[:, axis] = r[:, 4] + (1 if sign > 0 else 0)
+            e1 = np.zeros((n, 3))
+            e1[:, a1] = r[:, 5]
+            e2 = np.zeros((n, 3))
+            e2[:, a2] = r[:, 6]
+            t0 = np.zeros((n, 2))
+            t1 = np.column_stack((r[:, 5], np.zeros(n)))
+            t2 = np.column_stack((r[:, 5], r[:, 6]))
+            t3 = np.column_stack((np.zeros(n), r[:, 6]))
+            # CCW seen from +normal when (a1, a2, axis) is a right-handed triple.
+            right_handed = (a1, a2) in ((1, 2), (2, 0), (0, 1))
+            c0, c1, c2, c3 = base, base + e1, base + e1 + e2, base + e2
+            if (sign > 0) != right_handed:
+                c1, c3 = c3, c1
+                t1, t3 = t3, t1
+            corners[sel, 0], corners[sel, 1], corners[sel, 2], corners[sel, 3] = c0, c1, c2, c3
+            texels[sel, 0], texels[sel, 1], texels[sel, 2], texels[sel, 3] = t0, t1, t2, t3
+    corners = (corners - btree.TREE_MAX_VAL) * resolution
+    return corners, texels
+
+
+def rect_dirs(rects: np.ndarray) -> np.ndarray:
+    """(Q,) int8 visual.DIRECTIONS index of each rectangle."""
+    table = {d: k for k, d in enumerate(visual.DIRECTIONS)}
+    out = np.zeros(rects.shape[0], np.int8)
+    for (axis, sign), k in table.items():
+        out[(rects[:, 0] == axis) & (rects[:, 1] == sign)] = k
+    return out
+
+
+def exposed_face_mesh(voxels: np.ndarray, resolution: float
+                      ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Triangles of every voxel face that borders empty space, with coplanar
+    neighbours merged into rectangles (`exposed_face_rects`). Returns
+    (vertices (V, 3) float32 metres, faces (F, 3) int32 wound counter-clockwise
+    seen from outside, directions (F,) int8 indexing visual.DIRECTIONS).
+    Vertices are shared only between faces of one direction, so that
+    per-vertex normals stay flat (visual.py)."""
+    return _mesh_of_rects(exposed_face_rects(voxels, resolution), resolution)
+
+
+def _mesh_of_rects(rects: np.ndarray, resolution: float
+                   ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    if rects.shape[0] == 0:
+        return np.zeros((0, 3), np.float32), np.zeros((0, 3), np.int32), np.zeros(0, np.int8)
+    corners, _ = quad_corners(rects, resolution)
+    v = corners.reshape(-1, 3)
+    quad_dir = rect_dirs(rects)
     # Share vertices between neighbouring rectangles of one direction (a
     # 7 M -> ~3 M reduction across all six).
     key = np.round(v / (resolution * 0.5)).astype(np.int64)
@@ -530,7 +594,8 @@ def build_world(map_dir: str, cache_dir: str, opts: WorldOptions | None = None,
             log(f"[world] {name}: cached ({stats.voxels} voxels, {stats.mesh_triangles} tris, "
                 f"{stats.plates} plates)")
             return World(grid, z["mesh_vertices"], z["mesh_faces"], z["plates"], stats,
-                         z["mesh_dirs"], z["mesh_storeys"], z["storey_bounds"].tolist())
+                         z["mesh_dirs"], z["mesh_storeys"], z["storey_bounds"].tolist(),
+                         mesh_rects=z["mesh_rects"], mesh_rect_storeys=z["mesh_rect_storeys"])
 
     t0 = time.perf_counter()
     leaves_path = os.path.join(cache_dir, f"leaves-{key}.npz")
@@ -572,7 +637,7 @@ def build_world(map_dir: str, cache_dir: str, opts: WorldOptions | None = None,
     grid = VoxelGrid(voxels, resolution, opts.grid_z_clip_above_lowest_m)
     kept = voxels[voxels[:, 2] <= grid.lo[2] + grid.grid.shape[2] - 1]
     bounds = storey_bounds(track[:, 2] - opts.lidar_height_m) if track.shape[0] else []
-    vertices, faces, dirs, storeys, n_visual = _storey_meshes(
+    vertices, faces, dirs, storeys, n_visual, rects, rect_storeys = _storey_meshes(
         kept, resolution, bounds, opts.visual_max_height_above_column_floor_m)
     log(f"[world] {name}: {kept.shape[0]} voxels, meshing {n_visual} for the viewer in "
         f"{len(bounds) + 1} storeys (bounds {[round(b, 2) for b in bounds]} m)")
@@ -593,30 +658,41 @@ def build_world(map_dir: str, cache_dir: str, opts: WorldOptions | None = None,
     )
     np.savez(data_path, voxels=kept.astype(np.int32), resolution=resolution,
              mesh_vertices=vertices, mesh_faces=faces, mesh_dirs=dirs, mesh_storeys=storeys,
-             storey_bounds=np.array(bounds, dtype=np.float64), plates=plates)
+             storey_bounds=np.array(bounds, dtype=np.float64), plates=plates,
+             mesh_rects=rects, mesh_rect_storeys=rect_storeys)
     with open(stats_path + ".tmp", "w") as f:
         json.dump({**asdict(stats), "format": CACHE_FORMAT}, f, indent=2)
     os.replace(stats_path + ".tmp", stats_path)
+    # Only the world.json's key is ever loaded: earlier builds (another
+    # octomap edit, other options) are 110-150 MB each and had piled up.
+    for old in glob.glob(os.path.join(cache_dir, "world-*.npz")):
+        if os.path.abspath(old) != os.path.abspath(data_path):
+            os.remove(old)
     log(f"[world] {name}: built in {parse_s + build_s:.1f} s -> {stats.mesh_triangles} tris, "
         f"{stats.plates} plates, grid {stats.grid_shape} ({stats.grid_mb} MB)")
-    return World(grid, vertices, faces, plates, stats, dirs, storeys, bounds)
+    return World(grid, vertices, faces, plates, stats, dirs, storeys, bounds,
+                 mesh_rects=rects, mesh_rect_storeys=rect_storeys)
 
 
 def _storey_meshes(voxels: np.ndarray, resolution: float, bounds: list[float], max_height_m: float):
     """The visual mesh, storey by storey: each storey's voxels cut at
     `max_height_m` over their column's lowest voxel in that storey, meshed on
-    their own. Returns (vertices, faces, dirs, storeys per face, voxel count)."""
+    their own. Returns (vertices, faces, dirs, storeys per face, voxel count,
+    rects (Q, 7), storeys per rect)."""
     z = (voxels[:, 2] - btree.TREE_MAX_VAL + 0.5) * resolution
     which = storey_of(z, bounds)
     parts, offset, n_visual = [], 0, 0
     for k in range(len(bounds) + 1):
         vis = column_floor_filter(voxels[which == k], resolution, max_height_m)
         n_visual += int(vis.shape[0])
-        v, f, d = exposed_face_mesh(vis, resolution)
-        parts.append((v, f + offset, d, np.full(f.shape[0], k, np.int8)))
+        rects = exposed_face_rects(vis, resolution)
+        v, f, d = _mesh_of_rects(rects, resolution)
+        parts.append((v, f + offset, d, np.full(f.shape[0], k, np.int8), rects,
+                      np.full(rects.shape[0], k, np.int8)))
         offset += v.shape[0]
     return (np.concatenate([p[0] for p in parts]), np.concatenate([p[1] for p in parts]),
-            np.concatenate([p[2] for p in parts]), np.concatenate([p[3] for p in parts]), n_visual)
+            np.concatenate([p[2] for p in parts]), np.concatenate([p[3] for p in parts]), n_visual,
+            np.concatenate([p[4] for p in parts]), np.concatenate([p[5] for p in parts]))
 
 
 def default_cache_dir(map_dir: str) -> str:

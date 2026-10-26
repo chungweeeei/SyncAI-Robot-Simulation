@@ -1,21 +1,24 @@
-"""How the site looks in the viewer: one colour ramp by height, and flat shading.
+"""How the site looks in the browser: a colour ramp by height, shaded by the
+lidar's intensity, and flat shading.
 
-The viewer is the only consumer (scene.py, contype 0 geoms); nothing here
+The picture is the only consumer (site_tiles.py, web_view.py); nothing here
 touches what the lidar, the feet or the planner see.
 
-* **Flat shading.** MuJoCo shades a mesh with per-vertex normals averaged over
-  the faces that share the vertex. The voxel mesh used to share vertices
-  between a floor and the wall beside it, so every floor rectangle with a
-  corner on a wall had a tilted normal there and its whole surface shaded in
-  a smear. The faces are now split by direction (`DIRECTIONS`, six meshes)
-  and share vertices only within one direction: every normal of a mesh is the
-  same, and a floor is one flat colour.
-* **Colour by height.** One 2D texture, a row per kind of surface: floors and
-  treads (faces up) take `PALETTE` by absolute height over the site's floor
-  range, so storeys, landings and flights read apart; walls take a pale copy
-  of the same ramp; undersides are a flat grey. The texture coordinate is
-  u = height on the ramp, v = the kind's row; on a planar quad u is linear in z,
-  so interpolation across the merged rectangles is exact.
+* **Flat shading.** The voxel mesh's faces are split by direction
+  (`DIRECTIONS`, six sets) and share vertices only within one direction, so
+  every normal of a tile is the same and a floor is one flat colour rather
+  than the smear per-vertex normals averaged over a floor-wall corner gave.
+* **Colour by height.** Floors and treads (faces up) take `PALETTE` by
+  absolute height over the site's floor range, so storeys, landings and
+  flights read apart; walls take a pale copy of the same ramp; undersides are
+  a flat grey.
+* **Shaded by intensity** (`intensity_factor`, from voxel_intensity.py). A
+  lidar map's intensity is what makes it legible — floor markings, door
+  frames, signs, the tape on a nosing — so the ramp's colour is scaled by
+  the voxel's intensity: dark for the matt floor's ~15-30, up to a third
+  brighter for a marking's 90-150 (dp's map.pcd: median 18, 99th percentile
+  ~115). A voxel without an intensity keeps a little under the neutral
+  brightness, so a map without map.pcd looks like the ramp alone.
 """
 
 from __future__ import annotations
@@ -41,13 +44,17 @@ PALETTE = (
 WALL_GREY = np.array([0.86, 0.86, 0.88])
 WALL_TINT = 0.35  # how much of the ramp's colour a wall keeps
 UNDER_GREY = np.array([0.42, 0.42, 0.45])
-TEX_W, ROW_H = 256, 8  # rows 8 px tall so mipmaps do not bleed one kind into the next
 MIN_RANGE_M, MAX_RANGE_M = 3.0, 10.0
 
-# The sky: a gradient instead of MuJoCo's black, so the gaps a lidar map is
-# full of read as openings rather than holes; haze softens the far site.
-SKY_TOP = (0.62, 0.70, 0.80)
-SKY_BOTTOM = (0.20, 0.23, 0.28)
+# Intensity -> brightness: the map's intensities from INTENSITY_LO to
+# INTENSITY_HI (with a gamma that opens up the dark end, where most of a
+# floor is) scale the ramp's colour from FACTOR_LO to FACTOR_HI; brighter
+# than that clips to white. UNKNOWN_FACTOR for a voxel with no intensity.
+INTENSITY_LO, INTENSITY_HI = 5.0, 90.0
+INTENSITY_GAMMA = 0.7
+FACTOR_LO, FACTOR_HI = 0.55, 1.30
+UNKNOWN_FACTOR = 0.85
+SHADE_VERSION = 1  # bump when the constants above change: site_tiles.py's cache key
 
 
 def ramp(t: np.ndarray) -> np.ndarray:
@@ -56,15 +63,6 @@ def ramp(t: np.ndarray) -> np.ndarray:
     cs = np.array([c for _, c in PALETTE])
     t = np.clip(np.asarray(t, float), 0.0, 1.0)
     return np.stack([np.interp(t, xs, cs[:, k]) for k in range(3)], axis=-1)
-
-
-def texture_rgb() -> np.ndarray:
-    """(3 * ROW_H, TEX_W, 3) uint8: floor ramp, pale wall ramp, underside grey."""
-    floor = ramp(np.linspace(0.0, 1.0, TEX_W))
-    wall = WALL_TINT * floor + (1.0 - WALL_TINT) * WALL_GREY
-    under = np.tile(UNDER_GREY, (TEX_W, 1))
-    rows = [np.repeat(r[None], ROW_H, axis=0) for r in (floor, wall, under)]
-    return (np.concatenate(rows) * 255.0 + 0.5).astype(np.uint8)
 
 
 def height_range(floor_z: np.ndarray) -> tuple[float, float]:
@@ -77,16 +75,32 @@ def height_range(floor_z: np.ndarray) -> tuple[float, float]:
     return lo, lo + min(max(hi - lo, MIN_RANGE_M), MAX_RANGE_M)
 
 
-def texcoords(z: np.ndarray, kind: int, z_range: tuple[float, float]) -> np.ndarray:
-    """(N, 2) texture coordinates for vertices at heights z of one kind."""
-    lo, hi = z_range
-    u = np.clip((np.asarray(z, float) - lo) / (hi - lo), 0.002, 0.998)
-    v = np.full_like(u, (kind + 0.5) / 3.0)
-    return np.stack([u, v], axis=-1)
-
-
 def kind_of(direction: int) -> int:
     return KIND_FLOOR if direction == UP else KIND_UNDER if direction == DOWN else KIND_WALL
+
+
+def intensity_factor(intensity: np.ndarray) -> np.ndarray:
+    """(N,) brightness factor of lidar intensities; NaN -> UNKNOWN_FACTOR."""
+    i = np.asarray(intensity, dtype=np.float64)
+    t = np.clip((i - INTENSITY_LO) / (INTENSITY_HI - INTENSITY_LO), 0.0, 1.0) ** INTENSITY_GAMMA
+    f = FACTOR_LO + (FACTOR_HI - FACTOR_LO) * t
+    return np.where(np.isnan(i), UNKNOWN_FACTOR, f)
+
+
+def shade(kind: np.ndarray, z: np.ndarray, intensity: np.ndarray | None,
+          z_range: tuple[float, float]) -> np.ndarray:
+    """(N, 3) uint8 colours of surface samples: by `kind` (KIND_*) and height
+    on the ramp, scaled by the intensity (None: the ramp alone)."""
+    lo, hi = z_range
+    t = np.clip((np.asarray(z, float) - lo) / max(hi - lo, 1e-6), 0.0, 1.0)
+    floor = ramp(t)
+    rgb = np.where((kind == KIND_FLOOR)[:, None], floor,
+                   np.where((kind == KIND_WALL)[:, None],
+                            WALL_TINT * floor + (1.0 - WALL_TINT) * WALL_GREY,
+                            np.tile(UNDER_GREY, (t.shape[0], 1))))
+    if intensity is not None:
+        rgb = rgb * intensity_factor(intensity)[:, None]
+    return (np.clip(rgb, 0.0, 1.0) * 255.0 + 0.5).astype(np.uint8)
 
 
 # A triangle whose normal is within ~40 deg of vertical is a floor (or a tread)
