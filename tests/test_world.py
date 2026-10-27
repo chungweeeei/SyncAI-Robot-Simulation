@@ -8,6 +8,7 @@ from syncai_sim.world import (
     column_floor_filter,
     exposed_face_mesh,
     fill_floor_holes,
+    fill_planner_holes,
     fill_track_floor,
 )
 
@@ -135,3 +136,36 @@ def test_fill_floor_holes_small_enclosed_only():
     # Filled at the rim's median height: the rim is half at z -1, half at z 0.
     assert {z for _, _, z in added} <= {ORG - 1, ORG}
     assert fill_floor_holes(v, 0) is v
+
+
+def test_fill_planner_holes_closes_from_the_rim_not_past_an_edge():
+    # A 6 x 4 m floor (top at z 0) ending at x = 6 m (a drop); an 8 x 6 hole
+    # (48 columns, past floor_hole_max_cells), a 3 x 3 hole with a box 0.2 m
+    # tall standing in it, and a 2 x 2 hole under a table top 0.3 m up.
+    floor = _grid(range(ORG, ORG + 60), range(ORG, ORG + 40), [ORG - 1])
+    big = {(ORG + x, ORG + y) for x in range(10, 18) for y in range(10, 16)}
+    rim = {(x, y) for x, y in big if x in (ORG + 10, ORG + 17) or y in (ORG + 10, ORG + 15)}
+    boxed = {(ORG + x, ORG + y) for x in range(30, 33) for y in range(10, 13)}
+    tabled = {(ORG + x, ORG + y) for x in range(45, 47) for y in range(25, 27)}
+    keep = np.array([(x, y) not in big | boxed | tabled for x, y, _ in floor])
+    box = np.array([[ORG + 31, ORG + 11, ORG + 1]])
+    table = _grid(range(ORG + 44, ORG + 48), range(ORG + 24, ORG + 28), [ORG + 3])
+    v = np.concatenate([floor[keep], box, table])
+    out = fill_planner_holes(v, 0.1, 0.3, 0.5, 2)
+    added = {tuple(r) for r in out.tolist()} - {tuple(r) for r in v.tolist()}
+    # Two passes close the big hole from its rim in, at the floor's height;
+    # the boxed hole round its box (seen near that height); nothing past the
+    # drop at x = 6 m (support on one side only) and nothing under the table
+    # (its top, within clearance of the floor, is no support).
+    cols = {(x, y) for x, y, _ in added}
+    assert rim <= cols <= big | boxed
+    assert cols & boxed == boxed - {(ORG + 31, ORG + 11)}
+    assert {z for _, _, z in added} == {ORG - 1}
+    # What is left of it is an enclosed core of 20 columns: build_world's
+    # enclosed-hole fill, which runs next, closes it (the hole under the
+    # table, whose top is that column's surface in the band, stays).
+    core = big - cols
+    assert len(core) == 20
+    closed = {tuple(r) for r in fill_floor_holes(out, 25).tolist()}
+    assert {(x, y) for x, y, _ in closed - {tuple(r) for r in out.tolist()}} == core
+    assert fill_planner_holes(v, 0.1, 0.3, 0.5, 0) is v
