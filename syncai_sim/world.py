@@ -117,6 +117,23 @@ class WorldOptions:
     # through them, and a walking foot fits in anything over one column.
     # Larger regions are left: dp's 40 of 1 m^2 and more include stairwells.
     floor_hole_max_cells: int = 25
+    # The planner's own hole fill (syncai_global_planner surface_map.cpp,
+    # holeFillPass, its SurfaceMapParams defaults): a column whose neighbours
+    # within this radius hold usable surfaces (no occupied voxel within
+    # body_clearance 0.6 m above) agreeing on a height within one step
+    # (max_step_height 0.17 -> 2 cells), from at least `min_support` of the
+    # disc and three of its four quadrants, and with nothing seen near that
+    # height, is floor; passes run it again on the result, so it closes a
+    # hole ~1.2 m across from the rim in. The planner plans over those cells
+    # (flagged inferred), so the sim must stand on them too: on outdoor_1027
+    # a 33-column hole next to the track (11, 4.2), past the enclosed-hole
+    # limit above, was "traversable" to the planner and the G23 stepped into
+    # it and fell (2026-10-27). Not mirrored: the planner's min_known_free_above
+    # (the world keeps no free voxels), which only refuses slab tops seen from
+    # below as support. 0 passes = off.
+    planner_hole_fill_radius_m: float = 0.3
+    planner_hole_fill_min_support: float = 0.5
+    planner_hole_fill_passes: int = 2
 
 
 # Bumped when the cache's contents change shape without an option changing
@@ -436,6 +453,122 @@ def _fill_band(grid, z0, z1, max_cells):
                 grid[cells[k] // ny, cells[k] % ny, h] = True
 
 
+def fill_planner_holes(voxels: np.ndarray, resolution: float, radius_m: float,
+                       min_support: float, passes: int, step_cells: int = 2,
+                       clearance_cells: int = 6) -> np.ndarray:
+    """Add a floor voxel wherever the planner infers a surface (see
+    WorldOptions.planner_hole_fill_radius_m). Returns the extended voxel set."""
+    if passes <= 0 or radius_m <= 0 or voxels.shape[0] == 0:
+        return voxels
+    v = voxels.astype(np.int64)
+    lo = v.min(axis=0)
+    hi = v.max(axis=0) + np.array([1, 1, 1 + clearance_cells])  # air above the top surfaces
+    grid = np.zeros(tuple((hi - lo).tolist()), dtype=np.bool_)
+    idx = v - lo
+    grid[idx[:, 0], idx[:, 1], idx[:, 2]] = True
+    # The disc and its quadrants as discOffsets(radius, res, false) builds them.
+    r = int(np.ceil(radius_m / resolution))
+    disc = [(dx, dy) for dy in range(-r, r + 1) for dx in range(-r, r + 1)
+            if (dx or dy) and np.hypot(dx, dy) * resolution <= radius_m + 1e-9]
+    quad = [0 if dx >= 0 and dy > 0 else 1 if dx < 0 and dy >= 0 else
+            2 if dx <= 0 and dy < 0 else 3 for dx, dy in disc]
+    offs = np.array([(dx, dy, q) for (dx, dy), q in zip(disc, quad)], dtype=np.int64)
+    usable = _usable_tops(grid, clearance_cells)
+    n0 = int(v.shape[0])
+    for _ in range(passes):
+        fills = _planner_fill_pass(grid, usable, offs, min_support * len(disc), step_cells,
+                                   clearance_cells)
+        if fills.shape[0] == 0:
+            break
+        grid[fills[:, 0], fills[:, 1], fills[:, 2]] = True
+        usable[fills[:, 0], fills[:, 1], fills[:, 2]] = True  # inferred cells support the next pass
+    if int(grid.sum()) == n0:
+        return voxels
+    return np.argwhere(grid) + lo
+
+
+@nb.njit(cache=True)
+def _usable_tops(grid, clearance):
+    """The planner's candidates that pass clearance_occupied: the top of an
+    occupied run with no occupied voxel in the `clearance` voxels above."""
+    nx, ny, nz = grid.shape
+    out = np.zeros(grid.shape, np.bool_)
+    for i in range(nx):
+        for j in range(ny):
+            last = nz  # the lowest occupied voxel above the current one
+            for z in range(nz - 1, -1, -1):
+                if grid[i, j, z]:
+                    if z + 1 < nz and not grid[i, j, z + 1] and last > z + clearance:
+                        out[i, j, z] = True
+                    last = z
+    return out
+
+
+@nb.njit(cache=True)
+def _planner_fill_pass(grid, usable, offs, need, step, clearance):
+    nx, ny, nz = grid.shape
+    nd = offs.shape[0]
+    kz = np.empty(nd * nz, np.int64)
+    qd = np.empty(nd * nz, np.int64)
+    fills = np.empty((1024, 3), np.int64)
+    nf = 0
+    for i in range(nx):
+        for j in range(ny):
+            m = 0
+            for k in range(nd):
+                a, b = i + offs[k, 0], j + offs[k, 1]
+                if a < 0 or b < 0 or a >= nx or b >= ny:
+                    continue
+                for z in range(nz):
+                    if usable[a, b, z]:
+                        kz[m] = z
+                        qd[m] = offs[k, 2]
+                        m += 1
+            if m < 3:
+                continue
+            order = np.argsort(kz[:m], kind="mergesort")
+            s = kz[:m][order]
+            q = qd[:m][order]
+            lo = 0
+            while lo < m:
+                h = lo + 1
+                while h < m and s[h] - s[h - 1] <= step:
+                    h += 1
+                g0, g1 = lo, h
+                lo = h
+                if g1 - g0 < need:
+                    continue
+                seen = np.zeros(4, np.bool_)
+                for t in range(g0, g1):
+                    seen[q[t]] = True
+                if seen.sum() < 3:
+                    continue  # one-sided support: a floor edge, not a hole
+                zv = s[(g0 + g1) // 2]
+                # A surface already near that height (usable or not): not a hole.
+                layer = False
+                for z in range(max(zv - step - 1, 0), min(zv + step + 2, nz)):
+                    if grid[i, j, z] and (z + 1 >= nz or not grid[i, j, z + 1]):
+                        layer = True
+                        break
+                if layer:
+                    continue
+                # Something seen near that height: a low obstacle, a wall foot.
+                seen_occ = False
+                for z in range(max(zv - 1, 0), min(zv + 1 + clearance, nz)):
+                    if grid[i, j, z]:
+                        seen_occ = True
+                        break
+                if seen_occ:
+                    continue
+                if nf == fills.shape[0]:
+                    bigger = np.empty((2 * nf, 3), np.int64)
+                    bigger[:nf] = fills
+                    fills = bigger
+                fills[nf, 0], fills[nf, 1], fills[nf, 2] = i, j, zv
+                nf += 1
+    return fills[:nf]
+
+
 def exposed_face_rects(voxels: np.ndarray, resolution: float) -> np.ndarray:
     """Every voxel face that borders empty space, with coplanar neighbours
     merged into rectangles: (Q, 7) int32 rows (axis, sign, b1, b2, plane, n1,
@@ -622,6 +755,18 @@ def build_world(map_dir: str, cache_dir: str, opts: WorldOptions | None = None,
     if voxels.shape[0] != n_before:
         log(f"[world] {name}: added {voxels.shape[0] - n_before} floor voxels under the mapping "
             f"robot's stance where the map had none")
+    # The planner's fill reads the map as the planner does, before the track's
+    # body volume is cleared, so that the clearing also takes back whatever
+    # it would put there (a slab edge grown over a stairwell the track
+    # climbed). What it leaves of a large hole is a core of a few columns that
+    # the enclosed-hole rule below closes; the planner plans over that core
+    # too (its footprint rule lets 20 % of the disc be gaps).
+    n_unfilled = int(voxels.shape[0])
+    voxels = fill_planner_holes(voxels, resolution, opts.planner_hole_fill_radius_m,
+                                opts.planner_hole_fill_min_support, opts.planner_hole_fill_passes)
+    if voxels.shape[0] != n_unfilled:
+        log(f"[world] {name}: filled {voxels.shape[0] - n_unfilled} floor voxels where the "
+            f"planner infers a surface")
     n_spiked = int(voxels.shape[0])
     voxels = clear_track_volume(voxels, resolution, track, opts.track_clear_radius_m,
                                 opts.track_clear_floor_margin_m, opts.track_clear_top_m,

@@ -112,14 +112,15 @@ def world_options(p: dict):
         clip_spikes_above_neighbours_m=p["clip_spikes_above_neighbours_m"],
         track_clear_radius_m=p["track_clear_radius_m"],
         track_floor_fill_radius_m=p["track_floor_fill_radius_m"],
-        floor_hole_max_cells=p["floor_hole_max_cells"])
+        floor_hole_max_cells=p["floor_hole_max_cells"],
+        planner_hole_fill_passes=p["planner_hole_fill_passes"])
 
 
 PARAM_DEFAULTS: dict = {
     "map_dir": "", "cache_dir": "",
     "visual_max_height_above_column_floor_m": 3.0, "plate_min_voxels": 16,
     "clip_spikes_above_neighbours_m": 0.2, "track_clear_radius_m": 0.30, "track_floor_fill_radius_m": 0.30,
-    "floor_hole_max_cells": 25,
+    "floor_hole_max_cells": 25, "planner_hole_fill_passes": 2,
     "visual_mesh": "voxels", "publish_map_cloud": True, "web_view_port": 8080,
     "driver_link": "fake", "controller_command_port": 50051, "controller_telemetry_port": 50010,
     "controller_telemetry_hz": 50.0, "battery_soc": 90.0, "battery_drain_per_hour": 0.0,
