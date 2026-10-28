@@ -22,8 +22,10 @@
 #                    answers sys_manager's get_mode for robot_state
 #   camera_feeder -> gone (no camera)
 # The sleep offsets are start_nav.yaml's, so the stack comes up in the order it
-# does on the robot: static TF -> maps -> pose source -> lio_bridge -> planner /
-# controller -> task_runner.
+# does on the robot: static TF -> pose source -> lio_bridge -> planner /
+# controller -> task_runner. There is no map_server window: the workspace
+# removed 2D navigation (2026-10-28) and syncai_map_server with it; the planner
+# reads octomap.bt and keepout.json straight off disk.
 #
 # Logs go to log/stack/<robot_id>/sim/<name>/, a subtree of their own like
 # start_mapping.yaml's mapping/, so a sim run never interleaves with a robot's
@@ -43,15 +45,6 @@ windows:
     panes:
       - cmd: ros2 launch /home/syncrobotic/sim/launch/rsp.launch.py
         log: sim/bringup
-
-  # ---------- Window 1: map_server + keepout (idle on a 3D-only map) ----------
-  - name: map_server
-    panes:
-      - cmd: ros2 launch syncai_map_server map_server.launch.py
-        log: sim/map_server
-      - cmd: ros2 launch syncai_map_server costmap_filter_info.launch.py
-        sleep: 1
-        log: sim/keepout
 
   # ---------- Window 2: the simulator ----------
   # MuJoCo + the ROS face of pointlio / localizer / driver_manager. Needs the

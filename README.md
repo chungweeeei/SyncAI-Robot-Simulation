@@ -4,7 +4,7 @@ A MuJoCo simulation of the SyncAI robot (the G23 quadruped) in a **real, mapped
 site**, built so the navigation stack in
 [SyncAI-Robot-Workspace](https://github.com/chungweeeei/SyncAI-Robot-Workspace)
 — above all its 3D branch: the `Octo3D` planner, the `TerrainLayer`, stair
-mode and the `*_3d.xml` behaviour trees — can run **end to end without a
+mode and the `move.xml` / `dock.xml` behaviour trees — can run **end to end without a
 robot**. One container holds the workspace's own nav stack and the simulator,
 on a DDS domain of its own; the picture is served to a browser.
 
@@ -96,7 +96,7 @@ network, ROS_DOMAIN_ID 42, this repo's `cyclonedds.xml` and `sim01.ini`. To
 run `syncai_backend` and the frontend against the sim, `.env` switches it to
 the robot's own topology — `SIM_NETWORK_MODE=host`, `SIM_ROS_DOMAIN_ID=1`, the
 workspace's `config/cyclonedds.xml` and an instance file of the workspace's
-(`SIM_INSTANCE_INI`, e.g. `config/instances/robot01.ini`) — the same three the
+(`SIM_INSTANCE_INI`, e.g. `config/instances/robot.ini`) — the same three the
 backend's compose uses, so it finds the sim as it finds robot01. Both DDS
 configs are loopback-only, so nothing reaches the network in either mode; the
 integrated one must never run on a robot's Jetson, where robot01 shares that
@@ -173,7 +173,7 @@ params file names the value each setting mirrors. Three couplings to know:
   restores the policy `mode` reported *before* the switch, so the sim boots
   reporting policy 0 and republishes `mode` at 2 Hz.
 * **The robot boots in Locomotion (1).** The real controller boots in 8
-  (UNKNOWN) and `move_3d.xml` never sends a motion key; a faithful boot would
+  (UNKNOWN) and `move.xml` never sends a motion key; a faithful boot would
   never move. `initial_motion_state` is the knob.
 * **Goals carry a z.** `Octo3D`'s `goal_z_mode` is `request` and the
   controller's goal check has `goal_z_tolerance` 0.5, so a goal needs the
@@ -429,9 +429,8 @@ food for the planner's dynamic overlay and TerrainLayer's `obstacle_memory`.
 | `sim_node` | `[sim] ready in … s`, `[sim] spawned at …`, then `realtime x1.00  scan ~20 ms` every 10 s |
 | `lio_bridge` | `localization bridged: map -> sim01/odom = …` |
 | `planner` | `surface map: … columns`, `N stair links from … keyframes` |
-| `controller` | `terrain_layer: 3D map … -- layer on` |
-| `task_runner` | `3D map (planner_server/Octo3D/map_available) -- goals run the *_3d.xml trees` |
-| `map_server`, `keepout` | the "3D-only map … starting idle" warnings |
+| `controller` | `TerrainLayer terrain_layer: cloud …/pointlio/body_cloud …` (the layer always runs now) |
+| `task_runner` | `process started`, then quiet until a goal arrives (no per-goal `*_3d.xml` swap any more) |
 
 `ros2 topic hz /sim01/pointlio/body_cloud` is ~10, `/sim01/odom` ~20;
 `ros2 run tf2_ros tf2_echo map sim01/pointlio_body` shows z = ground + 0.481

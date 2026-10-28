@@ -2,7 +2,7 @@
 # own docker-compose.yml, which is written for the robot's Jetson. Run from
 # this repo (the backend repo is not edited; CLAUDE.md rule 1 in spirit):
 #
-#   ROBOT_WS=$(cd ../SyncAI-Robot-Workspace && pwd) ROBOT_INSTANCE=robot01 \
+#   ROBOT_WS=$(cd ../SyncAI-Robot-Workspace && pwd) ROBOT_INSTANCE=robot \
 #     docker compose -f ../SyncAI-Robot-Backend/docker-compose.yml \
 #                    -f config/integration/backend.mac.yml up -d
 #
@@ -25,7 +25,7 @@ services:
     group_add: !reset []
     volumes: !override
       - ${ROBOT_WS:?set ROBOT_WS to the workspace checkout (absolute)}/config:/home/syncrobotic/robot_ws/config
-      - ${ROBOT_WS}/config/instances/${ROBOT_INSTANCE:-robot01}.ini:/home/syncrobotic/robot_ws/config/system.ini
+      - ${ROBOT_WS}/config/instances/${ROBOT_INSTANCE:-robot}.ini:/home/syncrobotic/robot_ws/config/system.ini
       - ${ROBOT_WS}/map:/home/syncrobotic/robot_ws/map
       - ${RECORD_DIR:-./record}:/home/syncrobotic/robot_ws/record
       - type: tmpfs
