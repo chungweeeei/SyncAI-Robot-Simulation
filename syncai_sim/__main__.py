@@ -3,6 +3,7 @@
     python3 -m syncai_sim [--teleop] [--headless] [--no-ros]
                           [--system-config INI] [--map DIR] [--seconds S]
                           [--locomotion policy|kinematic] [--visual-mesh voxels|pointcloud|tsdf]
+                          [--visual-look ramp|photo]
                           [--ros-args --params-file ... -p key:=value ...]
 
 Everything after `--ros-args` goes to rclpy (the params file is
@@ -49,6 +50,9 @@ def main(argv=None) -> int:
     ap.add_argument("--visual-mesh", choices=("voxels", "pointcloud", "tsdf"), default=None,
                     help="the site the viewer starts with (default: the params file's, voxels); "
                          "the panel switches between them")
+    ap.add_argument("--visual-look", choices=("ramp", "photo"), default=None,
+                    help="the site's look (default: the params file's, ramp); photo needs "
+                         "config/colour/<map>.npz (scripts/colour_map.py)")
     a = ap.parse_args(own)
 
     from .config import read_ini
@@ -73,6 +77,8 @@ def main(argv=None) -> int:
         params["locomotion"] = a.locomotion
     if a.visual_mesh:
         params["visual_mesh"] = a.visual_mesh
+    if a.visual_look:
+        params["visual_look"] = a.visual_look
     cfg = build_sim_config(ini, params)
     log = print
     sim = Simulator(cfg, log=log)
@@ -142,6 +148,8 @@ def _run_without_ros(ini, a) -> int:
         params["locomotion"] = a.locomotion
     if a.visual_mesh:
         params["visual_mesh"] = a.visual_mesh
+    if a.visual_look:
+        params["visual_look"] = a.visual_look
     cfg = build_sim_config(ini, params)
     sim = Simulator(cfg)
     spawn = _spawn_pose(ini, params)

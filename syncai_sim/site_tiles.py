@@ -17,9 +17,14 @@ rectangles and a 512 x 512 atlas on dp; the GLB's PNG is a few tens of KB.
 (tsdf_mesh.py) have no voxel faces: their vertices are a few centimetres
 apart, so there the intensity goes on the vertices.
 
-Cached as cache/<map>/site_tiles-<visual_mesh>.npz (the GLB bytes of every
-tile), keyed on the world, the intensities, the look (visual.SHADE_VERSION)
-and, for the surface, the surface's own cache.
+The `photo` look paints the same texels and vertices with the colour the
+mapping run's camera saw at each voxel (voxel_colour.py, visual.shade_photo)
+when the map has a table (config/colour/<map>.npz); without one the ramp
+is shown and the log says why.
+
+Cached as cache/<map>/site_tiles-<visual_mesh>-<look>.npz (the GLB bytes of
+every tile), keyed on the world, the intensities, the colour table, the
+look (visual.SHADE_VERSION) and, for the surface, the surface's own cache.
 """
 
 from __future__ import annotations
@@ -89,9 +94,10 @@ def _pow2(n: int) -> int:
 
 
 def _paint(r: np.ndarray, x: np.ndarray, y: np.ndarray, width: int, height: int,
-           resolution: float, lookup, z_range: tuple[float, float]) -> np.ndarray:
+           resolution: float, lookup, z_range: tuple[float, float], colours=None) -> np.ndarray:
     """The atlas (height, width, 3) uint8 of rectangles `r` (rows of
-    exposed_face_rects, int64) placed at texel (x, y) with their gutters."""
+    exposed_face_rects, int64) placed at texel (x, y) with their gutters;
+    the photo look when `colours` (voxel_colour.VoxelColour.lookup) is given."""
     axis, sign = r[:, 0], r[:, 1]
     n1, n2 = r[:, 5], r[:, 6]
     w, h = n1 + 2 * GUTTER, n2 + 2 * GUTTER
@@ -118,7 +124,8 @@ def _paint(r: np.ndarray, x: np.ndarray, y: np.ndarray, width: int, height: int,
     z = np.where(ax == 2, (r[rid, 4] + (sign[rid] > 0) - TREE_MAX_VAL) * resolution,
                  (idx[:, 2] + 0.5 - TREE_MAX_VAL) * resolution)
     intensity = lookup(idx) if lookup is not None else None
-    colour = visual.shade(kind, z, intensity, z_range)
+    colour = (visual.shade_photo(kind, intensity, colours(idx)) if colours is not None
+              else visual.shade(kind, z, intensity, z_range))
     image = np.zeros((height, width, 3), np.uint8)
     image[y[rid] + j_pad, x[rid] + i_pad] = colour
     return image
@@ -142,10 +149,11 @@ def _glb(vertices: np.ndarray, faces: np.ndarray, uv: np.ndarray | None,
 
 
 def voxel_tiles(rects: np.ndarray, storeys: np.ndarray, resolution: float, lookup,
-                tile_m: float = TILE_M) -> list[Tile]:
+                tile_m: float = TILE_M, colours=None) -> list[Tile]:
     """The voxel mesh's rectangles as textured tiles. `lookup(idx (N, 3)) ->
     intensities` (voxel_intensity.VoxelIntensity.lookup), or None for the
-    ramp alone."""
+    ramp alone; `colours(idx) -> rgb` (voxel_colour.VoxelColour.lookup) for
+    the photo look."""
     if rects.shape[0] == 0:
         return []
     r = rects.astype(np.int64)
@@ -176,7 +184,8 @@ def voxel_tiles(rects: np.ndarray, storeys: np.ndarray, resolution: float, looku
             part_sel = np.flatnonzero(atlas == part)
             rp = rs[part_sel]
             height = _pow2(used)
-            image = _paint(rp, x[part_sel], y[part_sel], width, height, resolution, lookup, z_range)
+            image = _paint(rp, x[part_sel], y[part_sel], width, height, resolution, lookup, z_range,
+                           colours)
             corners, texels = quad_corners(rp.astype(np.int32), resolution)
             px = x[part_sel][:, None] + GUTTER + texels[:, :, 0]
             py = y[part_sel][:, None] + GUTTER + texels[:, :, 1]
@@ -193,10 +202,11 @@ def voxel_tiles(rects: np.ndarray, storeys: np.ndarray, resolution: float, looku
 
 
 def surface_tiles(mesh, origin_m: np.ndarray, lo: np.ndarray, resolution: float, lookup,
-                  tile_m: float = TILE_M) -> list[Tile]:
+                  tile_m: float = TILE_M, colours=None) -> list[Tile]:
     """pcd_mesh.PcdMesh (vertices, faces, kinds, storeys per face) as tiles
-    with the intensity on the vertices: a Poisson surface's vertices are a
-    few centimetres apart, which is the texture's resolution anyway."""
+    with the intensity (or, with `colours`, the photo) on the vertices: a
+    Poisson surface's vertices are a few centimetres apart, which is the
+    texture's resolution anyway."""
     v, f = mesh.vertices, mesh.faces
     if f.shape[0] == 0:
         return []
@@ -211,11 +221,12 @@ def surface_tiles(mesh, origin_m: np.ndarray, lo: np.ndarray, resolution: float,
     floor_v = np.unique(f[kinds == visual.KIND_FLOOR])
     z_range = visual.height_range(v[floor_v][:, 2] if floor_v.size else np.zeros(0))
     intensity = None
+    idx = np.floor((v.astype(np.float64) - origin_m[None, :]) / resolution).astype(np.int64) \
+        + lo[None, :]
     if lookup is not None:
-        idx = np.floor((v.astype(np.float64) - origin_m[None, :]) / resolution).astype(np.int64) \
-            + lo[None, :]
         intensity = lookup(idx)
-    colours = visual.shade(vkind, v[:, 2], intensity, z_range)
+    colours = (visual.shade_photo(vkind, intensity, colours(idx)) if colours is not None
+               else visual.shade(vkind, v[:, 2], intensity, z_range))
     groups, inverse = np.unique(np.column_stack((mesh.storeys.astype(np.int64), ix, iy)), axis=0,
                                 return_inverse=True)
     inverse = inverse.reshape(-1)
@@ -228,21 +239,32 @@ def surface_tiles(mesh, origin_m: np.ndarray, lo: np.ndarray, resolution: float,
     return tiles
 
 
-def _key(world: World, visual_mesh: str, intensity_key: str | None, surface_key: str | None) -> str:
+def _key(world: World, visual_mesh: str, intensity_key: str | None, surface_key: str | None,
+         look: str = "ramp", colour_key: str | None = None) -> str:
     return json.dumps({"format": FORMAT, "shade": visual.SHADE_VERSION, "tile_m": TILE_M,
                        "world": [world.stats.cache_key, world.stats.options],
                        "visual_mesh": visual_mesh, "intensity": intensity_key,
-                       "surface": surface_key}, sort_keys=True)
+                       "surface": surface_key, "look": look, "colour": colour_key},
+                      sort_keys=True)
 
 
 def load_or_build(world: World, map_dir: str, cache_dir: str, visual_mesh: str,
-                  log=print) -> list[Tile]:
+                  look: str = "ramp", log=print) -> list[Tile]:
     """The site's tiles for the browser, from the cache or built (dp: ~10 s
     for the voxels; the surface adds pcd_mesh.py's own build the first time)."""
-    from . import voxel_intensity
+    from . import voxel_colour, voxel_intensity
 
     if visual_mesh not in ("voxels", "pointcloud", "tsdf"):
         raise ValueError(f"visual_mesh {visual_mesh!r}: voxels | pointcloud | tsdf")
+    if look not in visual.LOOKS:
+        raise ValueError(f"look {look!r}: " + " | ".join(visual.LOOKS))
+    colour_table = None
+    if look == "photo":
+        colour_table = voxel_colour.load_for(world, log=log)
+        if colour_table is None:
+            log("[tiles] no colour table: the ramp look is shown instead")
+            look = "ramp"
+    colour_key = voxel_colour.file_key(world.stats.map_name) if look == "photo" else None
     pcd_path = os.path.join(map_dir, "map.pcd")
     intensity_key = None
     if os.path.isfile(pcd_path):
@@ -264,8 +286,8 @@ def load_or_build(world: World, map_dir: str, cache_dir: str, visual_mesh: str,
         else:
             st = os.stat(os.path.join(cache_dir, cache_file))
             surface_key = f"{st.st_size}-{int(st.st_mtime)}"
-    key = _key(world, visual_mesh, intensity_key, surface_key)
-    path = os.path.join(cache_dir, f"site_tiles-{visual_mesh}.npz")
+    key = _key(world, visual_mesh, intensity_key, surface_key, look, colour_key)
+    path = os.path.join(cache_dir, f"site_tiles-{visual_mesh}-{look}.npz")
     if os.path.isfile(path):
         z = np.load(path)
         if str(z["key"]) == key:
@@ -278,11 +300,13 @@ def load_or_build(world: World, map_dir: str, cache_dir: str, visual_mesh: str,
     t0 = time.perf_counter()
     table = voxel_intensity.load_or_build(map_dir, cache_dir, world, log=log)
     lookup = table.lookup if table is not None else None
+    colours = colour_table.lookup if colour_table is not None else None
     if visual_mesh == "voxels":
-        tiles = voxel_tiles(world.mesh_rects, world.mesh_rect_storeys, world.grid.res, lookup)
+        tiles = voxel_tiles(world.mesh_rects, world.mesh_rect_storeys, world.grid.res, lookup,
+                            colours=colours)
     else:
         tiles = surface_tiles(surface, world.grid.origin_m, world.grid.lo.astype(np.int64),
-                              world.grid.res, lookup)
+                              world.grid.res, lookup, colours=colours)
     log(f"[tiles] built {len(tiles)} tiles, {sum(t.triangles for t in tiles) / 1e6:.1f} M "
         f"triangles, {sum(len(t.glb) for t in tiles) / 1e6:.0f} MB of GLB in "
         f"{time.perf_counter() - t0:.1f} s")

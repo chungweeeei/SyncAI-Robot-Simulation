@@ -46,9 +46,11 @@ syncai_sim/                        the Python package (python3 -m syncai_sim)
   world.py                           octomap.bt -> VoxelGrid + visual mesh (as rectangles) + collision plates, cached
   pcd_mesh.py                        map.pcd -> a smooth viewer surface (Poisson, open3d), cached
   tsdf_mesh.py                       the keyframes' patches + poses.txt -> a TSDF viewer surface (open3d), thin structure kept, cached
-  visual.py                          the viewer's look: colour by height, shaded by the lidar's intensity
+  visual.py                          the viewer's look: colour by height, shaded by the lidar's intensity; or the photo
   voxel_intensity.py                 map.pcd -> the median intensity of each voxel, cached
-  site_tiles.py                      the site for the browser: 10 m tiles, every voxel face a texel of its intensity, as GLB, cached
+  voxel_colour.py                    the mapping run's bag -> the colour the camera saw at each voxel (config/colour/<map>.npz, scripts/colour_map.py)
+  bag_camera.py                      the bag's images, camera_info and /tf_static, read without ROS
+  site_tiles.py                      the site for the browser: 10 m tiles, every voxel face a texel of its intensity or its colour, as GLB, cached
   storeys.py                         the site's storeys from poses.txt (the viewer's 1F / 2F switch)
   map_cloud.py                       map.pcd thinned per storey for Foxglove (sim/map_cloud/storey<N>)
 config/foxglove/bridge.yaml        foxglove_bridge's settings (port 8765, the .STL asset allowlist)
@@ -354,7 +356,27 @@ shading goes on as a texture: each 10 m tile of each storey is one GLB with
 an atlas in which every rectangle has its own patch of texels, one per voxel
 face (dp: 179 tiles, 2.5 M triangles, 140 MB, built in 9 s once, cached).
 The surfaces' vertices are a few centimetres apart, so there the intensity
-goes on the vertices. None of
+goes on the vertices.
+
+**The photo look** (`visual_look`, `--visual-look`, the panel's Look
+switch). The same tiles painted with the colour the mapping run's camera
+saw at each voxel, from `config/colour/<map>.npz` (`voxel_colour.py`): the
+run's bag gives the scans, the images, the camera's intrinsics and its
+mount (`bag_camera.py`, no ROS), and Point-LIO replayed from the same bag
+gives the pose at every instant (`scripts/bag_odom.py`); every return is
+placed in the map at its firing time, moved into the camera at the nearest
+frame's time, projected (equidistant: the G23's lens is a fisheye) and, if
+nothing nearer sits in its pixel cell, takes the pixel; each voxel keeps the
+per-channel median over every observation, so passers-by and odd exposures
+are outvoted. `scripts/colour_map.py` builds the file (outdoor_1027: 5240
+scans and 17 M observations in 48 s, 77 % of the occupied voxels coloured,
+9 MB; `config/colour/README.md` records the bags). Only
+what the camera looked at gets a colour — one forward fisheye, so the
+robot's back, its sides and the ceilings stay grey (a neutral shaded by
+the intensity, `visual.shade_photo`) — and the sun, shadows and white
+balance are as the camera had them; 10 cm voxels keep the texture blocky.
+A picture, as the ramp is: nothing the lidar, the feet or the planner see
+reads it. None of
 this is in the MuJoCo model: the MJB holds the robot, the
 plates, the props and the terrain pool, 20 MB that compile in a second. The
 robot's own STLs go over decimated (274 k → 29 k triangles, `robot.py`). Only
