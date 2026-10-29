@@ -72,7 +72,15 @@ class WorldOptions:
     # the only route to the stairs (2026-10-23) — a thing the real robot never
     # sees, because its lidar looks at the real floor. A real post wider than
     # one voxel or standing next to anything of its height is kept.
-    clip_spikes_above_neighbours_m: float = 0.2
+    # 0.1 (one voxel), not 0.2: a single stray return 10-15 cm over the floor
+    # makes a one-voxel post too, and its measured top is that return. On
+    # outdoor_1027 two of them at (13.65, 3.95) and (13.85, 3.55), ~15 cm over
+    # the floor, tripped PPO's front-left foot in 3 of 20 routine-job runs
+    # (2026-10-29); walked through at 0.8 m/s it fell 8 of 40 times with them
+    # and 0 of 40 without. One voxel more clips 3.2 k voxels on outdoor_1027
+    # and 6.3 k on dp, mostly tops of canopies and roofs; dp's ten fitted
+    # flights come out identical.
+    clip_spikes_above_neighbours_m: float = 0.1
     # Erase occupied voxels inside the volume the MAPPING robot's body swept
     # along `poses.txt`: a cylinder of this radius around each keyframe, from
     # `track_clear_floor_margin_m` above that keyframe's ground (z - 0.481) to

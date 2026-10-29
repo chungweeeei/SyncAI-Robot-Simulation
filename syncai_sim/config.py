@@ -120,7 +120,7 @@ def world_options(p: dict):
 PARAM_DEFAULTS: dict = {
     "map_dir": "", "cache_dir": "",
     "visual_max_height_above_column_floor_m": 3.0, "plate_min_voxels": 16,
-    "clip_spikes_above_neighbours_m": 0.2, "track_clear_radius_m": 0.30, "track_floor_fill_radius_m": 0.30,
+    "clip_spikes_above_neighbours_m": 0.1, "track_clear_radius_m": 0.30, "track_floor_fill_radius_m": 0.30,
     "floor_hole_max_cells": 25, "planner_hole_fill_passes": 2,
     "visual_mesh": "voxels", "visual_look": "ramp", "publish_map_cloud": True,
     "web_view_port": 8080,
