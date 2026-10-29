@@ -232,7 +232,9 @@ runners in `g2_deploy_rs` (`src/policy_runner.rs`, `src/himloco_policy_runner.rs
 observation layout and scales, joint order, action scaling and clamps, PD
 gains) running the files its `main.rs` loads by default — `ppo/policy7.onnx`
 for `set_policy_mode 0`, `isaacsim/policy_0812.onnx` for 1, PPO for anything
-else — at 50 Hz, with the PD closed on every 2 ms physics step and clipped to
+else — at 50 Hz (`policy0_runner` / `policy1_runner` can put the Locomotion
+repo's StairHistory actor behind either number instead, a policy the robot has
+no runner for yet: `StairHistoryRunner`), with the PD closed on every 2 ms physics step and clipped to
 the URDF's joint efforts (`legged.py`). The motion state picks the controller
 state: Locomotion / MPC walk the policy, Stand and Lie Down ease to a pose,
 Damping and E-stop leave only kd. The posture check is the controller's
