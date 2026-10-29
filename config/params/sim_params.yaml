@@ -39,6 +39,13 @@
     # unseen places open). All three shaded by the lidar's intensity. A
     # picture either way.
     visual_mesh: voxels
+    # The site's look (the panel's Look switch; visual.py): "ramp" = colour
+    # by height, shaded by the lidar's intensity; "photo" = the colour the
+    # mapping run's camera saw at each voxel (voxel_colour.py), from
+    # config/colour/<map>.npz built by scripts/colour_map.py out of the run's
+    # bag; without that file the ramp is shown. Grey where the camera never
+    # looked (the robot's back, ceilings).
+    visual_look: ramp
     # Foxglove's site (map_cloud.py): map.pcd thinned to 6 cm, latched once on
     # sim/map_cloud/storey<N> (dp: 3.7 M points, 59 MB; first build 11 s).
     publish_map_cloud: true

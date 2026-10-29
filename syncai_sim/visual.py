@@ -19,6 +19,13 @@ touches what the lidar, the feet or the planner see.
   brighter for a marking's 90-150 (dp's map.pcd: median 18, 99th percentile
   ~115). A voxel without an intensity keeps a little under the neutral
   brightness, so a map without map.pcd looks like the ramp alone.
+* **The photo look** (`shade_photo`, the panel's Look switch): the colour
+  the mapping run's camera saw at each voxel (voxel_colour.py) instead of
+  the ramp, scaled a little by the face's kind so a box still reads as a
+  box under flat shading. A voxel the camera never saw — the robot's back
+  and sides, ceilings — takes a neutral grey scaled by the intensity like
+  the ramp is, so markings still show there and the uncovered part reads
+  as uncovered rather than as a colour of its own.
 """
 
 from __future__ import annotations
@@ -54,7 +61,14 @@ INTENSITY_LO, INTENSITY_HI = 5.0, 90.0
 INTENSITY_GAMMA = 0.7
 FACTOR_LO, FACTOR_HI = 0.55, 1.30
 UNKNOWN_FACTOR = 0.85
-SHADE_VERSION = 1  # bump when the constants above change: site_tiles.py's cache key
+
+# The looks the panel switches between: the height ramp above, or the photo.
+LOOKS = ("ramp", "photo")
+# Photo colours by the face's kind (KIND_FLOOR, KIND_WALL, KIND_UNDER): the
+# camera saw the floors and walls lit, an underside hardly ever.
+PHOTO_KIND_FACTOR = (1.0, 0.94, 0.6)
+PHOTO_UNKNOWN = np.array([0.66, 0.66, 0.68])  # a voxel without a colour, before the intensity
+SHADE_VERSION = 2  # bump when the constants above change: site_tiles.py's cache key
 
 
 def ramp(t: np.ndarray) -> np.ndarray:
@@ -100,6 +114,21 @@ def shade(kind: np.ndarray, z: np.ndarray, intensity: np.ndarray | None,
                             np.tile(UNDER_GREY, (t.shape[0], 1))))
     if intensity is not None:
         rgb = rgb * intensity_factor(intensity)[:, None]
+    return (np.clip(rgb, 0.0, 1.0) * 255.0 + 0.5).astype(np.uint8)
+
+
+def shade_photo(kind: np.ndarray, intensity: np.ndarray | None, photo: np.ndarray) -> np.ndarray:
+    """(N, 3) uint8 colours of surface samples from their voxels' photo
+    colours (`photo` (N, 3) rgb 0-255, NaN where the camera never saw the
+    voxel; voxel_colour.VoxelColour.lookup), by `kind` (KIND_*); the unseen
+    take PHOTO_UNKNOWN scaled by the intensity (None: as is)."""
+    kind = np.asarray(kind, np.int64)
+    photo = np.asarray(photo, np.float64) / 255.0
+    known = ~np.isnan(photo[:, 0])
+    factor = (intensity_factor(intensity) if intensity is not None
+              else np.full(kind.shape[0], UNKNOWN_FACTOR))
+    rgb = np.tile(PHOTO_UNKNOWN, (kind.shape[0], 1)) * factor[:, None]
+    rgb[known] = photo[known] * np.asarray(PHOTO_KIND_FACTOR)[kind[known]][:, None]
     return (np.clip(rgb, 0.0, 1.0) * 255.0 + 0.5).astype(np.uint8)
 
 

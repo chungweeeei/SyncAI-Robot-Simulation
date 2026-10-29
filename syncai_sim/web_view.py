@@ -35,6 +35,7 @@ import mujoco
 import numpy as np
 
 from . import scene as sc
+from . import visual
 
 VIEW_HZ = 20.0  # poses to the browser per second: a state copy is ~0.3 ms, 20 keep the gait fluid
 TERRAIN_HZ = 2.0  # the terrain boxes, when shown
@@ -177,8 +178,9 @@ class WebView:
         self._switch_site(self._site_mode.value)
 
     def _switch_site(self, mode: str) -> None:
-        """Replace the site's tiles with `mode`'s (voxels / pointcloud / tsdf;
-        site_tiles.py builds a set once and caches it)."""
+        """Replace the site's tiles with `mode`'s (voxels / pointcloud / tsdf)
+        in the panel's look (ramp / photo; site_tiles.py builds a set once
+        and caches it)."""
         from . import site_tiles
 
         world = getattr(self.sim, "world", None)
@@ -189,9 +191,12 @@ class WebView:
             return
         try:
             self._site_mode.disabled = True
+            self._look.disabled = True
             t0 = time.perf_counter()
             cfg = self.sim.cfg
-            tiles = site_tiles.load_or_build(world, cfg.map_dir, cfg.cache_dir, mode, log=self.log)
+            look = self._look.value
+            tiles = site_tiles.load_or_build(world, cfg.map_dir, cfg.cache_dir, mode, look=look,
+                                             log=self.log)
             with self.server.atomic():
                 for handles in self._site.values():
                     for h in handles:
@@ -202,11 +207,12 @@ class WebView:
                         tile.name, tile.glb, cast_shadow=False,
                         visible=self._shown is None or tile.storey in self._shown)
                     self._site.setdefault(tile.storey, []).append(handle)
-            self.log(f"[web] site ({mode}): {len(tiles)} tiles, "
+            self.log(f"[web] site ({mode}, {look}): {len(tiles)} tiles, "
                      f"{sum(t.triangles for t in tiles) / 1e6:.1f} M triangles sent in "
                      f"{time.perf_counter() - t0:.1f} s")
         finally:
             self._site_mode.disabled = False
+            self._look.disabled = False
             self._site_lock.release()
 
     def _build_robot(self) -> None:
@@ -288,7 +294,14 @@ class WebView:
             hint="voxels: what the sim senses; pointcloud: the Poisson surface; tsdf: the "
                  "surface from the keyframes (each built once, minutes the first time)")
 
+        self._look = gui.add_dropdown(
+            "Look", list(visual.LOOKS), initial_value=getattr(self.sim.cfg, "visual_look", "ramp"),
+            hint="ramp: colour by height, shaded by the lidar's intensity; photo: the colour the "
+                 "mapping run's camera saw (config/colour/<map>.npz, scripts/colour_map.py), "
+                 "grey where it never looked")
+
         @self._site_mode.on_update
+        @self._look.on_update
         def _(_event) -> None:
             threading.Thread(target=self._switch_site, args=(self._site_mode.value,),
                              daemon=True, name="web-site").start()

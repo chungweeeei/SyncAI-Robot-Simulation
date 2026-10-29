@@ -81,6 +81,7 @@ class SimConfig:
     himloco_policy: str = ""
     terrain: TerrainPatchConfig = field(default_factory=TerrainPatchConfig)
     visual_mesh: str = "voxels"  # the browser's site: voxels | pointcloud | tsdf (site_tiles.py)
+    visual_look: str = "ramp"  # its look: ramp | photo (visual.py; photo needs config/colour/<map>.npz)
     # Walking only: fitted = the fitted flights as fixed boxes (stairs.py); voxels = the
     # patch's boxes there too, risers on the 0.1 m column grid (the sim before 2026-10-25)
     stairs: str = "fitted"
@@ -155,6 +156,8 @@ class Simulator:
             actuator=cfg.actuator), log=log)
         if cfg.visual_mesh not in ("voxels", "pointcloud", "tsdf"):
             raise ValueError(f"visual_mesh {cfg.visual_mesh!r}: voxels | pointcloud | tsdf")
+        if cfg.visual_look not in ("ramp", "photo"):
+            raise ValueError(f"visual_look {cfg.visual_look!r}: ramp | photo")
         capacity = cfg.terrain.capacity if self.legged else 0
         timestep = 1.0 / cfg.physics_hz
         if cfg.stairs not in ("fitted", "voxels"):
