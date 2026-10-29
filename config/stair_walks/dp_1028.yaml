@@ -1,0 +1,26 @@
+# Stand-in walks over dp_1028's stairs that the mapping track never climbed,
+# for surface_heights.py's flight fit (its module docstring): each a polyline
+# of [x, y, ground] in the map frame, resampled every 0.2 m. The fit takes the
+# floors at both ends from the surface under the level keyframes, so every
+# walk starts, turns and ends on a metre or so of level floor.
+
+walks:
+  # The middle stair, a U like dp's: flight 1 up north at x -28.5 .. -27.0
+  # (1F -0.4 -> landing), the landing at 2.1 over y 22.3 .. 24.0 and x -30.6
+  # .. -27.0, flight 2 up south at x -30.55 .. -29.15 to 2F (3.8). Read off
+  # map.pcd's surface tops (cache/dp_1028/surface_heights.npz) along each
+  # flight's middle, 2026-10-28: flight 1's foot at y 18.0 (floor -0.4), its
+  # head at 22.3, risers ~0.18 m on ~0.3 m treads; flight 2's head at 22.15,
+  # its last tread at 3.7 by y 19.1 and 2F (3.8-3.9) south of 18.7. The
+  # workspace planner did not detect it ("0 detected off the map"), so this
+  # moves the feet only; the planner routes over it once stair_detect does.
+  - name: dp_1028 middle stair (U at x -30.6 .. -27.0, y 18 .. 24)
+    points:
+      - [-27.75, 16.6, -0.4]
+      - [-27.75, 17.9, -0.4]
+      - [-27.75, 22.3, 2.1]
+      - [-27.75, 23.2, 2.1]
+      - [-29.85, 23.2, 2.1]
+      - [-29.85, 22.25, 2.1]
+      - [-29.85, 19.2, 3.8]
+      - [-29.85, 17.9, 3.8]
