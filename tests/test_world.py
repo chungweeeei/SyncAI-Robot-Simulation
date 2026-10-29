@@ -67,6 +67,19 @@ def test_clip_spikes_removes_one_column_posts_only():
     assert clip_spikes(vox, 0.1, 0.0).shape[0] == vox.shape[0]
 
 
+def test_clip_spikes_one_voxel_bump_goes_at_one_voxel():
+    # A single stray return makes a column one voxel over the floor (outdoor_1027's
+    # posts PPO tripped on); a kerb, as long as it is wider than a column, stays.
+    floor = _grid(range(ORG, ORG + 8), range(ORG, ORG + 8), [ORG])
+    bump = _grid([ORG + 3], [ORG + 3], [ORG + 1])
+    kerb = _grid([ORG + 6], range(ORG, ORG + 8), [ORG + 1])
+    vox = np.concatenate([floor, bump, kerb])
+    assert clip_spikes(vox, 0.1, 0.2).shape[0] == vox.shape[0]
+    out = clip_spikes(vox, 0.1, 0.1)
+    assert out.shape[0] == vox.shape[0] - 1
+    assert not any(v == [ORG + 3, ORG + 3, ORG + 1] for v in out.tolist())
+
+
 def test_clear_track_volume_erases_fence_keeps_floor_and_risers():
     floor = _grid(range(ORG, ORG + 30), range(ORG, ORG + 10), [ORG - 1])  # top at z = 0
     fence = _grid([ORG + 15], range(ORG, ORG + 10), range(ORG, ORG + 4))  # 0.4 m thin wall across
