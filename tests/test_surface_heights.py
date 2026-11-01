@@ -105,17 +105,36 @@ def test_a_real_step_the_track_climbed_is_kept():
     assert out is sh
 
 
-def test_an_unmeasured_voxel_prefers_its_own_layer():
-    # A filled tread voxel (iz 4: 0.4-0.5, no point) with measured neighbours in
-    # its own layer at 0.48 and in the layer below (the tread under it) at 0.37.
+def test_an_unmeasured_voxel_on_a_slope_leaves_no_lip():
+    # A slope crossing a layer at z 0.4 (outdoor_1027's road from Home to A):
+    # measured tops sit at the edges of their voxels, 0.37 below the line and
+    # 0.45 above it, and the column between them was never seen. It must land
+    # between the two, not on its own layer's side: there it kept the 8 cm lip
+    # PPO fell on (2026-11-01).
     shape = (5, 5, 8)
-    cells = {(1, 2, 4): 0.48, (3, 2, 4): 0.48, (2, 1, 3): 0.37, (2, 3, 3): 0.37, (1, 1, 3): 0.37}
+    cells = {(1, 2, 4): 0.45, (1, 1, 4): 0.45, (1, 3, 4): 0.45,
+             (3, 2, 3): 0.37, (3, 1, 3): 0.37, (3, 3, 3): 0.37}
     raw = SurfaceHeights(shape, np.zeros(0, np.int64), np.zeros(0, np.float32))
     keys = raw.linear(np.array(list(cells)))
     order = np.argsort(keys)
     raw = SurfaceHeights(shape, keys[order], np.array(list(cells.values()), np.float32)[order])
-    k, t = smooth(raw, np.array([[2, 2, 4]]), 0.0, RES)
-    assert k.size == 1 and abs(t[0] - 0.48) < 1e-6
+    for blank in ([2, 2, 4], [2, 2, 3]):  # whichever layer the octomap put it in
+        k, t = smooth(raw, np.array([blank]), 0.0, RES)
+        assert k.size == 1 and abs(t[0] - 0.41) < 1e-3
+
+
+def test_a_measured_top_keeps_its_edge():
+    # The mean is for unmeasured voxels only: a measured kerb top (0.12 next
+    # to a floor at 0.0, same tolerance band) stays the median of its side.
+    shape = (6, 5, 8)
+    cells = {(i, j, 1): 0.12 for i in (0, 1, 2) for j in range(5)}
+    cells.update({(i, j, 0): 0.05 for i in (3, 4, 5) for j in range(5)})
+    raw = SurfaceHeights(shape, np.zeros(0, np.int64), np.zeros(0, np.float32))
+    keys = raw.linear(np.array(list(cells)))
+    order = np.argsort(keys)
+    raw = SurfaceHeights(shape, keys[order], np.array(list(cells.values()), np.float32)[order])
+    k, t = smooth(raw, np.array([[2, 2, 1]]), 0.0, RES)
+    assert k.size == 1 and abs(t[0] - 0.12) < 1e-6
 
 
 def test_seams_on_stacked_floors_are_both_ramped():

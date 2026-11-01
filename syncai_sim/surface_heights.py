@@ -28,7 +28,19 @@ votes, and a floor's gentle metre-scale undulation passes through.
 Every surface voxel is smoothed this way, also those with no point inside
 (57 % of dp's ground floor had one with at least three points, 75 % near the
 mapping track; the lidar's lower edge misses the floor close to the mapper):
-it takes the median of the measured tops on its surface within the window.
+it takes the mean of the measured tops on its surface within the window, a
+layer up, level and down alike. Not the median, and not its own layer first
+(as it did from FORMAT 6 to 11): on a slope that crosses a layer the
+measured tops on either side sit at their voxel's edge, and an unmeasured
+voxel that took its own layer's, or the larger side's, kept the lip between
+them. outdoor_1027's road from Home to A (1.2 m over 44 m, a layer every ~4
+m) had 20 such steps over 5 cm, up to 13.6, and PPO fell walking up it twice
+(roll -30, pitch 45 deg; 2026-11-01); 16 of those 20 had a column with no
+point on one side. With the mean over all three layers, 8 (the rest stand
+on measured tops); 6 and 5 cm at the two falls, from 12 and 8.8. The
+own-layer rule was there for dp's filled treads (flight 3's 3.4-3.5 voxels
+took the tread under them, 2026-10-24), which the flight fit below now
+replaces: dp's eleven flights fit as before within 4 mm a riser.
 What is still without a value then gets a second, wider pass
 (`WIDE_RADIUS`, 13 x 13 columns): the floor the lidar never saw near the
 mapper is often wider than the 5 x 5 window. At the top of dp's stairs on 2F
@@ -129,10 +141,10 @@ from .pcd_mesh import read_pcd
 from .world import World, read_track
 
 # 2: smoothed; 3: every surface voxel, one point is enough; 4: the wide pass; 5: seams;
-# 6: an unmeasured voxel prefers its own layer; 7: seams keyed by column and band;
+# 6: an unmeasured voxel prefers its own layer (dropped in 12); 7: seams keyed by column and band;
 # 8: flights fitted as staircases; 9: the fits saved too (stairs.py builds them as boxes);
-# 10: stair walks; 11: ramps
-FORMAT = 11
+# 10: stair walks; 11: ramps; 12: an unmeasured voxel takes the mean of all three layers
+FORMAT = 12
 WIDE_RADIUS = 6  # columns, the second pass (module docstring)
 
 # Seams (blend_track_seams). poses.txt is the IMU; its ground is z - this.
@@ -237,17 +249,13 @@ def smooth(raw: SurfaceHeights, targets: np.ndarray, origin_z: float, res: float
         tol = np.where(np.isnan(ref), same_surface + 0.5 * res, same_surface)
         ref = np.where(np.isnan(ref), origin_z + mid[a:a + chunk] * res, ref)
         near = np.where(np.abs(near - ref[:, None]) <= tol[:, None], near, np.nan)
-        # An unmeasured voxel takes its own layer's measured neighbours when it
-        # has any, the layers above and below only without: a tread filled into
-        # the octomap (no point in it) otherwise took the tread under it. On
-        # dp's flight 3 the filled 3.4-3.5 voxels between treads at 3.37 and
-        # 3.66 got 3.37 from the layer below, and the 0.29 m riser stayed
-        # (2026-10-24); their own layer has the tread's measured 3.48-3.53.
-        layer = np.where(offs[None, :, 2] == 0, near, np.nan)
-        own_layer = np.isnan(own[a:a + chunk]) & ~np.all(np.isnan(layer), axis=1)
-        near[own_layer] = layer[own_layer]
         has = ~np.all(np.isnan(near), axis=1)
         out[a:a + chunk][has] = np.nanmedian(near[has], axis=1)
+        # An unmeasured voxel has no edge of its own to keep, and on a slope its
+        # neighbours a layer apart are both its floor: the mean, over all three
+        # layers (module docstring).
+        blank = has & np.isnan(own[a:a + chunk])
+        out[a:a + chunk][blank] = np.nanmean(near[blank], axis=1)
     got = ~np.isnan(out)
     return keys[got], out[got]
 
