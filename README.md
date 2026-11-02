@@ -232,7 +232,9 @@ runners in `g2_deploy_rs` (`src/policy_runner.rs`, `src/himloco_policy_runner.rs
 observation layout and scales, joint order, action scaling and clamps, PD
 gains) running the files its `main.rs` loads by default — `ppo/policy7.onnx`
 for `set_policy_mode 0`, `isaacsim/policy_0812.onnx` for 1, PPO for anything
-else — at 50 Hz, with the PD closed on every 2 ms physics step and clipped to
+else — at 50 Hz (`policy0_runner` / `policy1_runner` can put the Locomotion
+repo's StairHistory actor behind either number instead, a policy the robot has
+no runner for yet: `StairHistoryRunner`), with the PD closed on every 2 ms physics step and clipped to
 the URDF's joint efforts (`legged.py`). The motion state picks the controller
 state: Locomotion / MPC walk the policy, Stand and Lie Down ease to a pose,
 Damping and E-stop leave only kd. The posture check is the controller's
@@ -249,10 +251,12 @@ grid turns dp's tilted floor into a strip of random blocks every ~13 m, where
 PPO fell 4 times out of 4, and the per-voxel medians alone were still rough
 (8.7 % of neighbouring columns more than 2 cm apart). Smoothed, dp's open floor
 has its largest step between neighbours at ~1 cm; risers and kerbs keep their
-edges. A voxel with no point inside takes its own layer's measured neighbours
-first (a tread filled into the octomap otherwise took the tread under it), a
-13 x 13 window when the 5 x 5 has none, and its voxel's middle when neither
-has (its top is 5 cm high on average: on dp's last step to 2F that made a lip
+edges. A voxel with no point inside takes the mean of its measured
+neighbours a layer up, level and down (until 2026-11-01 its own layer's
+first, for dp's filled treads, which the flight fit now covers; on a long
+slope that kept a lip at every layer, and PPO fell on outdoor_1027's road
+from Home to A twice), a 13 x 13 window when the 5 x 5 has none, and its
+voxel's middle when neither has (its top is 5 cm high on average: on dp's last step to 2F that made a lip
 PPO fell on). Last, steps between two mapping passes that drifted apart in
 height (dp's stairwell sits ~0.13 m under the rest) are ramped wherever the
 mapping track walked level over them: a 0.16 m "step" onto 2F that the real

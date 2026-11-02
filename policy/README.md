@@ -23,3 +23,11 @@ The repository is mounted at `/home/syncrobotic/sim`, so the container sees
 them as `/home/syncrobotic/sim/policy/...` (`ppo_policy` / `himloco_policy` in
 `config/params/sim_params.yaml`). A different policy is a different path
 there; one with another observation layout needs `policy.py` changed too.
+
+Policies from the Locomotion repo (Isaac Lab) that no g2_deploy_rs runner runs
+yet go beside them and are walked by naming their runner (`policy0_runner` /
+`policy1_runner` in `sim_params.yaml`):
+
+| file | runner | from | sha256 |
+|---|---|---|---|
+| `isaacsim/g23_blind_gd16500.onnx` | `stair_history` (obs [batch, 1395] = 31 x 45) | `StairHistory-SyncAI-G23` | `d895e4df4cafdb3eb5823bc32e1464a5b00c595e771f93ef093766bfdb6bceca` |

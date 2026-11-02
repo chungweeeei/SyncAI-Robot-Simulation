@@ -79,6 +79,8 @@ class SimConfig:
     locomotion: str = "kinematic"  # kinematic | policy
     ppo_policy: str = ""
     himloco_policy: str = ""
+    policy0_runner: str = "ppo"  # policy.RUNNERS: which runner policy 0 / 1 walk
+    policy1_runner: str = "himloco"
     terrain: TerrainPatchConfig = field(default_factory=TerrainPatchConfig)
     visual_mesh: str = "voxels"  # the browser's site: voxels | pointcloud | tsdf (site_tiles.py)
     visual_look: str = "ramp"  # its look: ramp | photo (visual.py; photo needs config/colour/<map>.npz)
@@ -192,7 +194,9 @@ class Simulator:
         self._last_world_hit = -math.inf
         if self.legged:
             self.legs = LeggedController(self.model, self.data, self.info.base_body,
-                                         load_policies(cfg.ppo_policy, cfg.himloco_policy, log=log),
+                                         load_policies(cfg.ppo_policy, cfg.himloco_policy, log=log,
+                                                       policy0_runner=cfg.policy0_runner,
+                                                       policy1_runner=cfg.policy1_runner),
                                          log=log, motor_model=cfg.motor_model,
                                          actuator=cfg.actuator, cmd_delay_s=cfg.cmd_delay_ms / 1000.0,
                                          torque_bw_hz=cfg.torque_bw_hz)

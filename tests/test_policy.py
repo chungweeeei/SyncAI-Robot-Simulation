@@ -5,7 +5,7 @@ import numpy as np
 
 from syncai_sim.legged import pose_at_height
 from syncai_sim.policy import (Q_DEFAULT, HimlocoRunner, MultiPolicy, PpoRunner,
-                               projected_gravity)
+                               StairHistoryRunner, projected_gravity)
 
 
 class Recorder:
@@ -75,6 +75,38 @@ def test_himloco_reorders_keeps_history_and_halves_hips():
     robot = action[HimlocoRunner.policy2robot] * 0.25
     robot[[0, 3, 6, 9]] *= 0.5
     assert np.allclose(target, robot + Q_DEFAULT)
+
+
+def test_stair_history_lays_out_history_term_by_term():
+    # Policy order = (HipX x4, HipY x4, Knee x4); u = 0 is the stance.
+    action = np.array([1.0] * 4 + [0.0] * 4 + [-40.0] * 4, np.float32)
+    net = Recorder(action)
+    r = StairHistoryRunner(net)
+    r.act(OMEGA, GRAV, [1.5, -0.2, 0.3], Q, DQ)
+    first = net.seen[0]
+    assert first.shape == (31 * 45,)
+    r2p = [0, 3, 6, 9, 1, 4, 7, 10, 2, 5, 8, 11]
+    # Each term is its own block of 31 frames; the first call fills them all.
+    assert np.allclose(first[0:93].reshape(31, 3), OMEGA * 0.25)
+    assert np.allclose(first[93:186].reshape(31, 3), GRAV)
+    assert np.allclose(first[186:279].reshape(31, 3), [1.5, -0.2, 0.3])  # not clipped
+    assert np.allclose(first[279:651].reshape(31, 12), (Q - Q_DEFAULT)[r2p])
+    assert np.allclose(first[651:1023].reshape(31, 12), (DQ * 0.05)[r2p])
+    assert np.allclose(first[1023:], 0.0)
+    target = r.act(OMEGA, GRAV, [0.9, 0.0, 0.0], Q, DQ)
+    cmd = net.seen[1][186:279].reshape(31, 3)
+    assert np.allclose(cmd[:30], [1.5, -0.2, 0.3]) and np.allclose(cmd[30], [0.9, 0.0, 0.0])
+    last = net.seen[1][1023:].reshape(31, 12)
+    assert np.allclose(last[:30], 0.0) and np.allclose(last[30], action)  # newest last
+    # A*tanh(scale*u/A): small u ~ scale*u, large u saturates inside the soft limit.
+    off = target - Q_DEFAULT
+    assert np.allclose(off[[0, 3, 6, 9]], 0.125, atol=0.005)  # HipX, u = 1
+    assert np.allclose(off[[1, 4, 7, 10]], 0.0)
+    assert np.allclose(off[[2, 5, 8, 11]], -0.7647, atol=1e-3)  # Knee, u = -40
+    assert (Q_DEFAULT[2] + off[2]) > 0.524  # above the URDF's knee limit
+    r.on_enter()
+    r.act(OMEGA, GRAV, [0, 0, 0], Q, DQ)
+    assert np.allclose(net.seen[2][1023:], 0.0)
 
 
 def test_multipolicy_falls_back_and_resets_on_switch():

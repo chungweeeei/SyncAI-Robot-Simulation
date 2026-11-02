@@ -13,6 +13,9 @@ switches between with `set_policy_mode`:
 PPO, as `MultiPolicyRunnerOnnx::select_policy` does — policy 2 is MPC there,
 another state, and 3 is a third IsaacSim runner the stack never asks for.
 
+`StairHistoryRunner` is the exception: a policy trained in the Locomotion repo
+that no runner on the robot runs yet, put behind policy 0 or 1 to try it here.
+
 Every constant below is copied from those files; change them together. The
 joint order is the controller's (LF, RF, LR, RR) x (hip, thigh, calf), which
 is the URDF's (FL, FR, HL, HR) x (HipX, HipY, Knee) with the same signs: on
@@ -140,10 +143,89 @@ class HimlocoRunner:
         return a + Q_DEFAULT
 
 
+class StairHistoryRunner:
+    """The Locomotion repo's StairHistory-SyncAI-G23 actor (blind, 31-frame history).
+
+    Not a g2_deploy_rs runner: the robot has none for it yet, so this follows the
+    training side, `tasks/locomotion/velocity/config/g23/stair_history/` (its
+    README's "觀測" and "動作" sections are the contract). What differs from PPO:
+
+    - The input is 31 frames of the same 45-d observation (0.62 s at 50 Hz), laid
+      out term by term as Isaac Lab flattens a group with history_length:
+      [ang_vel 31x3][gravity 31x3][cmd 31x3][q 31x12][dq 31x12][action 31x12],
+      oldest first within each term (models/temporal_conv/history_frames.py).
+      Frame by frame it would still run, convolving across features instead.
+    - After a reset the first frame fills all 31 (Isaac Lab's CircularBuffer).
+    - Joints by type (four HipX, four HipY, four Knee): the articulation's order.
+    - The command is not clipped (trained on +-1 m/s, +-1 rad/s).
+    - target = stance + A*tanh(scale*u/A) (mdp/actions/squashed_joint_position.py),
+      A the smaller margin from the stance to the soft limit; the squash is the
+      env's, not in the ONNX, whose raw u reaches +-5 standing.
+    """
+
+    name = "StairHistory"
+    history = 31
+    obs_dim = OBS_DIM * 31
+    kp, kd = 30.0, 1.0
+    # robot (leg-major) -> policy (type-major) and back, as HimLoco's.
+    robot2policy = HimlocoRunner.robot2policy
+    policy2robot = HimlocoRunner.policy2robot
+    # Policy order. 0.125 / 0.25 rad: assets/g23.py action_scale.
+    action_scale = np.array([0.125] * 4 + [0.25] * 8, dtype=np.float32)
+    # The soft limits are the URDF's ranges shrunk by soft_joint_pos_limit_factor
+    # 0.99 about their middle (assets/articulation.py): HipX +-0.523 -> 29.7 deg,
+    # HipY -2.67..0.314 -> 54.4 deg above the stance, Knee 0.524..2.792 -> 43.8 deg
+    # below it (the README's 29.7 / 54.3 / 43.8).
+    amplitude = np.array([0.5178] * 4 + [0.9491] * 4 + [0.7647] * 4, dtype=np.float32)
+    # (offset, width) of each term's 31-frame block, in the layout above.
+    _terms = ((0, 3), (3, 3), (6, 3), (9, 12), (21, 12), (33, 12))
+
+    def __init__(self, net):
+        self.net = net
+        self.last_action = np.zeros(12, np.float32)  # policy order, raw u
+        self.frames = np.zeros((self.history, OBS_DIM), np.float32)  # oldest first
+        self.run_cnt = 0
+
+    def on_enter(self) -> None:
+        self.last_action[:] = 0.0
+        self.frames[:] = 0.0
+        self.run_cnt = 0
+
+    def observation(self, omega, gravity, cmd, q, dq) -> np.ndarray:
+        r2p = self.robot2policy
+        one = np.concatenate([
+            np.asarray(omega, np.float32) * 0.25,
+            gravity,
+            np.asarray(cmd, np.float32),
+            (np.asarray(q, np.float32) - Q_DEFAULT)[r2p],
+            (np.asarray(dq, np.float32) * 0.05)[r2p],
+            self.last_action,
+        ]).astype(np.float32)
+        if self.run_cnt == 0:
+            self.frames[:] = one
+        else:
+            self.frames[:-1] = self.frames[1:].copy()
+            self.frames[-1] = one
+        return np.concatenate([self.frames[:, o:o + w].reshape(-1) for o, w in self._terms])
+
+    def act(self, omega, gravity, cmd, q, dq) -> np.ndarray:
+        self.last_action = np.asarray(self.net(self.observation(omega, gravity, cmd, q, dq)),
+                                      np.float32)[:12].copy()
+        self.run_cnt += 1
+        A = self.amplitude
+        a = A * np.tanh(self.last_action * self.action_scale / A)
+        return a[self.policy2robot] + Q_DEFAULT
+
+
+# The runners a policy number can be given (sim_params policy0_runner / policy1_runner).
+RUNNERS = {"ppo": PpoRunner, "himloco": HimlocoRunner, "stair_history": StairHistoryRunner}
+
+
 class MultiPolicy:
     """MultiPolicyRunnerOnnx: the runner for a policy number, reset on a switch."""
 
-    def __init__(self, runners: dict[int, PpoRunner | HimlocoRunner], fallback: int = 0, log=print):
+    def __init__(self, runners: dict[int, PpoRunner | HimlocoRunner | StairHistoryRunner],
+                 fallback: int = 0, log=print):
         self.runners = runners
         self.fallback = fallback
         self.active: int | None = None
@@ -163,9 +245,15 @@ class MultiPolicy:
         self.active = None
 
 
-def load_policies(ppo_path: str, himloco_path: str, log=print) -> MultiPolicy:
-    runners: dict[int, PpoRunner | HimlocoRunner] = {}
-    for num, cls, path in ((0, PpoRunner, ppo_path), (1, HimlocoRunner, himloco_path)):
+def load_policies(ppo_path: str, himloco_path: str, log=print, policy0_runner: str = "ppo",
+                  policy1_runner: str = "himloco") -> MultiPolicy:
+    """policy0/1_runner put another runner behind a policy number, so the stack's
+    set_policy_mode walks a policy the robot has no runner for (sim only)."""
+    runners: dict[int, PpoRunner | HimlocoRunner | StairHistoryRunner] = {}
+    for num, kind, path in ((0, policy0_runner, ppo_path), (1, policy1_runner, himloco_path)):
+        if kind not in RUNNERS:
+            raise ValueError(f"policy{num}_runner {kind!r}: not one of {sorted(RUNNERS)}")
+        cls = RUNNERS[kind]
         net = OnnxPolicy(path)
         if net.dim != cls.obs_dim:
             raise ValueError(f"{path}: input is {net.dim}-d, {cls.name} expects {cls.obs_dim}")

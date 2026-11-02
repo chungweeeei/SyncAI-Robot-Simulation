@@ -125,6 +125,13 @@
     # policy_0812 layout (obs [1, 270] = 6 x 45, actions [1, 12]); sha256
     # 4f35d05a... (policy/README.md has 0812's, still the robot's default).
     himloco_policy: /home/syncrobotic/sim/policy/isaacsim/policy_1027.onnx
+    # Which runner each number walks (policy.py RUNNERS): ppo | himloco |
+    # stair_history. stair_history is the Locomotion repo's StairHistory actor
+    # (31 x 45-d history, tanh-squashed targets), which g2_deploy_rs has no
+    # runner for: sim only. To try it, policy0_runner: stair_history with
+    # ppo_policy: /home/syncrobotic/sim/policy/isaacsim/g23_blind_gd16500.onnx.
+    policy0_runner: ppo
+    policy1_runner: himloco
     # policy only. fitted: the flights surface_heights.py fitted are fixed boxes, one
     # per tread at the fitted depth (stairs.py); voxels: the patch's 0.1 m boxes
     # there too, which put every riser on the column grid (treads 0.20 / 0.30 m
