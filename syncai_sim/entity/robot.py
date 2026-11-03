@@ -123,7 +123,8 @@ class RobotConfig:
     weld_solref: tuple[float, float] = (0.02, 1.0)
     mocap_name: str = "base_mocap"
     articulated: bool = False
-    imu_site: str = "imu_site"
+    imu_site: str = "imu_site"  # the lidar's IMU, on imu_body
+    base_imu_site: str = "base_imu"  # the body's IMU, on base_link (walking only)
     # The walking body (articulated only; the constants above say what each is):
     motor_model: str = "ideal"  # ideal | j60
     trunk_inertial: str = "urdf"  # urdf | vendor
@@ -330,13 +331,20 @@ def _articulated(root: ET.Element, base: ET.Element, cfg: RobotConfig,
                 geom.set("conaffinity", "0")
                 geom.set("friction", _fmt(cfg.foot_friction))
                 geom.set("solref", _fmt(cfg.foot_solref))
+    # Two IMUs, as on the robot: the lidar's own on lidar_top_imu (the stack's
+    # livox/imu) and the body's on base_link (what the controller's hardware
+    # layer reports: sensor/proprioception.py). The lidar's sits ~0.4 m over
+    # the trunk, and its accelerometer carries that lever arm.
     imu = next(b for b in root.iter("body") if b.get("name") == cfg.imu_body)
     ET.SubElement(imu, "site", name=cfg.imu_site, size="0.01")
+    ET.SubElement(base, "site", name=cfg.base_imu_site, size="0.01")
     sensor = root.find("sensor")
     if sensor is None:
         sensor = ET.SubElement(root, "sensor")
     ET.SubElement(sensor, "gyro", name="imu_gyro", site=cfg.imu_site)
     ET.SubElement(sensor, "accelerometer", name="imu_acc", site=cfg.imu_site)
+    ET.SubElement(sensor, "gyro", name="base_gyro", site=cfg.base_imu_site)
+    ET.SubElement(sensor, "accelerometer", name="base_acc", site=cfg.base_imu_site)
     mjcf = ET.tostring(root, encoding="unicode")
 
     # Standing height: the base over the ground with the legs at the policy's

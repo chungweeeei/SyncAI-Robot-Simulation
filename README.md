@@ -57,6 +57,7 @@ syncai_sim/                        the Python package (python3 -m syncai_sim): o
   sensor/                            what the robot measures, never what is drawn
     lidar.py, prop_rays.py             the MID360: its recorded pattern fired frame by frame, rays from where it was when each fired; analytic rays for props
     livox_bag.py                       CustomMsg frames straight out of a rosbag2 sqlite (no ROS) -> the pattern bank
+    proprioception.py                  the body IMU, joints q/dq/tau, the base's truth, foot contacts: one record per step; the lidar's IMU
   actuator/motors.py                 the motors: JointCommand (q_des, dq_des, kp, kd, tau_ff), the PD closed every step, the motor clamp, delays
   locomotion/                        who decides the joint command
     policy.py                          the G23's PPO / HimLoco runners, ported (onnxruntime)

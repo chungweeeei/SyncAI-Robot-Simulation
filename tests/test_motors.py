@@ -46,16 +46,19 @@ def body_xml(actuators: bool, timestep: float = 0.002, feet: bool = False) -> st
                    f'forcerange="-100 100"/>' for leg in LEGS for j in JOINTS)
     floor = '<geom name="floor" type="plane" size="2 2 0.1"/>' if feet else ""
     gravity = "0 0 -9.81" if feet else "0 0 0"
+    imu = '<site name="base_imu" size="0.01"/>' if feet else ""
+    sensors = ('<sensor><gyro name="base_gyro" site="base_imu"/>'
+               '<accelerometer name="base_acc" site="base_imu"/></sensor>' if feet else "")
     return f"""
 <mujoco>
   <option timestep="{timestep}" gravity="{gravity}"/>
   <worldbody>{floor}
     <body name="base_link" pos="0 0 {0.42 if feet else 1}">
-      <freejoint/>
-      <geom type="box" size="0.2 0.1 0.05" mass="5"/>{''.join(legs)}
+      <freejoint/>{imu}
+      <geom name="trunk" type="box" size="0.2 0.1 0.05" mass="5"/>{''.join(legs)}
     </body>
   </worldbody>
-  {'<actuator>' + acts + '</actuator>' if actuators else ''}
+  {'<actuator>' + acts + '</actuator>' if actuators else ''}{sensors}
 </mujoco>"""
 
 

@@ -15,9 +15,10 @@ Which state, from the fake driver's `motion_state` (driver/fake_driver.py):
     DAMPING, ESTOP    kp 0, kd only (the JointDamping state)
 
 A change of PD target is eased over `transition_s` from where the joints are,
-as the controller's stand-up and lie-down splines do. The posture check is the
-controller's: |roll| > 30 deg or |pitch| > 45 deg is a fall, and the real
-controller then locks into JointDamping.
+as the controller's stand-up and lie-down splines do. The posture check
+(|roll| > 30 deg or |pitch| > 45 deg is a fall, and the real controller then
+locks into JointDamping) is `Sensors.upset` in sensor/proprioception.py; the
+simulator runs it.
 """
 
 from __future__ import annotations
@@ -105,14 +106,6 @@ class LeggedController:
         self._ease = None
         self.tick = 0
         self.policies.reset()
-
-    def roll_pitch(self) -> tuple[float, float]:
-        R = self.data.xmat[self.base_body].reshape(3, 3)
-        return math.atan2(R[2, 1], R[2, 2]), math.asin(max(-1.0, min(1.0, -R[2, 0])))
-
-    def upset(self) -> bool:
-        roll, pitch = self.roll_pitch()
-        return abs(roll) > math.radians(30.0) or abs(pitch) > math.radians(45.0)
 
     # -- one physics step -----------------------------------------------------------
     def step(self, cmd: np.ndarray, policy: int, motion_state: int) -> JointCommand:

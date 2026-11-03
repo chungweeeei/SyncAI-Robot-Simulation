@@ -131,7 +131,7 @@ def one_run(sim, pose, policy: int, cmds, settle: float, rng, jitter_xy: float,
             sim.set_cmd(vx, vy, wz)
             sim.step()
             t += dt
-            r, p = sim.legs.roll_pitch()
+            r, p = sim.sensors.roll_pitch()
             pitch.append(math.degrees(p))
             roll.append(math.degrees(r))
             v = sim.data.qvel[vadr:vadr + 3]

@@ -48,6 +48,7 @@ from syncai_sim.driver.fake_driver import DAMPING, FakeDriver
 from syncai_sim.locomotion.kinematics import BaseState, Event, KinematicsConfig, advance, place
 from syncai_sim.locomotion.legged import LeggedController
 from syncai_sim.sensor.lidar import LidarConfig, LidarModel, rays_along_motion
+from syncai_sim.sensor.proprioception import LidarImu, Sensors
 from syncai_sim.locomotion.policy import load_policies
 from syncai_sim.sensor.prop_rays import ray_aabb, ray_vertical_cylinder
 from syncai_sim.entity.robot import JOINTS, LEGS, RobotConfig, RobotModel, load_robot
@@ -189,6 +190,8 @@ class Simulator:
                                   list(self.world.storey_bounds))
         self.data = mujoco.MjData(self.model)
         self.motors: Motors | None = None
+        self.sensors: Sensors | None = None
+        self.lidar_imu: LidarImu | None = None
         self.legs: LeggedController | None = None
         self.patch: TerrainPatch | None = None
         self.falls = 0
@@ -205,10 +208,8 @@ class Simulator:
                                          self.motors, log=log)
             self.patch = TerrainPatch(self.world.grid, cfg.terrain, self.surface,
                                       None if stairs is None else stairs.regions)
-            self._gyro = self.model.sensor("imu_gyro").adr[0]
-            self._acc = self.model.sensor("imu_acc").adr[0]
-            self._trunk_geoms = set(self.info.trunk_geoms)
-            self._stair_geoms = set(self.info.stair_geoms)
+            self.sensors = Sensors(self.model, self.data, self.info, self.motors)
+            self.lidar_imu = LidarImu(self.model, self.data)
         self.grid = self.world.grid
         self.lidar = LidarModel(cfg.lidar, cfg.seed)
         # Where the lidar was at each physics step of the last scan window
@@ -405,32 +406,17 @@ class Simulator:
             s.last_event = Event.MOVED
         else:
             s.last_event = Event.IDLE
-        if self._world_hit() and self.sim_time - self._last_world_hit > 0.5:
+        if self.sensors.trunk_hit() and self.sim_time - self._last_world_hit > 0.5:
             s.collisions += 1
             self._last_world_hit = self.sim_time
-        if self._fallen_from is None and self.legs.upset():
+        if self._fallen_from is None and self.sensors.upset():
             self.falls += 1
             self._fallen_from = self.driver.motion_state
             self.driver.motion_state = DAMPING
-            roll, pitch = self.legs.roll_pitch()
+            roll, pitch = self.sensors.roll_pitch()
             self.log(f"[sim] FELL at ({s.x:.2f}, {s.y:.2f}) roll {math.degrees(roll):.0f} "
                      f"pitch {math.degrees(pitch):.0f} deg; driver -> Damping "
                      f"(teleport / initialpose to stand it up again)")
-
-    def _world_hit(self) -> bool:
-        # One geom per terrain body, added in a row: their ids are one range.
-        # The fixed stairs are the site too.
-        terrain = self.info.terrain_geoms
-        lo, hi = int(terrain[0]), int(terrain[-1])
-        trunk, stairs = self._trunk_geoms, self._stair_geoms
-        for i in range(self.data.ncon):
-            c = self.data.contact[i]
-            g1, g2 = int(c.geom1), int(c.geom2)
-            other = (g2 if lo <= g1 <= hi or g1 in stairs else
-                     g1 if lo <= g2 <= hi or g2 in stairs else -1)
-            if other in trunk:
-                return True
-        return False
 
     def _walk_mover(self, m: Mover, dt: float) -> None:
         if m.waypoints.shape[0] < 2:
@@ -459,26 +445,27 @@ class Simulator:
         return names, np.array([standing[j] for _ in LEGS for j in JOINTS])
 
     def controller_telemetry(self) -> dict:
-        """What the gait controller reports (controller_link.py), in its body
-        frame = base_link: rpy, specific force (m/s^2, gravity only: nothing in
-        the stack reads the driver's `imu`), angular rate, and the twelve
-        joints in the driver's order (FL/FR/HL/HR x HipX/HipY/Knee, the same as
+        """What the gait controller reports (driver/controller_link.py), in its
+        body frame = base_link: rpy, the body IMU's specific force (m/s^2; the
+        statue has no IMU and reports gravity alone — nothing in the stack
+        reads the driver's `imu`), angular rate, and the twelve joints in the
+        driver's order (FL/FR/HL/HR x HipX/HipY/Knee, the same as
         joint_states). Kinematic: the baked standing pose, at rest."""
+        if self.legged:
+            sn = self.sensors
+            sn.read(self.sim_time)
+            return {"rpy": tuple(float(v) for v in sn.rpy), "acc": sn.acc.astype(float),
+                    "omega": sn.gyro.astype(float), "JOINT_POS": sn.q.astype(float),
+                    "JOINT_VEL": sn.dq.astype(float), "JOINT_TAU": sn.tau.astype(float)}
         R = self.data.xmat[self.info.base_body].reshape(3, 3)
         rpy = (math.atan2(R[2, 1], R[2, 2]), math.asin(max(-1.0, min(1.0, -R[2, 0]))),
                math.atan2(R[1, 0], R[0, 0]))
         acc = R.T @ np.array([0.0, 0.0, 9.81])
         _, q = self.joint_states()
-        if self.legged:
-            omega = self.data.qvel[self.legs.omega_adr:self.legs.omega_adr + 3].copy()
-            dq = self.motors.dq()
-            tau = self.motors.tau()
-        else:
-            moving = self.state.last_event is Event.MOVED
-            omega = R.T @ np.array([0.0, 0.0, self.cmd[2] if moving else 0.0])
-            dq = tau = np.zeros(12)
+        moving = self.state.last_event is Event.MOVED
+        omega = R.T @ np.array([0.0, 0.0, self.cmd[2] if moving else 0.0])
         return {"rpy": rpy, "acc": acc, "omega": omega,
-                "JOINT_POS": q, "JOINT_VEL": dq, "JOINT_TAU": tau}
+                "JOINT_POS": q, "JOINT_VEL": np.zeros(12), "JOINT_TAU": np.zeros(12)}
 
     # -- poses -------------------------------------------------------------------
     def T_map_base(self) -> np.ndarray:
@@ -542,9 +529,7 @@ class Simulator:
         """(gyro rad/s, accel in g) in the IMU frame: the yaw rate and gravity,
         or, walking, the gyro and accelerometer on lidar_top_imu."""
         if self.legged:
-            gyro = self.data.sensordata[self._gyro:self._gyro + 3].copy()
-            acc = self.data.sensordata[self._acc:self._acc + 3] / 9.81
-            return gyro, acc
+            return self.lidar_imu.sample()
         T = self.T_map_imu()
         R = T[:3, :3]
         vx, vy, wz = (self.cmd if time.monotonic() - self.cmd_time < self.cfg.cmd_timeout

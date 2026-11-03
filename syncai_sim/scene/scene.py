@@ -42,12 +42,13 @@ from dataclasses import asdict, dataclass, field
 import mujoco
 import numpy as np
 
-from syncai_sim.entity.robot import TERRAIN_BIT, RobotModel
+from syncai_sim.entity.robot import LEGS, TERRAIN_BIT, RobotModel
 from syncai_sim.world.build import World
 
 # Bumped when the compiled scene changes without any input changing: the MJB
-# cache (cached_model) is keyed on it (2: the site's visual mesh left the model).
-SCENE_FORMAT = 2
+# cache (cached_model) is keyed on it (2: the site's visual mesh left the model;
+# 3: the body IMU's site and sensors on base_link, 2026-11-03).
+SCENE_FORMAT = 3
 
 PLATE_CONTYPE, PLATE_CONAFFINITY = 1, 1
 PROP_CONTYPE, PROP_CONAFFINITY = 2, 3
@@ -86,6 +87,10 @@ class SceneInfo:
     terrain_mocap_ids: np.ndarray | None = None  # (capacity,) mocap indices of the terrain pool
     terrain_geoms: np.ndarray | None = None  # (capacity,) their geom ids, consecutive
     stair_geoms: list[int] = field(default_factory=list)  # the fixed stairs (stairs.py)
+    # The feet's sphere geoms in LEGS order (-1 where a leg has none): the
+    # contact flags of sensor/proprioception.py. Last, with a default, so a
+    # SceneInfo built by hand (tests) needs no change.
+    foot_geoms: list[int] = field(default_factory=list)
 
 
 INTEGRATORS = {"euler": mujoco.mjtIntegrator.mjINT_EULER,
@@ -190,6 +195,12 @@ def scene_info(model: mujoco.MjModel, robot: RobotModel, props: list[PropSpec],
     terrain_bodies = [bid(f"terrain{i}") for i in range(terrain_capacity)]
     prop_bodies = {p.name: bid(f"prop_{p.name}") for p in props}
     prop_mocap = {p.name: int(model.body_mocapid[prop_bodies[p.name]]) for p in props if p.waypoints}
+    feet = []
+    for leg in LEGS:  # the URDF's *_FOOT bodies carry one sphere each (robot.py stands on them)
+        b = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_BODY, f"{leg}_FOOT")
+        spheres = [g for g in range(model.body_geomadr[b], model.body_geomadr[b] + model.body_geomnum[b])
+                   if model.geom_type[g] == mujoco.mjtGeom.mjGEOM_SPHERE] if b >= 0 else []
+        feet.append(int(spheres[0]) if spheres else -1)
     return SceneInfo(
         base_body=base, mocap_body=mocap,
         mocap_id=int(model.body_mocapid[mocap]) if mocap >= 0 else -1,
@@ -199,6 +210,7 @@ def scene_info(model: mujoco.MjModel, robot: RobotModel, props: list[PropSpec],
         terrain_mocap_ids=np.array([model.body_mocapid[b] for b in terrain_bodies], dtype=int),
         terrain_geoms=np.array([model.body_geomadr[b] for b in terrain_bodies], dtype=int),
         stair_geoms=[g for g in range(model.ngeom) if _STAIR_GEOM.match(model.geom(g).name)],
+        foot_geoms=feet,
     )
 
 
