@@ -11,7 +11,10 @@ stack of `chungweeeei/SyncAI-Robot-Workspace` (a sibling checkout, mounted into
 the container) runs end to end with no robot. The G23 walks on its own ONNX
 policies (`policy.py`, a port of `g2_deploy_rs`'s runners; `legged.py` drives
 the joints) on a patch of the voxel grid (`terrain_patch.py`); `locomotion:
-kinematic` keeps the older rigid body carried by rules (`kinematics.py`).
+kinematic` keeps the older rigid body carried by rules (`kinematics.py`);
+`locomotion: udp` hands the joints to a controller process over the hardware
+link (`hardware_link.py`), ROS-free — the sim talks UDP only there, and that
+is where the controller's MPC is studied (`docs/architecture.md`).
 The two ONNX files live in `policy/`, gitignored: copied from g2_deploy_rs,
 where they are not versioned either (`policy/README.md`); never commit them.
 Python throughout (decided
@@ -67,7 +70,8 @@ One subpackage per layer (`docs/architecture.md` draws them); every
 | the policies (ported from the robot's controller) | `locomotion/policy.py` (`tests/test_policy.py`; names the source of every constant) |
 | the motion states (stand / lie / damping / the policy at 50 Hz), falls | `locomotion/legged.py`: each step returns a `JointCommand` for the motors; the `integrator` and delays are `SimConfig` in `envs/simulator.py` |
 | the step rule, gates, collisions (kinematic) | `locomotion/kinematics.py` (pure Python, `tests/test_kinematics.py`) |
-| the gait controller on driver_manager's UDP link (the session); services and `mode` (driver_link: fake) | `driver/controller_link.py` (`tests/test_controller_link.py`), `config/params/driver_manager_sim.yaml`; `driver/fake_driver.py` |
+| the hardware link: the body's record out, a controller process's command in (`locomotion: udp`); the stand-in controller | `locomotion/hardware_link.py` (its docstring is the protocol's spec; `tests/test_hardware_link.py`); `config/params/controller_profile.yaml`; the bench `scripts/controller_bench.py` |
+| the gait controller on driver_manager's UDP link (the session); services and `mode` (driver_link: fake); the same surface forwarding to a controller process (udp) | `driver/controller_link.py` (`tests/test_controller_link.py`), `config/params/driver_manager_sim.yaml`; `driver/fake_driver.py`; `driver/udp_driver.py` |
 | one physics tick, scan, spawn, teleport | `envs/simulator.py` |
 | the viewer (viser: the site as GLB tiles once, poses at 20 Hz, drawn by the host's browser; nothing renders in the container), its panel's driving | `viewer/web_view.py`, `viewer/teleop.py` |
 | the viewer's look (tiles, intensity shading, the Poisson and TSDF surfaces, colours) | `visuals/`: `site_tiles.py` (10 m tiles as GLB, a texel per voxel face), `voxel_intensity.py`, `pcd_mesh.py`, `tsdf_mesh.py`, `visual.py` (picture only, never sensing); the site, storey and layer switches are the panel in `viewer/web_view.py` |
@@ -83,6 +87,8 @@ source /opt/ros/humble/setup.bash && source /opt/ros2_rust_underlay/install/setu
 /home/syncrobotic/sim/scripts/run_session.sh         # logs: log/stack/sim01/sim/<pane>/current; the picture: http://localhost:8080
 python3 /home/syncrobotic/sim/scripts/nav_test.py --goal 3 0 0
 python3 -m pytest /home/syncrobotic/sim/tests
+# the sim as a controller's hardware (locomotion udp, ROS-free; docs/architecture.md):
+python3 /home/syncrobotic/sim/scripts/controller_bench.py --profile /home/syncrobotic/sim/config/params/controller_profile.yaml --fake-controller --seconds 5
 ```
 
 Do not run `docker compose build` or the session on your own after an edit;

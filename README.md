@@ -21,12 +21,15 @@ task_runner and lio_bridge run **unchanged, from the workspace's own
 `install/`**. The picture is drawn by the host's browser (`web_view.py`):
 nothing renders in the container.
 
-Two locomotions, `locomotion` in the params: **policy** (the default, above)
-and **kinematic** — the robot as a rigid statue carried along the ground by
-rules (`kinematics.py`), which is what the sim was before the policies were
+Three locomotions, `locomotion` in the params: **policy** (the default,
+above), **kinematic** — the robot as a rigid statue carried along the ground
+by rules (`kinematics.py`), which is what the sim was before the policies were
 available and stays for runs that want the step rule's verdicts instead of a
-gait's. What neither is: a simulation of the MPC controller (policy 2 and
-motion state MPC walk on PPO).
+gait's — and **udp**: the same walking body with its joints handed to a
+controller process over a UDP hardware link (`locomotion/hardware_link.py`),
+so that controller's RL or its MPC decides and the sim is its hardware.
+That mode is ROS-free (the sim talks UDP only) and is where the real
+controller's MPC gets studied; `docs/architecture.md` draws the layers.
 
 ## Layout
 
@@ -63,9 +66,11 @@ syncai_sim/                        the Python package (python3 -m syncai_sim): o
     policy.py                          the G23's PPO / HimLoco runners, ported (onnxruntime)
     legged.py                          motion state -> policy / stand / lie / damping: the JointCommand for the motors, the fall check
     kinematics.py                      the kinematic base: ground following, the step rule, blocking, gates
+    hardware_link.py                   locomotion udp: the body's record out and the controller's command in, one UDP datagram each per step (the protocol's spec); the stand-in controller
   driver/                            the gait controller's side of the nav stack's UDP link
     fake_driver.py                     set_motion_key / set_policy_mode / mode
     controller_link.py                 the sim as the gait controller on driver_manager's UDP link (driver_link: udp)
+    udp_driver.py                      locomotion udp: the same surface, MODE / ESTOP / AXES forwarded to the controller process
   envs/simulator.py                  the ROS-free core (step, scan, imu, spawn, teleport)
   viewer/web_view.py, teleop.py      the browser viewer: the site and the robot sent once, poses streamed, drawn by the host's GPU; its panel's driving
   visuals/                           the site's picture (nothing the lidar, the feet or the planner see reads it)
@@ -81,6 +86,9 @@ syncai_sim/                        the Python package (python3 -m syncai_sim): o
 config/foxglove/bridge.yaml        foxglove_bridge's settings (port 8765, the .STL asset allowlist)
 scripts/foxglove.sh                foxglove_bridge (+ robot_state_publisher) for a sim run by hand
 scripts/gait_bench.py              the walking body against a scripted command, ROS-free: the A/B of the body's physics knobs
+scripts/controller_bench.py        the sim as a controller's hardware, ROS-free: MODE / AXES to the controller, its MODE_STATE back, the link's counters
+config/params/controller_profile.yaml  the params overlay of locomotion udp (the link, 1 kHz, the vendor body), loaded with --profile
+docs/architecture.md               the layers, one physics tick, what a controller needs from the sim and why
 config/lidar/mid360_pattern.npz    the MID360's recorded pattern bank, from the workspace's record/dp (config/lidar/README.md)
 scripts/lidar_pattern.py           rebuilds it from any MID360 recording
 policy/                            the G23's ONNX policies, gitignored: copy them in (policy/README.md)
@@ -165,7 +173,28 @@ python3 -m pytest /home/syncrobotic/sim/tests      # unit tests; the synthetic-s
 ```
 
 Parameters are in `config/params/sim_params.yaml` and can be overridden the
-ROS way: `python3 -m syncai_sim --ros-args --params-file ... -p mode_switch_delay:=4.0`.
+ROS way: `python3 -m syncai_sim --ros-args --params-file ... -p mode_switch_delay:=4.0`;
+without ROS, `--profile <params.yaml>` and `-p key:=value` do the same.
+
+**The sim as a controller's hardware** (`locomotion: udp`, ROS-free: the sim
+talks UDP only). Every physics step sends the body's measurements to a
+controller process and applies the joint command it sends back
+(`locomotion/hardware_link.py` is the protocol; `docs/architecture.md`
+says what each field is for). `config/params/controller_profile.yaml` sets
+the mode up — the link's ports, 1 kHz, the body the way a controller's own
+development simulation models it:
+
+```bash
+python3 -m syncai_sim --no-ros --teleop --profile /home/syncrobotic/sim/config/params/controller_profile.yaml
+python3 /home/syncrobotic/sim/scripts/controller_bench.py --profile /home/syncrobotic/sim/config/params/controller_profile.yaml --fake-controller --seconds 5   # the link end to end with the stand-in controller
+python3 /home/syncrobotic/sim/scripts/controller_bench.py --profile ... --send "MODE Z" --send "MODE M" --gap 3 --axes 0.5 0 0 --seconds 15 --listen        # a controller process on the link
+```
+
+With nothing on the link the motors are in damping and the robot lies down;
+the panel's motion keys and sliders go to the controller's command port
+(50051) as the nav stack's driver_manager would send them. The controller
+process itself (SyncAI-Robot-Control's `--backend sim`) is the next step,
+not in this repository.
 
 ## What the stack sees
 
@@ -527,12 +556,17 @@ python3 -m syncai_sim --ros-args --params-file ... -p mode_switch_delay:=4.0
 * **No `use_sim_time`.** The whole stack runs on the wall clock and so does the
   sim (fixed 2 ms physics steps paced to real time, catching up to 0.1 s at
   once). A walking step costs ~0.25 ms on dp, policy inference included.
-* **The policies are ported, not the controller run.** `g2_deploy_rs` has a
-  MuJoCo mode of its own (UDP to a Python script), but running it here would
-  need a Rust toolchain in the image and its UDP bridge between the stack and
-  the sim; the runners are ~150 lines of Python against the same ONNX files.
-  The price: a change to a runner in `g2_deploy_rs` must be mirrored in
-  `policy.py` (it names the source files).
+* **The policies are ported; the controller is run (2026-11-03).** Until
+  then only the port existed: the runners are ~150 lines of Python against
+  the same ONNX files, and running the controller would have needed its
+  toolchain in the image. The MPC changed that: it is C++ behind the
+  controller's FFI and cannot be ported, so the sim grew the other way
+  round — a hardware link (`locomotion: udp`) over which a controller
+  process commands the joints and reads the body, with the sim as its
+  hardware. The port stays as the RL backend for the nav session; the
+  price of the port is unchanged (a change to a runner on the robot must be
+  mirrored in `locomotion/policy.py`), the price of the link is that its
+  spec lives here and the controller's `--backend sim` must follow it.
 
 ## Findings
 
