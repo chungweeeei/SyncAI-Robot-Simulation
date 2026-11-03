@@ -1,7 +1,7 @@
 """Teleop (teleop.py): a held command from the browser's panel, a stop once,
 the keys as closures under the lock, and the session's teleport-only mode."""
 
-from syncai_sim.teleop import Teleop
+from syncai_sim.viewer.teleop import Teleop
 
 
 class FakeDriver:

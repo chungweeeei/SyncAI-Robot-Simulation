@@ -6,8 +6,8 @@ import socket
 import numpy as np
 import pytest
 
-from syncai_sim.controller_link import ControllerLink, LinkConfig
-from syncai_sim.fake_driver import ESTOP, LIE_DOWN, LOCOMOTION, FakeDriver
+from syncai_sim.driver.controller_link import ControllerLink, LinkConfig
+from syncai_sim.driver.fake_driver import ESTOP, LIE_DOWN, LOCOMOTION, FakeDriver
 
 
 class FakeSim:

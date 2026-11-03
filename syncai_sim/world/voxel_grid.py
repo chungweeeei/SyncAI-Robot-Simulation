@@ -29,7 +29,7 @@ import math
 import numba as nb
 import numpy as np
 
-from .btree import TREE_MAX_VAL
+from syncai_sim.world.btree import TREE_MAX_VAL
 
 
 class VoxelGrid:

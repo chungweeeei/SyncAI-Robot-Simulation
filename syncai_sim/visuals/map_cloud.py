@@ -21,9 +21,9 @@ import os
 
 import numpy as np
 
-from .pcd_mesh import on_site, read_pcd
-from .storeys import storey_of
-from .world import World
+from syncai_sim.visuals.pcd_mesh import on_site, read_pcd
+from syncai_sim.world.storeys import storey_of
+from syncai_sim.world.build import World
 
 FORMAT = 1
 

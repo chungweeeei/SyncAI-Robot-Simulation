@@ -44,7 +44,7 @@ import numpy as np
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
 
 from syncai_sim.config import PARAM_DEFAULTS, build_sim_config, read_ini  # noqa: E402
-from syncai_sim.fake_driver import LOCOMOTION  # noqa: E402
+from syncai_sim.driver.fake_driver import LOCOMOTION  # noqa: E402
 
 STALL_SPEED = 0.05  # m/s: below this the body is standing still
 STALL_CMD = 0.3  # m/s: a command this large should move it
@@ -212,7 +212,7 @@ def main(argv=None) -> int:
     if cfg.locomotion != "policy":
         raise SystemExit("gait_bench is for locomotion policy")
 
-    from syncai_sim.simulator import Simulator
+    from syncai_sim.envs.simulator import Simulator
     sim = Simulator(cfg, log=lambda *x: None)
     if a.pose:
         pose = (a.pose[0], a.pose[1], a.pose[2], math.radians(a.pose[3]))

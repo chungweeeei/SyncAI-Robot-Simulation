@@ -53,8 +53,8 @@ from sensor_msgs.msg import Imu, JointState, PointCloud2, PointField
 from std_msgs.msg import Int32MultiArray
 from tf2_ros import TransformBroadcaster
 
-from .config import PARAM_DEFAULTS, IniSettings, build_sim_config  # noqa: F401
-from .simulator import Simulator
+from syncai_sim.config import PARAM_DEFAULTS, IniSettings, build_sim_config  # noqa: F401
+from syncai_sim.envs.simulator import Simulator
 
 try:
     from syncai_common.msg import RobotMode
@@ -116,7 +116,7 @@ class SimNode(Node):
         self.pub_imu = self.create_publisher(Imu, "livox/imu", reliable10)
         self.link = None
         if params["driver_link"] == "udp":
-            from .controller_link import ControllerLink, LinkConfig
+            from syncai_sim.driver.controller_link import ControllerLink, LinkConfig
             self.link = ControllerLink(sim, sim.driver, LinkConfig(
                 command_port=params["controller_command_port"],
                 telemetry_port=params["controller_telemetry_port"],

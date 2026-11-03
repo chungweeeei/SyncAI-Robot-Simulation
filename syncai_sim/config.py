@@ -16,7 +16,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:  # the real import stays local to keep INI reading free of MuJoCo / numba
-    from .simulator import SimConfig
+    from syncai_sim.envs.simulator import SimConfig
 
 DEFAULT_INI = "config/system.ini"  # relative: every pane runs in the workspace root
 
@@ -59,11 +59,11 @@ def build_sim_config(ini: IniSettings, p: dict) -> SimConfig:
     Imports are local so that reading an INI needs neither MuJoCo nor numba."""
     import json
 
-    from .kinematics import KinematicsConfig
-    from .lidar import LidarConfig
-    from .scene import PropSpec
-    from .simulator import SimConfig
-    from .world import default_cache_dir
+    from syncai_sim.locomotion.kinematics import KinematicsConfig
+    from syncai_sim.sensor.lidar import LidarConfig
+    from syncai_sim.scene.scene import PropSpec
+    from syncai_sim.envs.simulator import SimConfig
+    from syncai_sim.world.build import default_cache_dir
 
     map_dir = p["map_dir"] or ini.map_dir
     if not map_dir:
@@ -107,7 +107,7 @@ def build_sim_config(ini: IniSettings, p: dict) -> SimConfig:
 def world_options(p: dict):
     """The params' WorldOptions (shared with `python3 -m syncai_sim.pcd_mesh`,
     whose cache key must match the sim's world)."""
-    from .world import WorldOptions
+    from syncai_sim.world.build import WorldOptions
     return WorldOptions(
         visual_max_height_above_column_floor_m=p["visual_max_height_above_column_floor_m"],
         plate_min_voxels=p["plate_min_voxels"],

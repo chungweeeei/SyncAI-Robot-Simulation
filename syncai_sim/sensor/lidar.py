@@ -51,10 +51,10 @@ from dataclasses import dataclass
 
 import numpy as np
 
-from .livox_bag import PATTERN_FORMAT
+from syncai_sim.sensor.livox_bag import PATTERN_FORMAT
+from syncai_sim import REPO_DIR
 
-DEFAULT_PATTERN_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "config",
-                                    "lidar", "mid360_pattern.npz")
+DEFAULT_PATTERN_FILE = os.path.join(REPO_DIR, "config", "lidar", "mid360_pattern.npz")
 
 
 @dataclass

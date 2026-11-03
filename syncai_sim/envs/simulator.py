@@ -42,16 +42,16 @@ from dataclasses import dataclass, field
 import mujoco
 import numpy as np
 
-from . import scene as sc
-from .fake_driver import DAMPING, FakeDriver
-from .kinematics import BaseState, Event, KinematicsConfig, advance, place
-from .legged import LeggedController
-from .lidar import LidarConfig, LidarModel, rays_along_motion
-from .policy import load_policies
-from .prop_rays import ray_aabb, ray_vertical_cylinder
-from .robot import RobotConfig, RobotModel, load_robot
-from .terrain_patch import TerrainPatch, TerrainPatchConfig
-from .world import World, WorldOptions, build_world
+from syncai_sim.scene import scene as sc
+from syncai_sim.driver.fake_driver import DAMPING, FakeDriver
+from syncai_sim.locomotion.kinematics import BaseState, Event, KinematicsConfig, advance, place
+from syncai_sim.locomotion.legged import LeggedController
+from syncai_sim.sensor.lidar import LidarConfig, LidarModel, rays_along_motion
+from syncai_sim.locomotion.policy import load_policies
+from syncai_sim.sensor.prop_rays import ray_aabb, ray_vertical_cylinder
+from syncai_sim.entity.robot import RobotConfig, RobotModel, load_robot
+from syncai_sim.terrains.terrain_patch import TerrainPatch, TerrainPatchConfig
+from syncai_sim.world.build import World, WorldOptions, build_world
 
 # g2_deploy_rs src/ros_bridge.rs: what the controller accepts from cmd_vel
 # before the policy's own +-1 clip.
@@ -169,10 +169,10 @@ class Simulator:
         self.surface = None
         stairs = None
         if self.legged:
-            from .surface_heights import load_or_build as load_surface
+            from syncai_sim.terrains.surface_heights import load_or_build as load_surface
             self.surface = load_surface(cfg.map_dir, cfg.cache_dir, self.world, log=log)
             if cfg.stairs == "fitted" and self.surface is not None and self.surface.flights:
-                from . import stairs as st
+                from syncai_sim.terrains import stairs as st
                 g = self.world.grid
                 stairs = st.build(self.surface.flights, g.grid, g.origin_m, g.res, log=log)
         boxes = None if stairs is None else stairs.boxes
@@ -448,7 +448,7 @@ class Simulator:
     def joint_states(self) -> tuple[list[str], np.ndarray]:
         """The twelve leg joints by URDF name: the walking body's, or the
         statue's baked standing angles (robot.py), for robot_state_publisher."""
-        from .legged import JOINTS, LEGS
+        from syncai_sim.locomotion.legged import JOINTS, LEGS
         names = [f"{leg}_{j}_joint" for leg in LEGS for j in JOINTS]
         if self.legged:
             return names, self.legs.q()

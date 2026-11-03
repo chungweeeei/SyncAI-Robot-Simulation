@@ -34,9 +34,11 @@ from dataclasses import asdict, dataclass, field
 import numba as nb
 import numpy as np
 
-from . import btree, greedy_mesh, visual
-from .storeys import storey_bounds, storey_of
-from .voxel_grid import VoxelGrid
+from syncai_sim.world import btree, greedy_mesh
+from syncai_sim.visuals import visual
+from syncai_sim.world.storeys import storey_bounds, storey_of
+from syncai_sim.world.voxel_grid import VoxelGrid
+from syncai_sim import REPO_DIR
 
 
 @dataclass
@@ -850,7 +852,7 @@ def _storey_meshes(voxels: np.ndarray, resolution: float, bounds: list[float], m
 
 def default_cache_dir(map_dir: str) -> str:
     name = os.path.basename(os.path.normpath(map_dir))
-    return os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "cache", name)
+    return os.path.join(REPO_DIR, "cache", name)
 
 
 def main(argv: list[str] | None = None) -> int:

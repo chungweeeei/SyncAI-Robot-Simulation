@@ -1,8 +1,8 @@
 import numpy as np
 
-from syncai_sim import visual
-from syncai_sim.btree import TREE_MAX_VAL
-from syncai_sim.world import (
+from syncai_sim.visuals import visual
+from syncai_sim.world.btree import TREE_MAX_VAL
+from syncai_sim.world.build import (
     clear_track_volume,
     clip_spikes,
     column_floor_filter,

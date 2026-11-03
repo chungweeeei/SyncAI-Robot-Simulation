@@ -34,8 +34,8 @@ import time
 import mujoco
 import numpy as np
 
-from . import scene as sc
-from . import visual
+from syncai_sim.scene import scene as sc
+from syncai_sim.visuals import visual
 
 VIEW_HZ = 20.0  # poses to the browser per second: a state copy is ~0.3 ms, 20 keep the gait fluid
 TERRAIN_HZ = 2.0  # the terrain boxes, when shown
@@ -181,7 +181,7 @@ class WebView:
         """Replace the site's tiles with `mode`'s (voxels / pointcloud / tsdf)
         in the panel's look (ramp / photo; site_tiles.py builds a set once
         and caches it)."""
-        from . import site_tiles
+        from syncai_sim.visuals import site_tiles
 
         world = getattr(self.sim, "world", None)
         if world is None:
@@ -268,7 +268,7 @@ class WebView:
             cast_shadow=False)
 
     def _load_map(self) -> None:
-        from .map_cloud import load_or_build
+        from syncai_sim.visuals.map_cloud import load_or_build
         cfg = self.sim.cfg
         clouds = load_or_build(cfg.map_dir, cfg.cache_dir, self.sim.world, voxel=MAP_POINT_M,
                                log=self.log)
@@ -375,7 +375,7 @@ class WebView:
         if name == "all":
             return set(range(n))
         if name == "auto":
-            from .storeys import storey_of
+            from syncai_sim.world.storeys import storey_of
             here = int(storey_of(self.sim.state.z_ground, self.sim.info.storey_bounds))
             return set(range(here + 1))
         return {self._storey_modes.index(name) - 1}

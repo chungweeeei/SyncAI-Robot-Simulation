@@ -61,7 +61,7 @@ from dataclasses import dataclass
 import numba as nb
 import numpy as np
 
-from .voxel_grid import VoxelGrid
+from syncai_sim.world.voxel_grid import VoxelGrid
 
 
 @dataclass

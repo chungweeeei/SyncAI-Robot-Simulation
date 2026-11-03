@@ -3,8 +3,8 @@ stand-in networks (no onnxruntime, no ONNX files)."""
 
 import numpy as np
 
-from syncai_sim.legged import pose_at_height
-from syncai_sim.policy import (Q_DEFAULT, HimlocoRunner, MultiPolicy, PpoRunner,
+from syncai_sim.locomotion.legged import pose_at_height
+from syncai_sim.locomotion.policy import (Q_DEFAULT, HimlocoRunner, MultiPolicy, PpoRunner,
                                StairHistoryRunner, projected_gravity)
 
 

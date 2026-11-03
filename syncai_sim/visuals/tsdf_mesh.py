@@ -34,10 +34,10 @@ from dataclasses import asdict, dataclass
 
 import numpy as np
 
-from . import visual
-from .pcd_mesh import on_site, read_pcd
-from .storeys import storey_of
-from .world import World
+from syncai_sim.visuals import visual
+from syncai_sim.visuals.pcd_mesh import on_site, read_pcd
+from syncai_sim.world.storeys import storey_of
+from syncai_sim.world.build import World
 
 FORMAT = 3  # 2: no colour in the volume; 3: by blocks
 
@@ -299,8 +299,8 @@ def load_or_build(map_dir: str, cache_dir: str, world: World, opts: TsdfOptions 
 def main(argv: list[str] | None = None) -> int:
     import argparse
 
-    from .config import PARAM_DEFAULTS, world_options
-    from .world import build_world, default_cache_dir
+    from syncai_sim.config import PARAM_DEFAULTS, world_options
+    from syncai_sim.world.build import build_world, default_cache_dir
 
     p = argparse.ArgumentParser(description="Build (or refresh) a map's TSDF viewer surface")
     p.add_argument("map_dir", help="map/<name> directory holding octomap.bt, poses.txt, patches/")

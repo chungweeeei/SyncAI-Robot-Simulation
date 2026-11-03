@@ -23,8 +23,8 @@ from dataclasses import dataclass
 
 import numpy as np
 
-from .voxel_grid import VoxelGrid
-from .world import World
+from syncai_sim.world.voxel_grid import VoxelGrid
+from syncai_sim.world.build import World
 
 FORMAT = 1
 NEIGHBOURS = np.array([[dx, dy, dz] for dx in (-1, 0, 1) for dy in (-1, 0, 1) for dz in (-1, 0, 1)
@@ -109,7 +109,7 @@ def _key(pcd_path: str, world: World) -> str:
 def load_or_build(map_dir: str, cache_dir: str, world: World, log=print) -> VoxelIntensity | None:
     """The map's voxel intensities, cached; None without map.pcd (the picture
     is then shaded by height alone)."""
-    from .pcd_mesh import read_pcd
+    from syncai_sim.visuals.pcd_mesh import read_pcd
 
     pcd_path = os.path.join(map_dir, "map.pcd")
     if not os.path.isfile(pcd_path):

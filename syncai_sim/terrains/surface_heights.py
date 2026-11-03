@@ -137,8 +137,9 @@ import os
 
 import numpy as np
 
-from .pcd_mesh import read_pcd
-from .world import World, read_track
+from syncai_sim.visuals.pcd_mesh import read_pcd
+from syncai_sim.world.build import World, read_track
+from syncai_sim import REPO_DIR
 
 # 2: smoothed; 3: every surface voxel, one point is enough; 4: the wide pass; 5: seams;
 # 6: an unmeasured voxel prefers its own layer (dropped in 12); 7: seams keyed by column and band;
@@ -185,8 +186,7 @@ FLIGHT_END = 0.6  # m at most between a flight's end riser and the landing floor
 # Stair walks (read_stair_walks): keyframes this far apart, as on dp's track
 # over a flight (0.05-0.5 m), so _flight_runs' +-2 keyframes span 0.8 m.
 WALK_STEP = 0.2
-WALKS_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-                         "config", "stair_walks")
+WALKS_DIR = os.path.join(REPO_DIR, "config", "stair_walks")
 
 # Ramps (smooth_ramps): the box mean's half width in columns. 0.7 m spreads a
 # 9 cm lip over seven columns (1.3 cm each) and is under half of dp's hump.

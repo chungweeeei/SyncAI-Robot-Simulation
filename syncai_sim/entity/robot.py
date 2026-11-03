@@ -268,7 +268,7 @@ def joint_kind(name: str) -> int:
 
 def _articulated(root: ET.Element, base: ET.Element, cfg: RobotConfig,
                  base_to_lidar: np.ndarray, base_to_imu: np.ndarray) -> RobotModel:
-    from .policy import Q_DEFAULT
+    from syncai_sim.locomotion.policy import Q_DEFAULT
 
     if cfg.motor_model not in ("ideal", "j60"):
         raise ValueError(f"motor_model {cfg.motor_model!r}: ideal | j60")

@@ -3,9 +3,9 @@ import os
 import numpy as np
 import pytest
 
-from syncai_sim.lidar import (DEFAULT_PATTERN_FILE, LidarConfig, LidarModel, LidarPattern,
+from syncai_sim.sensor.lidar import (DEFAULT_PATTERN_FILE, LidarConfig, LidarModel, LidarPattern,
                               rays_along_motion)
-from syncai_sim.livox_bag import build_pattern, save_pattern
+from syncai_sim.sensor.livox_bag import build_pattern, save_pattern
 
 from tests.test_livox_bag import sweep_frame
 

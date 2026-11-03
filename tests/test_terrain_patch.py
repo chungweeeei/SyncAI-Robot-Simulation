@@ -1,8 +1,8 @@
 import numpy as np
 
-from syncai_sim.btree import TREE_MAX_VAL
-from syncai_sim.terrain_patch import TerrainPatch, TerrainPatchConfig
-from syncai_sim.voxel_grid import VoxelGrid
+from syncai_sim.world.btree import TREE_MAX_VAL
+from syncai_sim.terrains.terrain_patch import TerrainPatch, TerrainPatchConfig
+from syncai_sim.world.voxel_grid import VoxelGrid
 
 RES = 0.1
 ORG = TREE_MAX_VAL  # voxel index of x = 0

@@ -41,9 +41,9 @@ from dataclasses import asdict, dataclass
 
 import numpy as np
 
-from . import visual
-from .storeys import storey_of
-from .world import World, read_track
+from syncai_sim.visuals import visual
+from syncai_sim.world.storeys import storey_of
+from syncai_sim.world.build import World, read_track
 
 # Bumped when the mesh changes without an option changing (2: storeys).
 FORMAT = 2
@@ -213,7 +213,7 @@ def build(points: np.ndarray, world: World, track: np.ndarray, opts: PcdMeshOpti
 def main(argv: list[str] | None = None) -> int:
     import argparse
 
-    from .world import build_world, default_cache_dir
+    from syncai_sim.world.build import build_world, default_cache_dir
 
     p = argparse.ArgumentParser(description="Build (or refresh) a map's point-cloud viewer mesh")
     p.add_argument("map_dir", help="map/<name> directory holding octomap.bt and map.pcd")
@@ -221,7 +221,7 @@ def main(argv: list[str] | None = None) -> int:
     a = p.parse_args(argv)
     cache = a.cache or default_cache_dir(a.map_dir)
     # The world options the sim uses by default, so that the cache key matches.
-    from .config import PARAM_DEFAULTS, world_options
+    from syncai_sim.config import PARAM_DEFAULTS, world_options
     world = build_world(a.map_dir, cache, world_options(PARAM_DEFAULTS))
     return 0 if load_or_build(a.map_dir, cache, world) is not None else 1
 

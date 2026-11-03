@@ -8,8 +8,8 @@ import struct
 import numpy as np
 import pytest
 
-from syncai_sim import bag_camera
-from syncai_sim.bag_camera import (find_transform, iter_images, parse_camera_info,
+from syncai_sim.visuals import bag_camera
+from syncai_sim.visuals.bag_camera import (find_transform, iter_images, parse_camera_info,
                                    parse_compressed_image, parse_tf_message, read_camera_info,
                                    read_static_transforms, rotation_matrix)
 

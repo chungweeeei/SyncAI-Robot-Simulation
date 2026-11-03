@@ -55,7 +55,7 @@ def main(argv=None) -> int:
                          "config/colour/<map>.npz (scripts/colour_map.py)")
     a = ap.parse_args(own)
 
-    from .config import read_ini
+    from syncai_sim.config import read_ini
     ini = read_ini(a.system_config)
     print(f"[sim] INI {ini.path}: robot_id {ini.robot_id}, map {ini.map_dir or '(none)'}, "
           f"initial_pose {ini.initial_pose}", flush=True)
@@ -64,8 +64,8 @@ def main(argv=None) -> int:
         return _run_without_ros(ini, a)
 
     import rclpy
-    from .ros_node import ParamNode, SimNode, Spinner, build_sim_config, make_frames, run_loop
-    from .simulator import Simulator
+    from syncai_sim.ros.ros_node import ParamNode, SimNode, Spinner, build_sim_config, make_frames, run_loop
+    from syncai_sim.envs.simulator import Simulator
 
     rclpy.init(args=ros_args)
     pn = ParamNode(ini.robot_id)
@@ -87,7 +87,7 @@ def main(argv=None) -> int:
 
     node = SimNode(ini, sim, params, make_frames(ini.robot_id))
     if params["publish_map_cloud"]:
-        from .map_cloud import load_or_build
+        from syncai_sim.visuals.map_cloud import load_or_build
         clouds = load_or_build(cfg.map_dir, cfg.cache_dir, sim.world, log=log)
         if clouds:
             node.publish_map_clouds(clouds)
@@ -114,12 +114,12 @@ def _viewer(a, sim, spawn, web_port: int, log):
     panel drives the robot with --teleop, teleports in any case."""
     if a.headless:
         return None, None
-    from .teleop import Teleop
+    from syncai_sim.viewer.teleop import Teleop
     teleop = Teleop(spawn, log=log, drive=a.teleop)
 
     def factory():
         try:
-            from .web_view import WebView
+            from syncai_sim.viewer.web_view import WebView
         except ImportError as err:
             # An image built before viser was in requirements.txt runs without
             # a picture rather than not at all.
@@ -139,8 +139,8 @@ def _spawn_pose(ini, params) -> tuple[float, float, float, float]:
 def _run_without_ros(ini, a) -> int:
     """Viewer + teleop + the same physics loop, no publications."""
     import time
-    from .config import PARAM_DEFAULTS, build_sim_config
-    from .simulator import Simulator
+    from syncai_sim.config import PARAM_DEFAULTS, build_sim_config
+    from syncai_sim.envs.simulator import Simulator
     params = dict(PARAM_DEFAULTS)
     if a.map:
         params["map_dir"] = a.map

@@ -45,13 +45,13 @@ from dataclasses import dataclass
 
 import numpy as np
 
-from .bag_camera import CameraModel, StaticTransform, rotation_matrix
-from .voxel_grid import VoxelGrid
-from .voxel_intensity import _median_per_key
+from syncai_sim.visuals.bag_camera import CameraModel, StaticTransform, rotation_matrix
+from syncai_sim.world.voxel_grid import VoxelGrid
+from syncai_sim.visuals.voxel_intensity import _median_per_key
+from syncai_sim import REPO_DIR
 
 FORMAT = 1
-COLOUR_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-                          "config", "colour")
+COLOUR_DIR = os.path.join(REPO_DIR, "config", "colour")
 # Returns nearer than this are the robot's own body (the MID360 sees its
 # back and the operator's legs); farther than MAX_RANGE a voxel is under a
 # pixel wide in a 1280 px fisheye (0.1 m at 30 m = 1.4 px) and its colour
@@ -278,8 +278,8 @@ def build_from_bag(bag: str, track: PoseTrack, grid: VoxelGrid, camera: Camera,
                    image_topic: str | None = None, log=print) -> tuple[VoxelColour, dict]:
     """Colour the bag's scans from its images along `track` (the module
     docstring) and return the table with its build notes."""
-    from . import bag_camera
-    from .livox_bag import iter_frames
+    from syncai_sim.visuals import bag_camera
+    from syncai_sim.sensor.livox_bag import iter_frames
 
     image_topic = image_topic or bag_camera.IMAGE_TOPIC
     R_lc, t_lc = rotation_matrix(lidar_to_camera.q), lidar_to_camera.t

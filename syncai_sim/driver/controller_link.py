@@ -33,7 +33,7 @@ from dataclasses import dataclass
 
 import numpy as np
 
-from .fake_driver import FakeDriver
+from syncai_sim.driver.fake_driver import FakeDriver
 
 # protocol.rs motion_key_command, inverted: the MODE character -> the motion key.
 MODE_CHARS = {"Z": "0", "C": "1", "X": "2", "R": "3", "M": "5"}

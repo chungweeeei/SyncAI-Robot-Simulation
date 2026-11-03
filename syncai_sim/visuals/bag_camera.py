@@ -32,7 +32,7 @@ from dataclasses import dataclass
 
 import numpy as np
 
-from .livox_bag import bag_files
+from syncai_sim.sensor.livox_bag import bag_files
 
 IMAGE_TOPIC = "/robot01/image_raw/compressed"
 CAMERA_INFO_TOPIC = "/robot01/camera_info"

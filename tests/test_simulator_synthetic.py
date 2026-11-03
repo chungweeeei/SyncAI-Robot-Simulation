@@ -11,8 +11,8 @@ import subprocess
 import numpy as np
 import pytest
 
-from syncai_sim.kinematics import KinematicsConfig
-from syncai_sim.simulator import SimConfig, Simulator
+from syncai_sim.locomotion.kinematics import KinematicsConfig
+from syncai_sim.envs.simulator import SimConfig, Simulator
 
 WS = os.environ.get("ROBOT_WS_DIR", "/home/syncrobotic/robot_ws")
 URDF = os.path.join(WS, "src", "syncai_bringup", "description", "G23.urdf")
@@ -110,7 +110,7 @@ def test_walking_body_knobs_compile_into_the_model(stairs_map, tmp_path):
     implicit integrator: each lands in the compiled model and the robot
     still stands and walks on the flat."""
     import mujoco
-    from syncai_sim.robot import J60_ARMATURE, J60_FRICTIONLOSS
+    from syncai_sim.entity.robot import J60_ARMATURE, J60_FRICTIONLOSS
     sim = make_walking_sim(stairs_map, tmp_path, motor_model="j60", trunk_inertial="vendor",
                            foot_solref=(0.005, 1.0), foot_friction=(1.0, 0.01, 0.01),
                            actuator="position", integrator="implicitfast", cmd_delay_ms=4.0)

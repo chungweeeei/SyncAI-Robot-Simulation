@@ -42,8 +42,8 @@ from dataclasses import asdict, dataclass, field
 import mujoco
 import numpy as np
 
-from .robot import TERRAIN_BIT, RobotModel
-from .world import World
+from syncai_sim.entity.robot import TERRAIN_BIT, RobotModel
+from syncai_sim.world.build import World
 
 # Bumped when the compiled scene changes without any input changing: the MJB
 # cache (cached_model) is keyed on it (2: the site's visual mesh left the model).
@@ -208,7 +208,7 @@ def scene_key(world: World, robot: RobotModel, props: list[PropSpec], timestep: 
     """Everything the compiled scene depends on, as one string (cached_model).
     The robot's config is in it whole (asdict), so every RobotConfig knob —
     motor model, inertial, contact, actuators — is a different scene."""
-    from .world import CACHE_FORMAT
+    from syncai_sim.world.build import CACHE_FORMAT
 
     urdf = os.stat(robot.cfg.urdf_path)
     # The real path: the same URDF reached through a symlinked workspace is

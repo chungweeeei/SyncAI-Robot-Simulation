@@ -1,4 +1,4 @@
-from syncai_sim.fake_driver import LOCOMOTION, MPC, STAND, FakeDriver
+from syncai_sim.driver.fake_driver import LOCOMOTION, MPC, STAND, FakeDriver
 
 
 class Clock:

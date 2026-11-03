@@ -8,11 +8,11 @@ import mujoco
 import numpy as np
 import pytest
 
-from syncai_sim.fake_driver import DAMPING, ESTOP, LIE_DOWN, LOCOMOTION, MPC
-from syncai_sim.legged import (JOINTS, LEGS, STAND_KD, STAND_KP, TORQUE_LIMIT, LeggedController,
+from syncai_sim.driver.fake_driver import DAMPING, ESTOP, LIE_DOWN, LOCOMOTION, MPC
+from syncai_sim.locomotion.legged import (JOINTS, LEGS, STAND_KD, STAND_KP, TORQUE_LIMIT, LeggedController,
                                j60_torque_limits)
-from syncai_sim.policy import HimlocoRunner, MultiPolicy, PpoRunner
-from syncai_sim.robot import J60_MAX_SPEED, J60_PEAK_TORQUE
+from syncai_sim.locomotion.policy import HimlocoRunner, MultiPolicy, PpoRunner
+from syncai_sim.entity.robot import J60_MAX_SPEED, J60_PEAK_TORQUE
 
 from tests.test_policy import Recorder
 

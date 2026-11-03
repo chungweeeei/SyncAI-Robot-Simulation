@@ -42,9 +42,9 @@ from dataclasses import dataclass
 import mujoco
 import numpy as np
 
-from .fake_driver import DAMPING, ESTOP, LIE_DOWN, LOCOMOTION, MPC
-from .policy import Q_DEFAULT, MultiPolicy, projected_gravity
-from .robot import J60_MAX_SPEED, J60_PEAK_TORQUE, joint_kind
+from syncai_sim.driver.fake_driver import DAMPING, ESTOP, LIE_DOWN, LOCOMOTION, MPC
+from syncai_sim.locomotion.policy import Q_DEFAULT, MultiPolicy, projected_gravity
+from syncai_sim.entity.robot import J60_MAX_SPEED, J60_PEAK_TORQUE, joint_kind
 
 # The controller's joint order, matched by name to the URDF's joints.
 LEGS = ("FL", "FR", "HL", "HR")

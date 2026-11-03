@@ -1,6 +1,6 @@
 import numpy as np
 
-from syncai_sim.storeys import storey_bounds, storey_of
+from syncai_sim.world.storeys import storey_bounds, storey_of
 
 
 def test_two_storeys_with_landings_between():

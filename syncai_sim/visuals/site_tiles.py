@@ -38,9 +38,9 @@ from dataclasses import dataclass
 
 import numpy as np
 
-from . import visual
-from .btree import TREE_MAX_VAL
-from .world import World, quad_corners
+from syncai_sim.visuals import visual
+from syncai_sim.world.btree import TREE_MAX_VAL
+from syncai_sim.world.build import World, quad_corners
 
 TILE_M = 10.0
 FORMAT = 1
@@ -252,7 +252,7 @@ def load_or_build(world: World, map_dir: str, cache_dir: str, visual_mesh: str,
                   look: str = "ramp", log=print) -> list[Tile]:
     """The site's tiles for the browser, from the cache or built (dp: ~10 s
     for the voxels; the surface adds pcd_mesh.py's own build the first time)."""
-    from . import voxel_colour, voxel_intensity
+    from syncai_sim.visuals import voxel_colour, voxel_intensity
 
     if visual_mesh not in ("voxels", "pointcloud", "tsdf"):
         raise ValueError(f"visual_mesh {visual_mesh!r}: voxels | pointcloud | tsdf")
@@ -274,10 +274,10 @@ def load_or_build(world: World, map_dir: str, cache_dir: str, visual_mesh: str,
     surface = None
     if visual_mesh != "voxels":
         if visual_mesh == "pointcloud":
-            from .pcd_mesh import load_or_build as load_surface
+            from syncai_sim.visuals.pcd_mesh import load_or_build as load_surface
             cache_file = "pcd_mesh.npz"
         else:
-            from .tsdf_mesh import load_or_build as load_surface
+            from syncai_sim.visuals.tsdf_mesh import load_or_build as load_surface
             cache_file = "tsdf_mesh.npz"
         surface = load_surface(map_dir, cache_dir, world, log=log)
         if surface is None:

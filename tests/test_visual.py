@@ -1,9 +1,9 @@
 import numpy as np
 import pytest
 
-from syncai_sim import visual
-from syncai_sim.map_cloud import thin
-from syncai_sim.pcd_mesh import read_pcd
+from syncai_sim.visuals import visual
+from syncai_sim.visuals.map_cloud import thin
+from syncai_sim.visuals.pcd_mesh import read_pcd
 
 
 def test_ramp_ends():

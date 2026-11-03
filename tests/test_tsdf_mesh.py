@@ -7,11 +7,11 @@ import math
 import numpy as np
 import pytest
 
-from syncai_sim import visual
-from syncai_sim.btree import TREE_MAX_VAL
-from syncai_sim.tsdf_mesh import (FACES, TsdfOptions, build, depth_faces, quat_wxyz_matrix,
+from syncai_sim.visuals import visual
+from syncai_sim.world.btree import TREE_MAX_VAL
+from syncai_sim.visuals.tsdf_mesh import (FACES, TsdfOptions, build, depth_faces, quat_wxyz_matrix,
                                   read_poses)
-from syncai_sim.voxel_grid import VoxelGrid
+from syncai_sim.world.voxel_grid import VoxelGrid
 
 ORG = TREE_MAX_VAL
 

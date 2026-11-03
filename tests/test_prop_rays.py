@@ -1,6 +1,6 @@
 import numpy as np
 
-from syncai_sim.prop_rays import ray_aabb, ray_vertical_cylinder
+from syncai_sim.sensor.prop_rays import ray_aabb, ray_vertical_cylinder
 
 
 def test_ray_aabb_hits_and_misses():
