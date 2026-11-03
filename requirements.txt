@@ -1,28 +1,25 @@
-# Installed into the image by the Dockerfile (pip, as root). numpy is NOT
-# listed on purpose: the base image ships ROS Humble's python3-numpy 1.21 and
-# cv_bridge & co. are compiled against it; the Dockerfile pins numpy<2 when it
-# installs these so pip cannot swap it for a 2.x that breaks those imports.
+# Installed into the image by the Dockerfile (pip, as root).
 mujoco==3.17.0
+# numpy 1.x: open3d 0.18's wheels are built against it (2.x breaks its import).
+numpy>=1.26,<2
 # The lidar, ground and collision queries are a JIT voxel ray caster
-# (syncai_sim/voxel_grid.py): 20k rays in ~1.3 ms against dp's grid, where
+# (syncai_sim/world/voxel_grid.py): 20k rays in ~1.3 ms against dp's grid, where
 # MuJoCo's own mj_multiRay took 325 ms against the same site as a mesh and
 # scaled linearly against boxes. numba is what makes a Python sim real-time.
 numba==0.68.0
-# numba 0.68 imports `coverage.types`, which the image's apt coverage 6.2 lacks
-# (python3-coverage, pulled in by ROS's test tooling); a pip coverage >= 7 in
-# /usr/local shadows it. Nothing in the nav stack imports coverage at runtime.
-coverage>=7
-# The G23's locomotion policies are ONNX (g2_deploy_rs runs them with ONNX
-# Runtime 1.19.2, scripts/prepare_onnxruntime.sh); the same version here.
+# The G23's locomotion policies are ONNX; the version the robot's controller
+# runs them with.
 onnxruntime==1.19.2
-# The viewer's smooth site from map.pcd (syncai_sim/pcd_mesh.py: Poisson
-# reconstruction). 0.18.0 is the version tested here (py310 aarch64 wheel,
-# numpy stays 1.x). Optional: without it the viewer shows the voxels.
+# The viewer's smooth site from map.pcd (syncai_sim/visuals/pcd_mesh.py:
+# Poisson reconstruction) and the TSDF site. 0.18.0 is the version tested here
+# (py310 aarch64 wheel). Optional: without it the viewer shows the voxels.
 open3d==0.18.0
-# The viewer (syncai_sim/web_view.py): a Python server in the container, the
-# picture drawn by three.js in the host's browser on its GPU (the container
-# renders nothing; the GLFW window on llvmpipe over VNC it replaced managed
-# 10 frames a second of the site). Pulls trimesh (the site tiles and the
-# robot go over as GLB), websockets, msgspec, zstandard, imageio; all pure
-# Python or with aarch64 wheels (2026-10-26).
+# The viewer (syncai_sim/viewer/web_view.py): a Python server in the container,
+# the picture drawn by three.js in the host's browser on its GPU. Pulls trimesh
+# (the site tiles and the robot go over as GLB), websockets, msgspec,
+# zstandard, imageio; all pure Python or with aarch64 wheels (2026-10-26).
 viser==1.1.1
+# The params files (config/params/*.yaml) and the stair walks / ramps.
+pyyaml>=6
+# The tests (python3 -m pytest tests).
+pytest>=7

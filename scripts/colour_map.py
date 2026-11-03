@@ -8,9 +8,11 @@ what the viewer's `photo` look paints (syncai_sim/voxel_colour.py).
 
 Reads the bag's lidar scans, images, camera_info and /tf_static straight out
 of its sqlite files (no ROS; syncai_sim/livox_bag.py, bag_camera.py) and
-needs, besides, the robot's pose along the bag: Point-LIO's odometry
-replayed from it by scripts/bag_odom.py, which says how. The bag must be
-the map's own mapping run, so that the odometry's frame is the map's.
+needs, besides, the robot's pose along the bag: `--odom`, a text file of
+`stamp x y z qw qx qy qz` per line — Point-LIO's odometry replayed from the
+same bag, logged by whatever tool (the replay is the workspace's
+docs/localizer-offline-replay.md). The bag must be the map's own mapping run,
+so that the odometry's frame is the map's.
 Paths are relative to the cwd; in the container the workspace is
 /home/syncrobotic/robot_ws. outdoor_1027 (5240 scans, 14836 frames): 48 s
 and 9 MB, 77 % of the occupied voxels. config/colour/README.md records

@@ -1,7 +1,8 @@
-"""SyncAI robot simulation: MuJoCo world from a site's octomap, a rigid G23 driven
-kinematically, a MID360 by ray casting, and the ROS 2 face of Point-LIO, the
-localizer and driver_manager — enough to run the workspace's 3D navigation stack
-end to end without a robot. See README.md."""
+"""SyncAI robot simulation: the G23 in MuJoCo on a real site's voxels, walking on
+its own policies or on a controller process's joint commands, a MID360 cast
+on the voxels, a browser viewer, and UDP as the only way out (the gait
+controller's ASCII link, the hardware link). See README.md and
+docs/architecture.md."""
 
 import os
 

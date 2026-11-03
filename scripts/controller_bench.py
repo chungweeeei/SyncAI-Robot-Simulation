@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""The sim as a controller's hardware, driven ROS-free: the bench for `locomotion: udp`.
+"""The sim as a controller's hardware, headless: the bench for `locomotion: udp`.
 
     # the link end to end with no controller process (the stand-in answers every
     # state with a PD to the default pose): 0 falls, ~5000 states in 5 s
@@ -11,7 +11,7 @@
     python3 scripts/controller_bench.py --profile config/params/controller_profile.yaml \\
         --send "MODE Z" --send "MODE M" --gap 3 --axes 0.5 0 0 --seconds 15 --listen
 
-The sim is built as `python3 -m syncai_sim --no-ros` builds it (the profile, -p),
+The sim is built as `python3 -m syncai_sim` builds it (the profile, -p),
 spawned at the INI's pose or --pose, and stepped at wall-clock pace with no
 viewer. Lines given with --send go to the controller's command port in order,
 --gap seconds apart (MODE Z, then MODE M or MODE C; RESET_SAFETY after a fall);

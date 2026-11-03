@@ -1,9 +1,8 @@
 """The G23 in MuJoCo: the workspace's URDF, rigid, with a mocap handle.
 
-The URDF (`src/syncai_bringup/description/G23.urdf`) is the single description
-of the robot — robot_state_publisher serves it on the real robot and in the sim
-session — so the sim loads that file and nothing else: MuJoCo parses URDF
-natively. Two compiler switches are injected into the text first, because they
+The URDF (`src/syncai_bringup/description/G23.urdf` in the workspace) is the
+single description of the robot — the real robot's TF tree comes from it —
+so the sim loads that file and nothing else: MuJoCo parses URDF natively. Two compiler switches are injected into the text first, because they
 cannot come from a URDF (`fusestatic="false"`, or the root link base_link is
 fused into the world and cannot be given a free joint; `discardvisual="false"`,
 or the STL meshes are dropped and only the collision primitives remain), with
@@ -26,8 +25,8 @@ sim needs:
   world plates — the world is handled by `VoxelGrid.disc_blocked`.
 * `lidar_top` and `lidar_top_imu` stay as bodies (fixed children of
   base_link); their world poses come straight from MjData, so the sensor
-  extrinsics are the URDF's, read, not copied. `pointlio_body` is
-  `lidar_top_imu` (CLAUDE.md), and the planner's `lidar_height` 0.481 is that
+  extrinsics are the URDF's, read, not copied. The lidar's cloud is in the
+  `lidar_top_imu` frame, and the planner's `lidar_height` 0.481 is that
   frame's height over the ground when standing, which fixes the body height.
 
 With `articulated` (the `policy` locomotion, legged.py) the model is the robot
@@ -331,8 +330,8 @@ def _articulated(root: ET.Element, base: ET.Element, cfg: RobotConfig,
                 geom.set("conaffinity", "0")
                 geom.set("friction", _fmt(cfg.foot_friction))
                 geom.set("solref", _fmt(cfg.foot_solref))
-    # Two IMUs, as on the robot: the lidar's own on lidar_top_imu (the stack's
-    # livox/imu) and the body's on base_link (what the controller's hardware
+    # Two IMUs, as on the robot: the lidar's own on lidar_top_imu (the MID360's
+    # built-in one) and the body's on base_link (what the controller's hardware
     # layer reports: sensor/proprioception.py). The lidar's sits ~0.4 m over
     # the trunk, and its accelerometer carries that lever arm.
     imu = next(b for b in root.iter("body") if b.get("name") == cfg.imu_body)

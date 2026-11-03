@@ -53,19 +53,21 @@ other end of a UDP link, whose RL or MPC then decides.
                      command in — a controller PROCESS (SyncAI-Robot-Control
                      --backend sim) runs its RL or LMA against this
                │
-   driver/     the nav stack's side of the gait controller
+   driver/     the gait controller's state machine, and its ASCII UDP link
      fake_driver.py      the controller's state machine stood in for (motion
                          keys, policy mode, the switch delay) — policy / kinematic
      udp_driver.py       the same surface forwarding MODE / ESTOP / AXES to the
                          controller process — udp
-     controller_link.py  the sim AS the controller on driver_manager's ASCII
-                         link (the nav session, `driver_link: udp`)
+     controller_link.py  the sim AS the controller on its ASCII UDP link
+                         (`driver_link: udp`: AXES / MODE in, telemetry out)
                │
    envs/simulator.py   the composition root: one tick, scan, spawn, teleport
                │
        ┌───────┴────────┐
-   ros/ros_node.py   viewer/web_view.py + teleop.py
-   (the nav session) (the browser; the panel's keys and sliders)
+   __main__.py       viewer/web_view.py + teleop.py
+   (the main loop:   (the browser; the panel's keys and sliders)
+    wall clock, the
+    UDP links)
 ```
 
 ## One physics tick, walking
@@ -89,13 +91,15 @@ sends it as one datagram per step.
 
 | `locomotion` | the joints | the driver | who walks | runs under |
 |---|---|---|---|---|
-| `kinematic` | none: a rigid statue on a mocap weld, placed by the step rule | `FakeDriver` | `locomotion/kinematics.py` | ROS, `--no-ros` |
-| `policy` | twelve PD joints on the terrain patch | `FakeDriver` | the ONNX policies in this process (`legged.py`, `policy.py`) | ROS (the nav session), `--no-ros`, `scripts/gait_bench.py` |
-| `udp` | the same, commanded over the hardware link | `UdpDriver` (forwards keys and AXES to the controller) | a controller process: its RL or its MPC | `--no-ros` only, `scripts/controller_bench.py` |
+| `kinematic` | none: a rigid statue on a mocap weld, placed by the step rule | `FakeDriver` | `locomotion/kinematics.py` | `python3 -m syncai_sim` |
+| `policy` | twelve PD joints on the terrain patch | `FakeDriver` (with `driver_link: udp`, also the ASCII link) | the ONNX policies in this process (`legged.py`, `policy.py`) | `python3 -m syncai_sim`, `scripts/gait_bench.py` |
+| `udp` | the same, commanded over the hardware link | `UdpDriver` (forwards keys and AXES to the controller) | a controller process: its RL or its MPC | `python3 -m syncai_sim`, `scripts/controller_bench.py` |
 
-`udp` is ROS-free on purpose: in that mode the sim talks UDP only, and the
-nav stack is not what is under study. `python3 -m syncai_sim` refuses it
-without `--no-ros`; `ros/ros_node.py` knows nothing of it.
+Everything the sim tells the outside goes over UDP (removed 2026-11-03: the
+ROS node, the nav session and the image's ROS base). `driver_link: udp` and
+`locomotion: udp` cannot run together: both are the controller's command
+port, and the sim cannot be the controller and the controller's hardware at
+once.
 
 ## What a controller needs from the sim, and why
 
@@ -128,10 +132,10 @@ the same.
 
 ```bash
 # the RL path, as before
-python3 -m syncai_sim --no-ros --teleop
+python3 -m syncai_sim --teleop
 
 # the sim as a controller's hardware: nothing on the link, the motors in damping
-python3 -m syncai_sim --no-ros --teleop --profile /home/syncrobotic/sim/config/params/controller_profile.yaml
+python3 -m syncai_sim --teleop --profile /home/syncrobotic/sim/config/params/controller_profile.yaml
 
 # the link end to end with no controller process: the stand-in's PD stands the robot
 python3 /home/syncrobotic/sim/scripts/controller_bench.py \
