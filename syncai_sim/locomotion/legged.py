@@ -30,7 +30,7 @@ from dataclasses import dataclass
 import mujoco
 import numpy as np
 
-from syncai_sim.actuator.motors import JointCommand, Motors
+from syncai_sim.actuator.motors import DAMPING_KD, JointCommand, Motors
 from syncai_sim.driver.fake_driver import DAMPING, ESTOP, LIE_DOWN, LOCOMOTION, MPC
 from syncai_sim.entity.robot import Q_DEFAULT
 from syncai_sim.locomotion.policy import MultiPolicy, projected_gravity
@@ -39,7 +39,6 @@ from syncai_sim.locomotion.policy import MultiPolicy, projected_gravity
 THIGH_LEN, SHANK_LEN = 0.20, 0.21
 DOWN_HEIGHT = 0.12
 STAND_KP, STAND_KD = 70.0, 2.0  # the stand-up / lie-down states' swing-leg gains
-DAMPING_KD = 2.0
 POLICY_HZ = 50.0  # the controller's policy rate
 
 

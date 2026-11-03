@@ -41,6 +41,9 @@ from syncai_sim.entity.robot import (J60_MAX_SPEED, J60_PEAK_TORQUE, JOINTS, LEG
 
 # URDF <limit effort>; the motors' own clamp (motor_model ideal).
 TORQUE_LIMIT = np.array([24.0, 24.0, 36.0] * 4)
+# The controller's JointDamping state: kp 0, this kd. What the motors fall
+# back to when nothing commands them (the hardware link's watchdog).
+DAMPING_KD = 2.0
 
 
 @dataclass

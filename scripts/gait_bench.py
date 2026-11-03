@@ -43,7 +43,7 @@ import numpy as np
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
 
-from syncai_sim.config import PARAM_DEFAULTS, build_sim_config, read_ini  # noqa: E402
+from syncai_sim.config import PARAM_DEFAULTS, build_sim_config, load_profile, read_ini  # noqa: E402
 from syncai_sim.driver.fake_driver import LOCOMOTION  # noqa: E402
 
 STALL_SPEED = 0.05  # m/s: below this the body is standing still
@@ -193,6 +193,8 @@ def main(argv=None) -> int:
     ap.add_argument("--jitter-xy", type=float, default=0.03, help="m, uniform, per run")
     ap.add_argument("--jitter-yaw", type=float, default=2.0, help="deg, uniform, per run")
     ap.add_argument("--seed", type=int, default=0)
+    ap.add_argument("--profile", action="append", default=[], metavar="PARAMS.yaml",
+                    help="a params YAML applied over the defaults before -p (repeatable)")
     ap.add_argument("-p", dest="params", type=parse_override, action="append", default=[],
                     help="key:=value parameter override (sim_params.yaml names), repeatable")
     ap.add_argument("--name", default="base", help="label of this configuration")
@@ -201,6 +203,8 @@ def main(argv=None) -> int:
 
     params = dict(PARAM_DEFAULTS)
     params["points_per_scan"] = 100  # no scans here; a small model is a quick start
+    for path in a.profile:
+        params.update(load_profile(path))
     for key, value in a.params:
         if key not in params:
             raise SystemExit(f"-p {key}: not a parameter (see config/params/sim_params.yaml)")

@@ -101,7 +101,63 @@ def build_sim_config(ini: IniSettings, p: dict) -> SimConfig:
         foot_solref=tuple(p["foot_solref"]), foot_friction=tuple(p["foot_friction"]),
         actuator=p["actuator"], integrator=p["integrator"],
         cmd_delay_ms=p["cmd_delay_ms"], torque_bw_hz=p["torque_bw_hz"],
+        link_command_port=int(p["link_command_port"]), link_state_host=p["link_state_host"],
+        link_state_port=int(p["link_state_port"]), link_watchdog_ms=p["link_watchdog_ms"],
+        controller_command_port=int(p["controller_command_port"]),
+        max_catch_up_s=p["max_catch_up_s"],
     )
+
+
+def load_profile(path: str) -> dict:
+    """A params YAML (the `ros__parameters` of any node key, as sim_params.yaml
+    and config/params/controller_profile.yaml are written) as a dict of
+    overrides for PARAM_DEFAULTS, for the entry points that run without ROS:
+    `python3 -m syncai_sim --no-ros --profile`, scripts/gait_bench.py,
+    scripts/controller_bench.py. Under ROS the same file is a second
+    --params-file. A key PARAM_DEFAULTS does not have is an error, as it would
+    be for the node."""
+    import yaml
+
+    with open(path) as f:
+        doc = yaml.safe_load(f) or {}
+    found = None
+
+    def walk(node):
+        nonlocal found
+        if isinstance(node, dict):
+            if "ros__parameters" in node and isinstance(node["ros__parameters"], dict):
+                found = node["ros__parameters"]
+                return
+            for v in node.values():
+                walk(v)
+    walk(doc)
+    if found is None:
+        raise SystemExit(f"{path}: no ros__parameters block")
+    unknown = sorted(k for k in found if k not in PARAM_DEFAULTS)
+    if unknown:
+        raise SystemExit(f"{path}: not sim_node parameters: {', '.join(unknown)}")
+    return dict(found)
+
+
+def apply_overrides(params: dict, overrides: list[str]) -> dict:
+    """`key:=value` strings (ros2's -p spelling) onto `params`, each parsed
+    as YAML and typed like its default."""
+    import yaml
+
+    for item in overrides:
+        if ":=" not in item:
+            raise SystemExit(f"-p {item!r}: expected key:=value")
+        key, raw = item.split(":=", 1)
+        if key not in PARAM_DEFAULTS:
+            raise SystemExit(f"-p {key}: not a sim_node parameter (config.PARAM_DEFAULTS)")
+        value = yaml.safe_load(raw)
+        default = PARAM_DEFAULTS[key]
+        if isinstance(default, bool):
+            value = bool(value)
+        elif isinstance(default, float) and isinstance(value, int):
+            value = float(value)
+        params[key] = value
+    return params
 
 
 def world_options(p: dict):
@@ -147,4 +203,7 @@ PARAM_DEFAULTS: dict = {
     "physics_hz": 500.0, "pose_publish_hz": 50.0, "imu_publish_hz": 50.0,
     "status_publish_hz": 2.0,
     "props_json": "[]",
+    # locomotion udp (locomotion/hardware_link.py; config/params/controller_profile.yaml)
+    "link_command_port": 20001, "link_state_host": "127.0.0.1", "link_state_port": 30010,
+    "link_watchdog_ms": 100.0, "max_catch_up_s": 0.1,
 }

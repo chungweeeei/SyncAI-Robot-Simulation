@@ -9,16 +9,25 @@ are walked, MuJoCo steps, and a trunk pushed off its target by a prop is
 detected. `scan()` renders one lidar scan (`VoxelGrid.cast` for the site,
 `prop_rays` for the props) and `imu_sample()` one IMU reading.
 
-Two locomotions (`SimConfig.locomotion`):
+Three locomotions (`SimConfig.locomotion`):
 
     kinematic   the body is placed: the step above, a rigid statue on a mocap
                 weld, the step rule and the gates of kinematics.py
     policy      the body walks: the G23's own ONNX policies drive twelve PD
-                joints (legged.py, policy.py) on a patch of the voxel grid
-                (terrain_patch.py); MuJoCo decides where the body goes, and
-                `state` is read back from it, so status, the lidar and the
-                ROS side are the same in both. No step rule: whether a policy
-                climbs a flight is now its own business, which is the point.
+                joints (locomotion/legged.py, policy.py) on a patch of the
+                voxel grid (terrains/terrain_patch.py); MuJoCo decides where
+                the body goes, and `state` is read back from it, so status,
+                the lidar and the ROS side are the same in both. No step rule:
+                whether a policy climbs a flight is now its own business,
+                which is the point.
+    udp         the same walking body, its joints handed to a controller
+                process over the hardware link (locomotion/hardware_link.py):
+                every step sends the body's measurements and applies the
+                command that came back. The controller's RL or MPC decides;
+                the sim is its hardware. ROS-free: the panel's keys and AXES
+                go to the controller (driver/udp_driver.py), nothing else is
+                served, and a fall is only counted (the controller locks
+                itself).
 
 Frames handed out (4x4, metres):
 
@@ -45,7 +54,9 @@ import numpy as np
 from syncai_sim.actuator.motors import Motors
 from syncai_sim.scene import scene as sc
 from syncai_sim.driver.fake_driver import DAMPING, FakeDriver
+from syncai_sim.driver.udp_driver import UdpDriver
 from syncai_sim.locomotion.kinematics import BaseState, Event, KinematicsConfig, advance, place
+from syncai_sim.locomotion.hardware_link import HardwareLink, HardwareLinkConfig
 from syncai_sim.locomotion.legged import LeggedController
 from syncai_sim.sensor.lidar import LidarConfig, LidarModel, rays_along_motion
 from syncai_sim.sensor.proprioception import LidarImu, Sensors
@@ -78,7 +89,7 @@ class SimConfig:
     # but a sim that keeps walking after its controller died is a nuisance.
     cmd_timeout: float = 1.0
     seed: int = 0
-    locomotion: str = "kinematic"  # kinematic | policy
+    locomotion: str = "kinematic"  # kinematic | policy | udp
     ppo_policy: str = ""
     himloco_policy: str = ""
     policy0_runner: str = "ppo"  # policy.RUNNERS: which runner policy 0 / 1 walk
@@ -100,6 +111,18 @@ class SimConfig:
     integrator: str = "euler"  # euler | implicitfast (scene.py)
     cmd_delay_ms: float = 0.0
     torque_bw_hz: float = 0.0
+    # The hardware link (`udp`; locomotion/hardware_link.py says the protocol),
+    # and where the panel's motion keys and AXES go in that mode.
+    link_command_port: int = 20001
+    link_state_host: str = "127.0.0.1"
+    link_state_port: int = 30010
+    link_watchdog_ms: float = 100.0
+    controller_command_port: int = 50051
+    # A late loop catches up at most this much sim time in one burst (the
+    # ROS-free loop and the benches; ros_node has its own 0.1). The udp
+    # profile sets 8 ms so that a controller is never handed a burst of states
+    # while its command stays the same.
+    max_catch_up_s: float = 0.1
 
 
 @dataclass
@@ -147,9 +170,13 @@ class Simulator:
         self.log = log
         t0 = time.perf_counter()
         self.world: World = build_world(cfg.map_dir, cfg.cache_dir, cfg.world, log=log)
-        if cfg.locomotion not in ("kinematic", "policy"):
-            raise ValueError(f"locomotion {cfg.locomotion!r}: kinematic | policy")
-        self.legged = cfg.locomotion == "policy"
+        if cfg.locomotion not in ("kinematic", "policy", "udp"):
+            raise ValueError(f"locomotion {cfg.locomotion!r}: kinematic | policy | udp")
+        self.legged = cfg.locomotion != "kinematic"
+        if cfg.locomotion == "udp" and cfg.actuator != "qfrc":
+            raise ValueError("locomotion udp needs actuator qfrc: a controller's command carries a "
+                             "velocity target and a feed-forward torque, which a MuJoCo position "
+                             "actuator cannot apply (actuator/motors.py)")
         cache_root = os.path.dirname(os.path.abspath(cfg.cache_dir))
         self.robot: RobotModel = load_robot(RobotConfig(
             urdf_path=cfg.urdf_path, lidar_height=cfg.lidar_height, articulated=self.legged,
@@ -192,7 +219,8 @@ class Simulator:
         self.motors: Motors | None = None
         self.sensors: Sensors | None = None
         self.lidar_imu: LidarImu | None = None
-        self.legs: LeggedController | None = None
+        self.legs: LeggedController | None = None  # policy: the in-process RL backend
+        self.link: HardwareLink | None = None  # udp: the controller at the other end
         self.patch: TerrainPatch | None = None
         self.falls = 0
         self._fallen_from: int | None = None
@@ -201,15 +229,20 @@ class Simulator:
             self.motors = Motors(self.model, self.data, motor_model=cfg.motor_model,
                                  actuator=cfg.actuator, cmd_delay_s=cfg.cmd_delay_ms / 1000.0,
                                  torque_bw_hz=cfg.torque_bw_hz)
-            self.legs = LeggedController(self.model, self.data, self.info.base_body,
-                                         load_policies(cfg.ppo_policy, cfg.himloco_policy, log=log,
-                                                       policy0_runner=cfg.policy0_runner,
-                                                       policy1_runner=cfg.policy1_runner),
-                                         self.motors, log=log)
             self.patch = TerrainPatch(self.world.grid, cfg.terrain, self.surface,
                                       None if stairs is None else stairs.regions)
             self.sensors = Sensors(self.model, self.data, self.info, self.motors)
             self.lidar_imu = LidarImu(self.model, self.data)
+            if cfg.locomotion == "policy":
+                self.legs = LeggedController(self.model, self.data, self.info.base_body,
+                                             load_policies(cfg.ppo_policy, cfg.himloco_policy, log=log,
+                                                           policy0_runner=cfg.policy0_runner,
+                                                           policy1_runner=cfg.policy1_runner),
+                                             self.motors, log=log)
+            else:
+                self.link = HardwareLink(HardwareLinkConfig(
+                    command_port=cfg.link_command_port, state_host=cfg.link_state_host,
+                    state_port=cfg.link_state_port, watchdog_s=cfg.link_watchdog_ms / 1000.0), log=log)
         self.grid = self.world.grid
         self.lidar = LidarModel(cfg.lidar, cfg.seed)
         # Where the lidar was at each physics step of the last scan window
@@ -218,8 +251,11 @@ class Simulator:
         self._lidar_poses = np.tile(np.eye(4), (self._steps_per_scan, 1, 1))
         self._lidar_i = 0
         self.last_scan: np.ndarray | None = None  # the cloud `scan()` last returned
-        self.driver = FakeDriver(switch_delay=cfg.switch_delay,
-                                 motion_state=cfg.initial_motion_state, policy=cfg.initial_policy)
+        if self.link is not None:
+            self.driver = UdpDriver(command_port=cfg.controller_command_port, log=log)
+        else:
+            self.driver = FakeDriver(switch_delay=cfg.switch_delay,
+                                     motion_state=cfg.initial_motion_state, policy=cfg.initial_policy)
         self.state = BaseState()
         self.cmd = np.zeros(3)
         self.cmd_time = -math.inf
@@ -281,7 +317,10 @@ class Simulator:
         s = self.state
         pos = np.array([s.x, s.y, self._floor_under(s.x, s.y, s.z_ground) + self.robot.h_stand + 0.005])
         self.motors.reset()  # joints at the default pose, at rest, nothing queued
-        self.legs.reset()
+        if self.legs is not None:
+            self.legs.reset()
+        if self.link is not None:
+            self.link.reset()  # the controller's last command was for the old pose
         sc.set_base_pose(self.model, self.data, self.info, pos, yaw_pitch_quat(s.yaw, 0.0))
         sc.place_terrain(self.data, self.info, self.patch.boxes_around(pos))
         mujoco.mj_forward(self.model, self.data)
@@ -328,6 +367,14 @@ class Simulator:
     def set_cmd(self, vx: float, vy: float, wz: float, now: float | None = None) -> None:
         self.cmd[:] = (vx, vy, wz)
         self.cmd_time = time.monotonic() if now is None else now
+        if self.link is not None:  # the controller walks, not the sim: AXES to it
+            self.driver.send_axes(vx, vy, wz)
+
+    def close(self) -> None:
+        """The sockets of the udp locomotion (none otherwise)."""
+        if self.link is not None:
+            self.link.close()
+            self.driver.close()
 
     # -- one physics tick --------------------------------------------------------
     def step(self) -> None:
@@ -370,11 +417,18 @@ class Simulator:
         base = self.data.xpos[self.info.base_body]
         if self.patch.due(base):
             sc.place_terrain(self.data, self.info, self.patch.boxes_around(base))
-        self.motors.apply(self.legs.step(cmd, self.driver.policy, self.driver.motion_state))
+        if self.legs is not None:
+            joints = self.legs.step(cmd, self.driver.policy, self.driver.motion_state)
+        else:
+            joints = self.link.poll(self.sim_time)
+        self.motors.apply(joints)
         for m in self.movers:
             self._walk_mover(m, dt)
         mujoco.mj_step(self.model, self.data)
         self.sim_time += dt
+        if self.link is not None:  # the state this step produced, to the controller
+            self.sensors.read(self.link.time(self.sim_time))
+            self.link.send(self.sensors)
         self._record_lidar_pose()
         self._read_state(cmd)
         for name, (bid, pos) in self._free_props.items():
@@ -412,11 +466,16 @@ class Simulator:
         if self._fallen_from is None and self.sensors.upset():
             self.falls += 1
             self._fallen_from = self.driver.motion_state
-            self.driver.motion_state = DAMPING
             roll, pitch = self.sensors.roll_pitch()
-            self.log(f"[sim] FELL at ({s.x:.2f}, {s.y:.2f}) roll {math.degrees(roll):.0f} "
-                     f"pitch {math.degrees(pitch):.0f} deg; driver -> Damping "
-                     f"(teleport / initialpose to stand it up again)")
+            if self.link is not None:  # the controller's own posture check locks it
+                self.log(f"[sim] FELL at ({s.x:.2f}, {s.y:.2f}) roll {math.degrees(roll):.0f} "
+                         f"pitch {math.degrees(pitch):.0f} deg (the controller locks itself; "
+                         f"teleport, then RESET_SAFETY and MODE Z to stand it up again)")
+            else:
+                self.driver.motion_state = DAMPING
+                self.log(f"[sim] FELL at ({s.x:.2f}, {s.y:.2f}) roll {math.degrees(roll):.0f} "
+                         f"pitch {math.degrees(pitch):.0f} deg; driver -> Damping "
+                         f"(teleport / initialpose to stand it up again)")
 
     def _walk_mover(self, m: Mover, dt: float) -> None:
         if m.waypoints.shape[0] < 2:
@@ -554,6 +613,7 @@ class Simulator:
             "prop_collisions": self.prop_collisions,
             "locomotion": self.cfg.locomotion, "falls": self.falls,
             "motion_state": self.driver.motion_state, "policy": self.driver.policy,
+            **({"link": self.link.stats()} if self.link is not None else {}),
             "cmd_age": round(time.monotonic() - self.cmd_time, 2)
             if self.cmd_time > -math.inf else None,
         }
