@@ -54,6 +54,7 @@ config/params/sim_params.yaml      every sim_node parameter, with the stack valu
 config/sessions/start_sim.yaml     the session spec (start_nav.yaml with the hardware replaced)
 launch/rsp.launch.py               robot_state_publisher alone (bringup.launch.py would start the lidar)
 scripts/run_session.sh             runs a spec as process groups with logs, no byobu (the CI smoke test's loop)
+scripts/sim_entry.sh               the container's command: the sim + its viewer at start (SIM_AUTOSTART, SIM_ARGS), then stays up
 scripts/nav_test.py                sends a NavigateToGoal and reports collisions / result
 syncai_sim/                        the Python package (python3 -m syncai_sim): one subpackage per layer (docs/architecture.md)
   __main__.py, config.py             the CLI; the params (PARAM_DEFAULTS is every sim_node parameter) and the INI
@@ -121,9 +122,20 @@ have an `octomap.bt` (`map/<name>/`, see the workspace's `syncai_mapping`).
 ```bash
 cp .env.example .env            # ROBOT_WS = path to the workspace checkout (default: ../SyncAI-Robot-Workspace)
 docker compose build            # once; FROM syncai-robot-base:latest, which the workspace's compose builds
-docker compose up -d
+docker compose up -d            # the sim + its browser viewer start with it: http://localhost:8080
+docker compose logs -f sim      # the sim's output
 docker compose exec sim bash    # cwd is the workspace root, like every pane on the robot
 ```
+
+**What starts with the container** (`scripts/sim_entry.sh`, two `.env`
+knobs), always without ROS: nothing is sourced and no DDS participant is
+made. By default `python3 -m syncai_sim --no-ros --teleop`: the sim walking
+on its own policies, driven from the viewer's panel. `SIM_ARGS` replaces the
+arguments after `--no-ros` (the controller's hardware: add `--profile
+/home/syncrobotic/sim/config/params/controller_profile.yaml`); `SIM_AUTOSTART=0`
+starts nothing, which is what `scripts/run_session.sh` needs, since its own
+sim pane would otherwise clash with this one on the viewer's port. The
+container stays up whatever the sim does.
 
 **Isolated or integrated.** By default the container is isolated: a bridge
 network, ROS_DOMAIN_ID 42, this repo's `cyclonedds.xml` and `sim01.ini`. To
@@ -143,7 +155,9 @@ single-file bind mount: edit it in place, do not rename over it.
 ## Running
 
 Inside the container (every command below is run there, from the workspace
-root, after sourcing the ROS environment):
+root, after sourcing the ROS environment). The session starts a sim of its
+own: bring the container up with `SIM_AUTOSTART=0` first
+(`SIM_AUTOSTART=0 docker compose up -d`).
 
 ```bash
 source /opt/ros/humble/setup.bash && source /opt/ros2_rust_underlay/install/setup.bash && source install/setup.bash

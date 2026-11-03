@@ -4,7 +4,8 @@
 #
 #   cp .env.example .env            # set ROBOT_WS to your workspace checkout
 #   docker compose build
-#   docker compose up -d
+#   docker compose up -d            # starts the sim + its browser viewer (http://localhost:8080)
+#   docker compose logs -f sim      # the sim's output
 #   docker compose exec sim bash    # then see README "Running"
 #
 # Why one container and not a sim container beside robot01: the sim replaces
@@ -44,7 +45,7 @@ services:
     working_dir: /home/syncrobotic/robot_ws
     stdin_open: true
     tty: true
-    # PID 1 is `sleep infinity`, which never reaps: a node whose `ros2 launch`
+    # PID 1 is the entry script (then `sleep infinity`), which never reaps: a node whose `ros2 launch`
     # parent is stopped first (lio_bridge, every session stop) stays a zombie
     # until the container goes. Docker's init reaps them.
     init: true
@@ -78,6 +79,11 @@ services:
       RCUTILS_COLORIZED_OUTPUT: "0"
       PYTHONUNBUFFERED: "1"
       ROS_LOG_DIR: /tmp/ros_log
+      # What the container starts (scripts/sim_entry.sh): the sim and its
+      # browser viewer, unless SIM_AUTOSTART is 0 (set it for
+      # scripts/run_session.sh, which starts a sim of its own).
+      SIM_AUTOSTART: "${SIM_AUTOSTART:-1}"
+      SIM_ARGS: "${SIM_ARGS:---teleop}"  # appended to --no-ros: no ROS at start
     volumes:
       - ${ROBOT_WS:-../SyncAI-Robot-Workspace}:/home/syncrobotic/robot_ws
       - .:/home/syncrobotic/sim
@@ -88,4 +94,7 @@ services:
       - ${SIM_INSTANCE_INI:-./config/instances/sim01.ini}:/home/syncrobotic/robot_ws/config/system.ini
     tmpfs:
       - /tmp/ros_log:size=134217728,mode=1777
-    command: ["sleep", "infinity"]
+    # The sim and its viewer at start (http://localhost:8080), then the
+    # container stays up for `docker compose exec sim bash` whatever the sim
+    # does; its output is `docker compose logs -f sim`.
+    command: ["/home/syncrobotic/sim/scripts/sim_entry.sh"]

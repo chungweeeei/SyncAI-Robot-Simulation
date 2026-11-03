@@ -102,7 +102,7 @@ Paths are under `syncai_sim/`; `docs/architecture.md` draws the layers.
 ## Running and testing (inside the container)
 
 ```bash
-docker compose up -d && docker compose exec sim bash
+docker compose up -d && docker compose exec sim bash   # up starts the sim + viewer (scripts/sim_entry.sh; SIM_AUTOSTART=0 before the session)
 source /opt/ros/humble/setup.bash && source /opt/ros2_rust_underlay/install/setup.bash && source install/setup.bash
 /home/syncrobotic/sim/scripts/run_session.sh         # logs: log/stack/sim01/sim/<pane>/current; the picture: http://localhost:8080
 python3 /home/syncrobotic/sim/scripts/nav_test.py --goal 3 0 0
