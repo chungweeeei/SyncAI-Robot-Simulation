@@ -1,6 +1,6 @@
 # policy/ — the G23's ONNX policies (not committed)
 
-The walking sim (`locomotion: policy`, `syncai_sim/policy.py`) loads two files
+The walking sim (`locomotion: policy`, `syncai_sim/locomotion/policy.py`) loads two files
 from here, the ones `g2_deploy_rs`'s `main.rs` loads by default:
 
 | file | set_policy_mode | sha256 |

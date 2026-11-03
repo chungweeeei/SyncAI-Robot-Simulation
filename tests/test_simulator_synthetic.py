@@ -11,8 +11,8 @@ import subprocess
 import numpy as np
 import pytest
 
-from syncai_sim.kinematics import KinematicsConfig
-from syncai_sim.simulator import SimConfig, Simulator
+from syncai_sim.locomotion.kinematics import KinematicsConfig
+from syncai_sim.envs.simulator import SimConfig, Simulator
 
 WS = os.environ.get("ROBOT_WS_DIR", "/home/syncrobotic/robot_ws")
 URDF = os.path.join(WS, "src", "syncai_bringup", "description", "G23.urdf")
@@ -110,13 +110,13 @@ def test_walking_body_knobs_compile_into_the_model(stairs_map, tmp_path):
     implicit integrator: each lands in the compiled model and the robot
     still stands and walks on the flat."""
     import mujoco
-    from syncai_sim.robot import J60_ARMATURE, J60_FRICTIONLOSS
+    from syncai_sim.entity.robot import J60_ARMATURE, J60_FRICTIONLOSS
     sim = make_walking_sim(stairs_map, tmp_path, motor_model="j60", trunk_inertial="vendor",
                            foot_solref=(0.005, 1.0), foot_friction=(1.0, 0.01, 0.01),
                            actuator="position", integrator="implicitfast", cmd_delay_ms=4.0)
     m = sim.model
     assert m.opt.integrator == mujoco.mjtIntegrator.mjINT_IMPLICITFAST
-    assert m.nu == 12 and sim.legs.act is not None
+    assert m.nu == 12 and sim.motors.act is not None
     assert math.isclose(m.body_mass[sim.info.base_body], 9.368, abs_tol=1e-6)
     knee = m.joint("FL_Knee_joint")
     assert math.isclose(m.dof_armature[knee.dofadr[0]], J60_ARMATURE[2], rel_tol=1e-6)
@@ -134,9 +134,50 @@ def test_walking_body_knobs_compile_into_the_model(stairs_map, tmp_path):
     assert st["falls"] == 0, st
     # The actuators carry it: torque on the joints, the trunk up on its legs, and
     # it went forward (how fast is scripts/gait_bench.py's business).
-    assert np.abs(sim.legs.tau()).max() > 1.0
+    assert np.abs(sim.motors.tau()).max() > 1.0
     assert sim.data.xpos[sim.info.base_body][2] - sim.state.z_ground > 0.2, st
     assert sim.state.x > first - 3.0 + 0.2, st
+
+
+def test_udp_locomotion_stands_through_the_hardware_link(stairs_map, tmp_path):
+    """The joints handed to a controller process: here the stand-in that
+    answers every state with a PD to the default pose. No ONNX file is
+    needed, every physics step sends one state, the body stands."""
+    import socket
+
+    from syncai_sim.locomotion.hardware_link import StandInController
+    # Free ports, so a controller or another test on 20001 / 30010 is not in the way.
+    probes = [socket.socket(socket.AF_INET, socket.SOCK_DGRAM) for _ in range(2)]
+    for s in probes:
+        s.bind(("127.0.0.1", 0))
+    cmd_port, state_port = (s.getsockname()[1] for s in probes)
+    for s in probes:
+        s.close()
+    cfg = SimConfig(map_dir=stairs_map, cache_dir=str(tmp_path / "cache"), urdf_path=URDF,
+                    locomotion="udp", physics_hz=1000.0, link_command_port=cmd_port,
+                    link_state_port=state_port, max_catch_up_s=0.008)
+    cfg.lidar.points_per_scan = 2000
+    with pytest.raises(ValueError, match="qfrc"):
+        Simulator(SimConfig(map_dir=stairs_map, cache_dir=str(tmp_path / "cache"), urdf_path=URDF,
+                            locomotion="udp", actuator="position"), log=lambda *a: None)
+    sim = Simulator(cfg, log=lambda *a: None)
+    assert sim.legs is None and sim.link is not None and sim.model.opt.timestep == 0.001
+    first, y, low = foot_of_flight(sim)
+    sim.spawn(first - 3.0, y, 0.0, low)
+    ctrl = StandInController(state_port, cmd_port)
+    ctrl.start()
+    try:
+        drive(sim, 0.0, 2.0)
+    finally:
+        ctrl.stop()
+        sim.close()
+    st = sim.status()
+    assert st["falls"] == 0, st
+    assert st["link"]["states"] == 2000 and st["link"]["commands"] > 1000, st
+    assert st["link"]["watchdog_trips"] == 0
+    assert ctrl.last_t > sim.link.epoch + 1.9 and ctrl.last_state[51:55].sum() >= 3  # feet down
+    assert sim.data.xpos[sim.info.base_body][2] - sim.state.z_ground > 0.25, st
+    assert np.abs(sim.motors.q() - sim.motors.last.q_des).max() < 0.15  # held at the pose
 
 
 def foot_of_flight(sim):

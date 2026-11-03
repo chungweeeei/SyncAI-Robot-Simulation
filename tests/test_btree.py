@@ -8,7 +8,7 @@ Encoding reminder (btree.py): per inner node two bytes, child i -> bits (2i,
 import numpy as np
 import pytest
 
-from syncai_sim.btree import TREE_MAX_VAL, cubes_to_voxels, read_occupied_leaves
+from syncai_sim.world.btree import TREE_MAX_VAL, cubes_to_voxels, read_occupied_leaves
 
 
 def _node(children: dict[int, str]) -> bytes:

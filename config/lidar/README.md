@@ -1,7 +1,7 @@
 # config/lidar — the MID360's scan pattern, from the robot
 
 `mid360_pattern.npz` is the bank of directions the sim's lidar fires when
-`lidar_pattern: mid360` (the default; `syncai_sim/lidar.py`): twenty
+`lidar_pattern: mid360` (the default; `syncai_sim/sensor/lidar.py`): twenty
 consecutive frames of the real Livox MID360 on the G23, each sample with the
 time it fired, so the sim's scans have the sensor's rosette — four lasers
 sweeping 1.2° a sample, dense along the sweep, sparse across it, never the
@@ -17,7 +17,7 @@ python3 scripts/lidar_pattern.py --bag /home/syncrobotic/robot_ws/record/dp \
     --frames 20 --start 100 --out config/lidar/mid360_pattern.npz
 ```
 
-`syncai_sim/livox_bag.py` reads the rosbag2 sqlite files directly (no ROS),
+`syncai_sim/sensor/livox_bag.py` reads the rosbag2 sqlite files directly (no ROS),
 keeps the samples that returned and fills no-return gaps of up to three
 samples along a laser's sweep (the recording had 19.5 % no-return samples, in
 runs of 2–3; what the lidar did not return is not a direction the sim should

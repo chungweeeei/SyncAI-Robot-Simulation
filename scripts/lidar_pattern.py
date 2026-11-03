@@ -21,7 +21,7 @@ import sys
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
 
-from syncai_sim.livox_bag import build_pattern, iter_frames, save_pattern  # noqa: E402
+from syncai_sim.sensor.livox_bag import build_pattern, iter_frames, save_pattern  # noqa: E402
 
 
 def main(argv=None) -> int:

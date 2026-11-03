@@ -1,6 +1,6 @@
 import numpy as np
 
-from syncai_sim.greedy_mesh import boxes_volume, merge_voxels
+from syncai_sim.world.greedy_mesh import boxes_volume, merge_voxels
 
 
 def _grid(x, y, z):

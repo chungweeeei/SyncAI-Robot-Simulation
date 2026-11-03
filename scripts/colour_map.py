@@ -28,7 +28,7 @@ import numpy as np
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
 
-from syncai_sim import bag_camera, voxel_colour  # noqa: E402
+from syncai_sim.visuals import bag_camera, voxel_colour
 
 
 def preview(table: voxel_colour.VoxelColour, path: str) -> None:
@@ -66,7 +66,7 @@ def main(argv=None) -> int:
     a = ap.parse_args(argv)
 
     from syncai_sim.config import PARAM_DEFAULTS, world_options
-    from syncai_sim.world import build_world, default_cache_dir
+    from syncai_sim.world.build import build_world, default_cache_dir
 
     cache = a.cache or default_cache_dir(a.map)
     world = build_world(a.map, cache, world_options(PARAM_DEFAULTS))

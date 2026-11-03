@@ -6,7 +6,7 @@ import struct
 
 import numpy as np
 
-from syncai_sim.livox_bag import (LivoxFrame, build_pattern, directions_of, fill_gaps,
+from syncai_sim.sensor.livox_bag import (LivoxFrame, build_pattern, directions_of, fill_gaps,
                                   parse_custom_msg, save_pattern)
 
 PERIOD_NS = 4947

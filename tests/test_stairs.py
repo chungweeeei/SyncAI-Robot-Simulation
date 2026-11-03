@@ -1,7 +1,7 @@
 import numpy as np
 
-from syncai_sim import stairs
-from syncai_sim.surface_heights import FlightFit
+from syncai_sim.terrains import stairs
+from syncai_sim.terrains.surface_heights import FlightFit
 
 RES = 0.1
 ORIGIN = np.array([0.0, 0.0, -0.1])  # voxel z 0 is -0.1 .. 0: the floor's top at 0

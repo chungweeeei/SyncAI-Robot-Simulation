@@ -9,8 +9,8 @@ import mujoco
 import numpy as np
 import pytest
 
-from syncai_sim.scene import SceneInfo
-from syncai_sim.web_view import boxes_mesh, mesh_of
+from syncai_sim.scene.scene import SceneInfo
+from syncai_sim.viewer.web_view import boxes_mesh, mesh_of
 
 SCENE = """
 <mujoco>
@@ -96,7 +96,7 @@ def test_boxes_mesh_and_mesh_of():
 
 def test_web_view_serves_the_scene_without_a_browser():
     pytest.importorskip("viser")
-    from syncai_sim.web_view import WebView
+    from syncai_sim.viewer.web_view import WebView
     sim = FakeSim()
     port = 18200 + os.getpid() % 500
     view = WebView(sim, teleop=None, port=port, log=lambda *a: None, site_in_background=False)

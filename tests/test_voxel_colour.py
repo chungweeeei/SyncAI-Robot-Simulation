@@ -8,11 +8,11 @@ import io
 import numpy as np
 import pytest
 
-from syncai_sim import bag_camera, voxel_colour
-from syncai_sim.btree import TREE_MAX_VAL
-from syncai_sim.voxel_colour import (Builder, Camera, PoseTrack, build_from_bag, colour_points,
+from syncai_sim.visuals import bag_camera, voxel_colour
+from syncai_sim.world.btree import TREE_MAX_VAL
+from syncai_sim.visuals.voxel_colour import (Builder, Camera, PoseTrack, build_from_bag, colour_points,
                                      load, load_for, read_odom, save)
-from syncai_sim.voxel_grid import VoxelGrid
+from syncai_sim.world.voxel_grid import VoxelGrid
 from tests.test_bag_camera import Cdr, image_blob, make_bag, tf_blob
 from tests.test_livox_bag import custom_msg_blob
 
@@ -197,7 +197,7 @@ def test_build_from_bag_colours_the_floor_the_camera_saw(tmp_path):
 
 
 def test_shade_photo_known_and_unknown():
-    from syncai_sim import visual
+    from syncai_sim.visuals import visual
 
     kind = np.array([visual.KIND_FLOOR, visual.KIND_WALL, visual.KIND_UNDER, visual.KIND_FLOOR])
     photo = np.array([[200, 100, 50], [200, 100, 50], [200, 100, 50], [np.nan] * 3])

@@ -1,0 +1,619 @@
+"""The simulator proper, with no ROS in it: world + robot + physics + sensors.
+
+`ros/ros_node.py` wraps this in a node and `__main__.py` drives it; this module
+can also be driven by hand (`--no-ros --teleop`) to check a map or the kinematics
+without the stack. One `step()` is one physics tick (`physics_hz`, 500 by
+default, the params' value): the fake driver's pending switches are applied, the kinematic base
+is advanced (`kinematics.advance`), the mocap handle is placed, the prop movers
+are walked, MuJoCo steps, and a trunk pushed off its target by a prop is
+detected. `scan()` renders one lidar scan (`VoxelGrid.cast` for the site,
+`prop_rays` for the props) and `imu_sample()` one IMU reading.
+
+Three locomotions (`SimConfig.locomotion`):
+
+    kinematic   the body is placed: the step above, a rigid statue on a mocap
+                weld, the step rule and the gates of kinematics.py
+    policy      the body walks: the G23's own ONNX policies drive twelve PD
+                joints (locomotion/legged.py, policy.py) on a patch of the
+                voxel grid (terrains/terrain_patch.py); MuJoCo decides where
+                the body goes, and `state` is read back from it, so status,
+                the lidar and the ROS side are the same in both. No step rule:
+                whether a policy climbs a flight is now its own business,
+                which is the point.
+    udp         the same walking body, its joints handed to a controller
+                process over the hardware link (locomotion/hardware_link.py):
+                every step sends the body's measurements and applies the
+                command that came back. The controller's RL or MPC decides;
+                the sim is its hardware. ROS-free: the panel's keys and AXES
+                go to the controller (driver/udp_driver.py), nothing else is
+                served, and a fall is only counted (the controller locks
+                itself).
+
+Frames handed out (4x4, metres):
+
+    T_map_base   base_link in the map (MuJoCo's world IS the map frame)
+    T_map_imu    lidar_top_imu = pointlio_body in the map
+    T_map_odom   where the sim says Point-LIO's odom frame sits — gravity
+                 aligned at the spawn pose, so lio_odom starts at the identity
+                 like the real one, and moved on every teleport so that the
+                 odom chain stays continuous while map -> odom jumps, which is
+                 what the real localizer does on a relocalize (lio_bridge's
+                 own comment says so).
+"""
+
+from __future__ import annotations
+
+import math
+import os
+import time
+from dataclasses import dataclass, field
+
+import mujoco
+import numpy as np
+
+from syncai_sim.actuator.motors import Motors
+from syncai_sim.scene import scene as sc
+from syncai_sim.driver.fake_driver import DAMPING, FakeDriver
+from syncai_sim.driver.udp_driver import UdpDriver
+from syncai_sim.locomotion.kinematics import BaseState, Event, KinematicsConfig, advance, place
+from syncai_sim.locomotion.hardware_link import HardwareLink, HardwareLinkConfig
+from syncai_sim.locomotion.legged import LeggedController
+from syncai_sim.sensor.lidar import LidarConfig, LidarModel, rays_along_motion
+from syncai_sim.sensor.proprioception import LidarImu, Sensors
+from syncai_sim.locomotion.policy import load_policies
+from syncai_sim.sensor.prop_rays import ray_aabb, ray_vertical_cylinder
+from syncai_sim.entity.robot import JOINTS, LEGS, RobotConfig, RobotModel, load_robot
+from syncai_sim.terrains.terrain_patch import TerrainPatch, TerrainPatchConfig
+from syncai_sim.world.build import World, WorldOptions, build_world
+
+# g2_deploy_rs src/ros_bridge.rs: what the controller accepts from cmd_vel
+# before the policy's own +-1 clip.
+CMD_LIMITS = ((-0.6, 0.8), (-0.4, 0.4), (-2.5, 2.5))
+
+
+@dataclass
+class SimConfig:
+    map_dir: str
+    cache_dir: str
+    urdf_path: str
+    world: WorldOptions = field(default_factory=WorldOptions)
+    kin: KinematicsConfig = field(default_factory=KinematicsConfig)
+    lidar: LidarConfig = field(default_factory=LidarConfig)
+    lidar_height: float = 0.481
+    physics_hz: float = 500.0  # config.PARAM_DEFAULTS has the same; 2 ms steps
+    switch_delay: float = 1.0
+    initial_motion_state: int = 1
+    initial_policy: int = 0
+    props: list[sc.PropSpec] = field(default_factory=list)
+    # A cmd_vel older than this stops the base. The real driver has no watchdog,
+    # but a sim that keeps walking after its controller died is a nuisance.
+    cmd_timeout: float = 1.0
+    seed: int = 0
+    locomotion: str = "kinematic"  # kinematic | policy | udp
+    ppo_policy: str = ""
+    himloco_policy: str = ""
+    policy0_runner: str = "ppo"  # policy.RUNNERS: which runner policy 0 / 1 walk
+    policy1_runner: str = "himloco"
+    terrain: TerrainPatchConfig = field(default_factory=TerrainPatchConfig)
+    visual_mesh: str = "voxels"  # the browser's site: voxels | pointcloud | tsdf (site_tiles.py)
+    visual_look: str = "ramp"  # its look: ramp | photo (visual.py; photo needs config/colour/<map>.npz)
+    # Walking only: fitted = the fitted flights as fixed boxes (stairs.py); voxels = the
+    # patch's boxes there too, risers on the 0.1 m column grid (the sim before 2026-10-25)
+    stairs: str = "fitted"
+    # Walking only, the body's physics (robot.py RobotConfig and legged.py say
+    # what each is; the defaults are the sim before 2026-10-26, the A/B
+    # against the robot is scripts/gait_bench.py):
+    motor_model: str = "ideal"  # ideal | j60
+    trunk_inertial: str = "urdf"  # urdf | vendor
+    foot_solref: tuple[float, float] = (0.02, 1.0)
+    foot_friction: tuple[float, float, float] = (1.0, 0.005, 0.0001)
+    actuator: str = "qfrc"  # qfrc | position
+    integrator: str = "euler"  # euler | implicitfast (scene.py)
+    cmd_delay_ms: float = 0.0
+    torque_bw_hz: float = 0.0
+    # The hardware link (`udp`; locomotion/hardware_link.py says the protocol),
+    # and where the panel's motion keys and AXES go in that mode.
+    link_command_port: int = 20001
+    link_state_host: str = "127.0.0.1"
+    link_state_port: int = 30010
+    link_watchdog_ms: float = 100.0
+    controller_command_port: int = 50051
+    # A late loop catches up at most this much sim time in one burst (the
+    # ROS-free loop and the benches; ros_node has its own 0.1). The udp
+    # profile sets 8 ms so that a controller is never handed a burst of states
+    # while its command stays the same.
+    max_catch_up_s: float = 0.1
+
+
+@dataclass
+class Mover:
+    name: str
+    mocap_id: int
+    waypoints: np.ndarray  # (W, 2)
+    speed: float
+    half_height: float
+    seg: int = 0
+    forward: bool = True
+    pos: np.ndarray = field(default_factory=lambda: np.zeros(2))
+    z: float = 0.0
+
+
+def planar(T: np.ndarray) -> np.ndarray:
+    """The yaw-and-translation part of a 4x4 pose (gravity-aligned frame)."""
+    yaw = math.atan2(T[1, 0], T[0, 0])
+    P = np.eye(4)
+    c, s = math.cos(yaw), math.sin(yaw)
+    P[:2, :2] = [[c, -s], [s, c]]
+    P[:3, 3] = T[:3, 3]
+    return P
+
+
+def pose_matrix(pos, R) -> np.ndarray:
+    T = np.eye(4)
+    T[:3, :3] = R
+    T[:3, 3] = pos
+    return T
+
+
+def yaw_pitch_quat(yaw: float, pitch: float) -> np.ndarray:
+    """wxyz quaternion for a yaw about z then a pitch about the body y."""
+    qy = np.array([math.cos(yaw / 2), 0.0, 0.0, math.sin(yaw / 2)])
+    qp = np.array([math.cos(pitch / 2), 0.0, math.sin(pitch / 2), 0.0])
+    out = np.empty(4)
+    mujoco.mju_mulQuat(out, qy, qp)
+    return out
+
+
+class Simulator:
+    def __init__(self, cfg: SimConfig, log=print):
+        self.cfg = cfg
+        self.log = log
+        t0 = time.perf_counter()
+        self.world: World = build_world(cfg.map_dir, cfg.cache_dir, cfg.world, log=log)
+        if cfg.locomotion not in ("kinematic", "policy", "udp"):
+            raise ValueError(f"locomotion {cfg.locomotion!r}: kinematic | policy | udp")
+        self.legged = cfg.locomotion != "kinematic"
+        if cfg.locomotion == "udp" and cfg.actuator != "qfrc":
+            raise ValueError("locomotion udp needs actuator qfrc: a controller's command carries a "
+                             "velocity target and a feed-forward torque, which a MuJoCo position "
+                             "actuator cannot apply (actuator/motors.py)")
+        cache_root = os.path.dirname(os.path.abspath(cfg.cache_dir))
+        self.robot: RobotModel = load_robot(RobotConfig(
+            urdf_path=cfg.urdf_path, lidar_height=cfg.lidar_height, articulated=self.legged,
+            mesh_cache_dir=os.path.join(cache_root, "robot"),
+            motor_model=cfg.motor_model, trunk_inertial=cfg.trunk_inertial,
+            foot_solref=tuple(float(v) for v in cfg.foot_solref),
+            foot_friction=tuple(float(v) for v in cfg.foot_friction),
+            actuator=cfg.actuator), log=log)
+        if cfg.visual_mesh not in ("voxels", "pointcloud", "tsdf"):
+            raise ValueError(f"visual_mesh {cfg.visual_mesh!r}: voxels | pointcloud | tsdf")
+        if cfg.visual_look not in ("ramp", "photo"):
+            raise ValueError(f"visual_look {cfg.visual_look!r}: ramp | photo")
+        capacity = cfg.terrain.capacity if self.legged else 0
+        timestep = 1.0 / cfg.physics_hz
+        if cfg.stairs not in ("fitted", "voxels"):
+            raise ValueError(f"stairs {cfg.stairs!r}: fitted | voxels")
+        # Walking: the feet's surface, and the flights it fitted, before the
+        # scene, which builds those as fixed boxes (stairs.py).
+        self.surface = None
+        stairs = None
+        if self.legged:
+            from syncai_sim.terrains.surface_heights import load_or_build as load_surface
+            self.surface = load_surface(cfg.map_dir, cfg.cache_dir, self.world, log=log)
+            if cfg.stairs == "fitted" and self.surface is not None and self.surface.flights:
+                from syncai_sim.terrains import stairs as st
+                g = self.world.grid
+                stairs = st.build(self.surface.flights, g.grid, g.origin_m, g.res, log=log)
+        boxes = None if stairs is None else stairs.boxes
+        solref = tuple(float(v) for v in cfg.foot_solref)
+        key = sc.scene_key(self.world, self.robot, cfg.props, timestep, capacity, stairs=boxes,
+                           integrator=cfg.integrator, terrain_solref=solref)
+        self.model = sc.cached_model(
+            cfg.cache_dir, key,
+            lambda: sc.build_scene(self.world, self.robot, cfg.props, timestep=timestep,
+                                   terrain_capacity=capacity, stairs=boxes,
+                                   integrator=cfg.integrator, terrain_solref=solref)[0], log=log)
+        self.info = sc.scene_info(self.model, self.robot, cfg.props, capacity,
+                                  list(self.world.storey_bounds))
+        self.data = mujoco.MjData(self.model)
+        self.motors: Motors | None = None
+        self.sensors: Sensors | None = None
+        self.lidar_imu: LidarImu | None = None
+        self.legs: LeggedController | None = None  # policy: the in-process RL backend
+        self.link: HardwareLink | None = None  # udp: the controller at the other end
+        self.patch: TerrainPatch | None = None
+        self.falls = 0
+        self._fallen_from: int | None = None
+        self._last_world_hit = -math.inf
+        if self.legged:
+            self.motors = Motors(self.model, self.data, motor_model=cfg.motor_model,
+                                 actuator=cfg.actuator, cmd_delay_s=cfg.cmd_delay_ms / 1000.0,
+                                 torque_bw_hz=cfg.torque_bw_hz)
+            self.patch = TerrainPatch(self.world.grid, cfg.terrain, self.surface,
+                                      None if stairs is None else stairs.regions)
+            self.sensors = Sensors(self.model, self.data, self.info, self.motors)
+            self.lidar_imu = LidarImu(self.model, self.data)
+            if cfg.locomotion == "policy":
+                self.legs = LeggedController(self.model, self.data, self.info.base_body,
+                                             load_policies(cfg.ppo_policy, cfg.himloco_policy, log=log,
+                                                           policy0_runner=cfg.policy0_runner,
+                                                           policy1_runner=cfg.policy1_runner),
+                                             self.motors, log=log)
+            else:
+                self.link = HardwareLink(HardwareLinkConfig(
+                    command_port=cfg.link_command_port, state_host=cfg.link_state_host,
+                    state_port=cfg.link_state_port, watchdog_s=cfg.link_watchdog_ms / 1000.0), log=log)
+        self.grid = self.world.grid
+        self.lidar = LidarModel(cfg.lidar, cfg.seed)
+        # Where the lidar was at each physics step of the last scan window
+        # (lidar.rays_along_motion): a ring, `_lidar_i` steps written so far.
+        self._steps_per_scan = max(1, int(round(cfg.physics_hz / cfg.lidar.scan_rate_hz)))
+        self._lidar_poses = np.tile(np.eye(4), (self._steps_per_scan, 1, 1))
+        self._lidar_i = 0
+        self.last_scan: np.ndarray | None = None  # the cloud `scan()` last returned
+        if self.link is not None:
+            self.driver = UdpDriver(command_port=cfg.controller_command_port, log=log)
+        else:
+            self.driver = FakeDriver(switch_delay=cfg.switch_delay,
+                                     motion_state=cfg.initial_motion_state, policy=cfg.initial_policy)
+        self.state = BaseState()
+        self.cmd = np.zeros(3)
+        self.cmd_time = -math.inf
+        self.sim_time = 0.0
+        self.T_map_odom = np.eye(4)
+        self.prop_collisions = 0
+        self._last_prop_hit = -math.inf
+        self.movers: list[Mover] = []
+        self._free_props: dict[str, tuple[int, np.ndarray]] = {}
+        for p in cfg.props:
+            bid = self.info.prop_bodies[p.name]
+            if p.waypoints:
+                hh = p.size[1] if p.shape == "cylinder" else p.size[2]
+                self.movers.append(Mover(p.name, self.info.prop_mocap_ids[p.name],
+                                         np.asarray(p.waypoints, float), p.speed, hh,
+                                         pos=np.asarray(p.waypoints[0], float), z=p.pos[2]))
+            else:
+                self._free_props[p.name] = (bid, np.asarray(p.pos, float))
+        self.log(f"[sim] ready in {time.perf_counter() - t0:.1f} s: {self.model.ngeom} geoms, "
+                 f"{self.model.nbody} bodies, dt {self.model.opt.timestep * 1000:.1f} ms, "
+                 f"locomotion {cfg.locomotion}")
+
+    # -- placement ---------------------------------------------------------------
+    def spawn(self, x: float, y: float, yaw: float, z_hint: float | None = None) -> None:
+        """Put the robot down and define the odom frame there."""
+        self.state = place(self.state, self.grid, self.cfg.kin, x, y, yaw, z_hint)
+        self._put_body()
+        for name, (bid, pos) in self._free_props.items():
+            self._place_free_prop(bid, pos)
+        for m in self.movers:
+            self._place_mover(m, m.waypoints[0])
+        mujoco.mj_forward(self.model, self.data)
+        self._lidar_poses[:] = self.T_map_lidar()
+        self.T_map_odom = planar(self.T_map_imu())
+        self.log(f"[sim] spawned at ({x:.2f}, {y:.2f}, yaw {yaw:.2f}) on ground z "
+                 f"{self.state.z_ground:.2f}")
+
+    def teleport(self, x: float, y: float, yaw: float, z_hint: float | None = None) -> None:
+        """Move the robot (a kidnap): odom stays continuous, map -> odom jumps."""
+        before = planar(self.T_map_imu())
+        self.state = place(self.state, self.grid, self.cfg.kin, x, y, yaw, z_hint)
+        self._put_body()
+        self._lidar_poses[:] = self.T_map_lidar()  # a kidnap: no motion to smear over
+        after = planar(self.T_map_imu())
+        self.T_map_odom = after @ np.linalg.inv(before) @ self.T_map_odom
+        self.log(f"[sim] teleported to ({x:.2f}, {y:.2f}, yaw {yaw:.2f}), ground z "
+                 f"{self.state.z_ground:.2f}; map->odom moved")
+
+    def _put_body(self) -> None:
+        """The body at `state`, at rest. Walking: level, standing on its feet in
+        the default pose, the terrain under it, the policy fresh — and a fall
+        is forgiven (the motion state it fell from comes back)."""
+        if not self.legged:
+            self._apply_target()
+            sc.set_base_pose(self.model, self.data, self.info,
+                             self.data.mocap_pos[self.info.mocap_id],
+                             self.data.mocap_quat[self.info.mocap_id])
+            return
+        s = self.state
+        pos = np.array([s.x, s.y, self._floor_under(s.x, s.y, s.z_ground) + self.robot.h_stand + 0.005])
+        self.motors.reset()  # joints at the default pose, at rest, nothing queued
+        if self.legs is not None:
+            self.legs.reset()
+        if self.link is not None:
+            self.link.reset()  # the controller's last command was for the old pose
+        sc.set_base_pose(self.model, self.data, self.info, pos, yaw_pitch_quat(s.yaw, 0.0))
+        sc.place_terrain(self.data, self.info, self.patch.boxes_around(pos))
+        mujoco.mj_forward(self.model, self.data)
+        if self._fallen_from is not None:
+            self.driver.motion_state = self._fallen_from
+            self._fallen_from = None
+
+    def _floor_under(self, x: float, y: float, voxel_top: float) -> float:
+        """The measured floor in the voxel whose top is `voxel_top` (the feet
+        stand there, terrain_patch.py), or that top without a measurement."""
+        if self.surface is None:
+            return voxel_top
+        g = self.grid
+        idx = np.floor((np.array([[x, y, voxel_top - 0.5 * g.res]]) - g.origin_m) / g.res)
+        z = float(self.surface.lookup(idx.astype(np.int64))[0])
+        return voxel_top if math.isnan(z) else z
+
+    def _apply_target(self) -> None:
+        s = self.state
+        self.data.mocap_pos[self.info.mocap_id] = (s.x, s.y, s.z_ground + self.robot.h_stand)
+        self.data.mocap_quat[self.info.mocap_id] = yaw_pitch_quat(s.yaw, s.pitch)
+
+    def _place_free_prop(self, bid: int, pos: np.ndarray) -> None:
+        g = self.grid.ground_under(pos[0], pos[1], pos[2], 1.0, 6.0)
+        if math.isnan(g):
+            g = pos[2]
+        half = float(self.model.geom_size[self.model.body_geomadr[bid]][2]
+                     if self.model.geom_type[self.model.body_geomadr[bid]] == mujoco.mjtGeom.mjGEOM_BOX
+                     else self.model.geom_size[self.model.body_geomadr[bid]][1])
+        adr = self.model.jnt_qposadr[self.model.body_jntadr[bid]]
+        self.data.qpos[adr:adr + 3] = (pos[0], pos[1], g + half + 0.01)
+        self.data.qpos[adr + 3:adr + 7] = (1, 0, 0, 0)
+        vadr = self.model.jnt_dofadr[self.model.body_jntadr[bid]]
+        self.data.qvel[vadr:vadr + 6] = 0.0
+
+    def _place_mover(self, m: Mover, xy) -> None:
+        g = self.grid.ground_under(float(xy[0]), float(xy[1]), m.z, 1.0, 6.0)
+        if not math.isnan(g):
+            m.z = g
+        m.pos = np.asarray(xy, float)
+        self.data.mocap_pos[m.mocap_id] = (m.pos[0], m.pos[1], m.z + m.half_height)
+
+    # -- commands ----------------------------------------------------------------
+    def set_cmd(self, vx: float, vy: float, wz: float, now: float | None = None) -> None:
+        self.cmd[:] = (vx, vy, wz)
+        self.cmd_time = time.monotonic() if now is None else now
+        if self.link is not None:  # the controller walks, not the sim: AXES to it
+            self.driver.send_axes(vx, vy, wz)
+
+    def close(self) -> None:
+        """The sockets of the udp locomotion (none otherwise)."""
+        if self.link is not None:
+            self.link.close()
+            self.driver.close()
+
+    # -- one physics tick --------------------------------------------------------
+    def step(self) -> None:
+        if self.legged:
+            self._step_legged()
+            return
+        dt = self.model.opt.timestep
+        self.driver.update()
+        vx, vy, wz = (self.cmd if time.monotonic() - self.cmd_time < self.cfg.cmd_timeout
+                      else (0.0, 0.0, 0.0))
+        self.state = advance(self.state, float(vx), float(vy), float(wz), dt, self.grid,
+                             self.cfg.kin, self.driver.policy, self.driver.motion_state)
+        self._apply_target()
+        for m in self.movers:
+            self._walk_mover(m, dt)
+        mujoco.mj_step(self.model, self.data)
+        self.sim_time += dt
+        self._record_lidar_pose()
+
+        # A prop in the way holds the trunk back from its target; after a few cm
+        # of lag give in — snap the kinematic state to where the body really is,
+        # so the robot stands against the prop instead of the weld winding up.
+        actual = self.data.xpos[self.info.base_body]
+        lag = math.hypot(actual[0] - self.state.x, actual[1] - self.state.y)
+        if lag > 0.08:
+            self.state.x, self.state.y = float(actual[0]), float(actual[1])
+            if self.sim_time - self._last_prop_hit > 0.5:
+                self.prop_collisions += 1
+                self._last_prop_hit = self.sim_time
+        for name, (bid, pos) in self._free_props.items():
+            if self.data.xpos[bid][2] < pos[2] - 3.0:  # fell through a floor hole
+                self._place_free_prop(bid, pos)
+
+    def _step_legged(self) -> None:
+        dt = self.model.opt.timestep
+        self.driver.update()
+        cmd = (self.cmd if time.monotonic() - self.cmd_time < self.cfg.cmd_timeout
+               else np.zeros(3))
+        cmd = np.array([min(max(c, lo), hi) for c, (lo, hi) in zip(cmd, CMD_LIMITS)])
+        base = self.data.xpos[self.info.base_body]
+        if self.patch.due(base):
+            sc.place_terrain(self.data, self.info, self.patch.boxes_around(base))
+        if self.legs is not None:
+            joints = self.legs.step(cmd, self.driver.policy, self.driver.motion_state)
+        else:
+            joints = self.link.poll(self.sim_time)
+        self.motors.apply(joints)
+        for m in self.movers:
+            self._walk_mover(m, dt)
+        mujoco.mj_step(self.model, self.data)
+        self.sim_time += dt
+        if self.link is not None:  # the state this step produced, to the controller
+            self.sensors.read(self.link.time(self.sim_time))
+            self.link.send(self.sensors)
+        self._record_lidar_pose()
+        self._read_state(cmd)
+        for name, (bid, pos) in self._free_props.items():
+            if self.data.xpos[bid][2] < pos[2] - 3.0:
+                self._place_free_prop(bid, pos)
+
+    def _read_state(self, cmd: np.ndarray) -> None:
+        """`state` from the walking body, so status and the logs read the same.
+
+        A collision is the trunk touching the site — what a blocked move is in
+        the kinematic mode — counted once per half second like a prop hit. Not
+        the legs: HimLoco brushes tread nosings with a thigh on every flight of
+        dp (5 contacts on the first one, 2026-10-23), which is climbing, not
+        hitting. A fall is the controller's posture check, and puts the driver
+        in Damping as the real controller locks itself."""
+        s = self.state
+        p = self.data.xpos[self.info.base_body]
+        R = self.data.xmat[self.info.base_body].reshape(3, 3)
+        s.x, s.y = float(p[0]), float(p[1])
+        s.yaw = math.atan2(R[1, 0], R[0, 0])
+        s.pitch = math.asin(max(-1.0, min(1.0, -R[2, 0])))
+        g = self.grid.ground_under(s.x, s.y, s.z_ground, self.cfg.kin.ground_search_up,
+                                   self.cfg.kin.ground_search_down)
+        if not math.isnan(g):
+            s.z_ground = g
+        if not self.driver.motion_allowed():
+            s.last_event = Event.GATED
+        elif np.any(np.abs(cmd) > 1e-6):
+            s.last_event = Event.MOVED
+        else:
+            s.last_event = Event.IDLE
+        if self.sensors.trunk_hit() and self.sim_time - self._last_world_hit > 0.5:
+            s.collisions += 1
+            self._last_world_hit = self.sim_time
+        if self._fallen_from is None and self.sensors.upset():
+            self.falls += 1
+            self._fallen_from = self.driver.motion_state
+            roll, pitch = self.sensors.roll_pitch()
+            if self.link is not None:  # the controller's own posture check locks it
+                self.log(f"[sim] FELL at ({s.x:.2f}, {s.y:.2f}) roll {math.degrees(roll):.0f} "
+                         f"pitch {math.degrees(pitch):.0f} deg (the controller locks itself; "
+                         f"teleport, then RESET_SAFETY and MODE Z to stand it up again)")
+            else:
+                self.driver.motion_state = DAMPING
+                self.log(f"[sim] FELL at ({s.x:.2f}, {s.y:.2f}) roll {math.degrees(roll):.0f} "
+                         f"pitch {math.degrees(pitch):.0f} deg; driver -> Damping "
+                         f"(teleport / initialpose to stand it up again)")
+
+    def _walk_mover(self, m: Mover, dt: float) -> None:
+        if m.waypoints.shape[0] < 2:
+            return
+        nxt = m.seg + 1 if m.forward else m.seg - 1
+        target = m.waypoints[nxt]
+        d = target - m.pos
+        dist = float(np.linalg.norm(d))
+        step = m.speed * dt
+        if dist <= step:
+            m.pos = target.copy()
+            m.seg = nxt
+            if m.seg == m.waypoints.shape[0] - 1 or m.seg == 0:
+                m.forward = not m.forward
+        else:
+            m.pos = m.pos + d / dist * step
+        self._place_mover(m, m.pos)
+
+    def joint_states(self) -> tuple[list[str], np.ndarray]:
+        """The twelve leg joints by URDF name: the walking body's, or the
+        statue's baked standing angles (robot.py), for robot_state_publisher."""
+        names = [f"{leg}_{j}_joint" for leg in LEGS for j in JOINTS]
+        if self.legged:
+            return names, self.motors.q()
+        standing = self.robot.cfg.standing
+        return names, np.array([standing[j] for _ in LEGS for j in JOINTS])
+
+    def controller_telemetry(self) -> dict:
+        """What the gait controller reports (driver/controller_link.py), in its
+        body frame = base_link: rpy, the body IMU's specific force (m/s^2; the
+        statue has no IMU and reports gravity alone — nothing in the stack
+        reads the driver's `imu`), angular rate, and the twelve joints in the
+        driver's order (FL/FR/HL/HR x HipX/HipY/Knee, the same as
+        joint_states). Kinematic: the baked standing pose, at rest."""
+        if self.legged:
+            sn = self.sensors
+            sn.read(self.sim_time)
+            return {"rpy": tuple(float(v) for v in sn.rpy), "acc": sn.acc.astype(float),
+                    "omega": sn.gyro.astype(float), "JOINT_POS": sn.q.astype(float),
+                    "JOINT_VEL": sn.dq.astype(float), "JOINT_TAU": sn.tau.astype(float)}
+        R = self.data.xmat[self.info.base_body].reshape(3, 3)
+        rpy = (math.atan2(R[2, 1], R[2, 2]), math.asin(max(-1.0, min(1.0, -R[2, 0]))),
+               math.atan2(R[1, 0], R[0, 0]))
+        acc = R.T @ np.array([0.0, 0.0, 9.81])
+        _, q = self.joint_states()
+        moving = self.state.last_event is Event.MOVED
+        omega = R.T @ np.array([0.0, 0.0, self.cmd[2] if moving else 0.0])
+        return {"rpy": rpy, "acc": acc, "omega": omega,
+                "JOINT_POS": q, "JOINT_VEL": np.zeros(12), "JOINT_TAU": np.zeros(12)}
+
+    # -- poses -------------------------------------------------------------------
+    def T_map_base(self) -> np.ndarray:
+        p, R = sc.body_frame(self.data, self.info.base_body)
+        return pose_matrix(p, R)
+
+    def T_map_imu(self) -> np.ndarray:
+        p, R = sc.body_frame(self.data, self.info.imu_body)
+        return pose_matrix(p, R)
+
+    def T_map_lidar(self) -> np.ndarray:
+        p, R = sc.body_frame(self.data, self.info.lidar_body)
+        return pose_matrix(p, R)
+
+    def T_odom_imu(self) -> np.ndarray:
+        return np.linalg.inv(self.T_map_odom) @ self.T_map_imu()
+
+    # -- sensors -----------------------------------------------------------------
+    def _record_lidar_pose(self) -> None:
+        self._lidar_poses[self._lidar_i % self._steps_per_scan] = self.T_map_lidar()
+        self._lidar_i += 1
+
+    def scan(self) -> np.ndarray:
+        """One lidar scan as (K, 4) float32 xyz+intensity in the pointlio_body
+        frame, at the scan's end. Each ray is cast from where the lidar was
+        when it fired during the scan window (the last `_steps_per_scan`
+        steps), then the cloud is expressed in the end-of-scan body frame:
+        the motion-compensated cloud Point-LIO publishes."""
+        k = self._steps_per_scan
+        chrono = (np.arange(k) + self._lidar_i) % k  # ring slots, oldest first
+        dirs_l, t = self.lidar.directions()
+        origins, dirs_w = rays_along_motion(self._lidar_poses[chrono], t,
+                                            self.model.opt.timestep, dirs_l)
+        dist, pts = self.grid.cast(origins, dirs_w, self.cfg.lidar.max_range)
+        dist = np.where(dist < 0, np.inf, dist)
+        for tp in self._prop_distances(origins, dirs_w):
+            nearer = tp < dist
+            if np.any(nearer):
+                pts[nearer] = origins[nearer] + dirs_w[nearer] * tp[nearer, None]
+                dist = np.where(nearer, tp, dist)
+        dist = np.where(np.isfinite(dist), dist, -1.0)
+        pts_w = self.lidar.returns(dirs_w, dist, pts)
+        self.last_scan = self.lidar.cloud_xyzi(pts_w, self.T_map_imu())
+        return self.last_scan
+
+    def _prop_distances(self, origins: np.ndarray, dirs_w: np.ndarray):
+        m, d = self.model, self.data
+        for bid in self.info.prop_bodies.values():
+            g = m.body_geomadr[bid]
+            size = m.geom_size[g]
+            pos = d.geom_xpos[g]
+            if m.geom_type[g] == mujoco.mjtGeom.mjGEOM_CYLINDER:
+                yield ray_vertical_cylinder(origins, dirs_w, pos[:2], float(size[0]),
+                                            float(pos[2] - size[1]), float(pos[2] + size[1]))
+            else:
+                R = d.geom_xmat[g].reshape(3, 3)
+                ext = np.abs(R) @ size  # world-axis half extents of the rotated box
+                yield ray_aabb(origins, dirs_w, pos - ext, pos + ext)
+
+    def imu_sample(self) -> tuple[np.ndarray, np.ndarray]:
+        """(gyro rad/s, accel in g) in the IMU frame: the yaw rate and gravity,
+        or, walking, the gyro and accelerometer on lidar_top_imu."""
+        if self.legged:
+            return self.lidar_imu.sample()
+        T = self.T_map_imu()
+        R = T[:3, :3]
+        vx, vy, wz = (self.cmd if time.monotonic() - self.cmd_time < self.cfg.cmd_timeout
+                      else (0.0, 0.0, 0.0))
+        moving = self.state.last_event is Event.MOVED
+        omega_w = np.array([0.0, 0.0, wz if moving else 0.0])
+        gyro = R.T @ omega_w
+        accel = R.T @ np.array([0.0, 0.0, 1.0])
+        return gyro, accel
+
+    # -- status ------------------------------------------------------------------
+    def status(self) -> dict:
+        s = self.state
+        return {
+            "sim_time": round(self.sim_time, 3),
+            "x": round(s.x, 3), "y": round(s.y, 3), "yaw": round(s.yaw, 3),
+            "z_ground": round(s.z_ground, 3), "pitch": round(s.pitch, 3),
+            "on_stairs": s.on_stairs, "last_event": s.last_event.value,
+            "next_ground": None if math.isnan(s.next_ground) else round(s.next_ground, 3),
+            "last_dz": round(s.last_dz, 3),
+            "collisions": s.collisions, "refused": s.refused,
+            "prop_collisions": self.prop_collisions,
+            "locomotion": self.cfg.locomotion, "falls": self.falls,
+            "motion_state": self.driver.motion_state, "policy": self.driver.policy,
+            **({"link": self.link.stats()} if self.link is not None else {}),
+            "cmd_age": round(time.monotonic() - self.cmd_time, 2)
+            if self.cmd_time > -math.inf else None,
+        }

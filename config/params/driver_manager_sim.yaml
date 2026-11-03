@@ -1,7 +1,7 @@
 # syncai_driver_manager's parameters for the sim session: the workspace's own
 # src/syncai_driver_manager/params/driver_manager_params.yaml with the two
 # addresses moved to loopback, where the sim plays the gait controller
-# (syncai_sim/controller_link.py). Passed as the launch file's params_file, so
+# (syncai_sim/driver/controller_link.py). Passed as the launch file's params_file, so
 # the workspace is not edited. Keep everything else in step with that file.
 #
 # The key is a bare /**: rclrs matches only "/**" or the node's exact name

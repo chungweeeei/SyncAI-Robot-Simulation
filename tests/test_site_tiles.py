@@ -7,12 +7,12 @@ import io
 import numpy as np
 import pytest
 
-from syncai_sim import site_tiles, visual
-from syncai_sim.btree import TREE_MAX_VAL
-from syncai_sim.site_tiles import pack, surface_tiles, voxel_tiles
-from syncai_sim.voxel_grid import VoxelGrid
-from syncai_sim.voxel_intensity import build as build_intensity
-from syncai_sim.world import exposed_face_rects, quad_corners
+from syncai_sim.visuals import site_tiles, visual
+from syncai_sim.world.btree import TREE_MAX_VAL
+from syncai_sim.visuals.site_tiles import pack, surface_tiles, voxel_tiles
+from syncai_sim.world.voxel_grid import VoxelGrid
+from syncai_sim.visuals.voxel_intensity import build as build_intensity
+from syncai_sim.world.build import exposed_face_rects, quad_corners
 
 ORG = TREE_MAX_VAL
 RES = 0.1

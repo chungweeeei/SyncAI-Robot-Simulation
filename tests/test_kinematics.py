@@ -5,7 +5,7 @@ import math
 
 import pytest
 
-from syncai_sim.kinematics import (
+from syncai_sim.locomotion.kinematics import (
     LOCOMOTION,
     MPC,
     BaseState,

@@ -114,7 +114,7 @@
 
     # --- locomotion -------------------------------------------------------------
     # policy: the G23 walks on its own ONNX policies, as g2_deploy_rs runs them
-    # (syncai_sim/policy.py names the source files): set_policy_mode 0 = PPO,
+    # (syncai_sim/locomotion/policy.py names the source files): set_policy_mode 0 = PPO,
     # 1 = HimLoco (StairMode stair_policy_mode), anything else PPO. The files
     # are main.rs's defaults, copied into this repo's policy/ (gitignored; see
     # policy/README.md for where they come from and their checksums).
