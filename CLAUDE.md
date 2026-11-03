@@ -25,15 +25,17 @@ Python throughout (decided
    here, the session spec is `config/sessions/start_sim.yaml` here. If the sim
    needs something from the workspace (a CLI flag, a CI stage), that is a
    change in that repository, said so in the commit message.
-2. **The voxel grid is the truth; MuJoCo is the picture and the props.** Lidar
-   rays, the ground under the robot and whether the trunk is blocked are
-   answered by `voxel_grid.py` (numba) on the voxels of `octomap.bt`. MuJoCo
-   gets a visual mesh (`contype 0`), the large merged boxes as collision
-   plates for props, and — walking — a pool of voxel boxes moved under the
-   feet (`terrain_patch.py`), never the grid whole. Do not route sensing through `mj_multiRay` or collide the
-   trunk with the world mesh: the first scans every geom per ray, the second is
-   a convex hull. The measurements that decided this are in README
-   ("Decisions worth knowing").
+2. **The voxel grid is the truth; MuJoCo is the robot, the props and the feet's
+   floor; the browser is the picture.** Lidar rays, the ground under the robot
+   and whether the trunk is blocked are answered by `world/voxel_grid.py`
+   (numba) on the voxels of `octomap.bt`. MuJoCo gets the large merged boxes
+   as collision plates for props and — walking — a pool of voxel boxes moved
+   under the feet (`terrains/terrain_patch.py`), never the grid whole; the
+   site's picture is not in the model at all (`visuals/site_tiles.py` sends it
+   to the browser as GLB tiles). Do not route sensing through `mj_multiRay` or
+   put the site's mesh back in the MJCF: the first scans every geom per ray,
+   the second cost 628 MB of MJB for BVHs nothing used. The measurements that
+   decided this are in README ("Decisions worth knowing").
 3. **Every ROS-facing value mirrors a consumer in the workspace**, and
    `config/params/sim_params.yaml` names which. Change both sides together.
    The ones with teeth: `mode_switch_delay` < StairMode's 3 s settle; `mode`
@@ -50,24 +52,26 @@ Python throughout (decided
 
 ## Where things happen
 
+One subpackage per layer (`docs/architecture.md` draws them); every
+`__init__.py` is a docstring and re-exports nothing, so import by full path.
+
 | Need | Place |
 |---|---|
-| map -> world (parse, mesh, plates, cache) | `world.py`, `btree.py`, `greedy_mesh.py` |
-| Foxglove (map clouds, joint_states, bridge) | `map_cloud.py`, `config/foxglove/bridge.yaml`, `scripts/foxglove.sh`; mesh URIs in `launch/rsp.launch.py` |
-| the viewer's look (tiles, intensity shading, the Poisson and TSDF surfaces, colours, storeys) | `site_tiles.py` (10 m tiles as GLB, a texel per voxel face), `voxel_intensity.py`, `pcd_mesh.py`, `tsdf_mesh.py`, `visual.py`, `storeys.py` (picture only, never sensing); the site, storey and layer switches are the panel in `web_view.py` |
-| ray cast / ground / blocked | `voxel_grid.py` |
-| the policies (port of g2_deploy_rs) | `policy.py` (`tests/test_policy.py`; names the Rust source of every constant) |
-| joints per motion state, PD, the motor clamp, falls | `legged.py` (`tests/test_legged_motor.py`); the body's physics knobs (`motor_model`, `trunk_inertial`, contact, `actuator`, `integrator`, delays) are `RobotConfig` in `robot.py`, their A/B `scripts/gait_bench.py` |
-| the feet's ground (voxels -> boxes) | `terrain_patch.py` (numba, `tests/test_terrain_patch.py`) |
-| the feet's floor heights, flights fitted as staircases | `surface_heights.py`, `stairs.py`; stairs the track never climbed: `config/stair_walks/<map>.yaml`; slopes across voxel layers: `config/ramps/<map>.yaml` |
-| the step rule, gates, collisions (kinematic) | `kinematics.py` (pure Python, `tests/test_kinematics.py`) |
-| URDF -> MJCF, mocap weld, standing pose | `robot.py` (`DEFAULT_STANDING` was solved by FK, feet 0.372 m under the hips) |
-| MjSpec assembly, bitmasks, groups, the MJB scene cache | `scene.py` (`scene_info` reads a loaded model back by name; `scene_key` lists what the cache depends on; the site's picture is not in the model) |
-| the lidar pattern, prop rays | `lidar.py`, `prop_rays.py`; the recorded MID360 bank `config/lidar/mid360_pattern.npz` (built by `scripts/lidar_pattern.py` through `livox_bag.py`, which reads a rosbag2 sqlite without ROS) |
-| the gait controller on driver_manager's UDP link (the session) | `controller_link.py` (`tests/test_controller_link.py`), `config/params/driver_manager_sim.yaml` |
-| services and `mode` (driver_link: fake) | `fake_driver.py` |
-| one physics tick, scan, spawn, teleport | `simulator.py` |
-| publishers, subscribers, the main loop | `ros_node.py`; CLI in `__main__.py` (sets `OPENBLAS_NUM_THREADS=1` before numpy); the viewer (viser: the site as GLB tiles once, poses at 20 Hz, drawn by the host's browser; nothing renders in the container) in `web_view.py`, its panel's driving in `teleop.py` |
+| map -> voxel world (parse, mesh, plates, cache); ray cast / ground / blocked | `world/`: `build.py`, `btree.py`, `greedy_mesh.py`; `voxel_grid.py` (numba); `storeys.py` |
+| the feet's floor heights, flights fitted as staircases; the voxels -> boxes under the feet | `terrains/`: `surface_heights.py`, `stairs.py`, `terrain_patch.py` (numba, `tests/test_terrain_patch.py`); stairs the track never climbed: `config/stair_walks/<map>.yaml`; slopes across voxel layers: `config/ramps/<map>.yaml` |
+| URDF -> MJCF, mocap weld, standing pose, the body's physics knobs (`motor_model`, `trunk_inertial`, contact, `actuator`) | `entity/robot.py` (`RobotConfig`; `DEFAULT_STANDING` was solved by FK, feet 0.372 m under the hips); their A/B `scripts/gait_bench.py` |
+| MjSpec assembly, bitmasks, groups, the MJB scene cache | `scene/scene.py` (`scene_info` reads a loaded model back by name; `scene_key` lists what the cache depends on; the site's picture is not in the model) |
+| the lidar pattern, prop rays | `sensor/lidar.py`, `sensor/prop_rays.py`; the recorded MID360 bank `config/lidar/mid360_pattern.npz` (built by `scripts/lidar_pattern.py` through `sensor/livox_bag.py`, which reads a rosbag2 sqlite without ROS) |
+| the motors: PD, the motor clamp, delays | `actuator/` (empty until the motor side leaves `legged.py`) |
+| the policies (ported from the robot's controller) | `locomotion/policy.py` (`tests/test_policy.py`; names the source of every constant) |
+| joints per motion state, PD, the motor clamp, falls | `locomotion/legged.py` (`tests/test_legged_motor.py`); the `integrator` and delays are `SimConfig` in `envs/simulator.py` |
+| the step rule, gates, collisions (kinematic) | `locomotion/kinematics.py` (pure Python, `tests/test_kinematics.py`) |
+| the gait controller on driver_manager's UDP link (the session); services and `mode` (driver_link: fake) | `driver/controller_link.py` (`tests/test_controller_link.py`), `config/params/driver_manager_sim.yaml`; `driver/fake_driver.py` |
+| one physics tick, scan, spawn, teleport | `envs/simulator.py` |
+| the viewer (viser: the site as GLB tiles once, poses at 20 Hz, drawn by the host's browser; nothing renders in the container), its panel's driving | `viewer/web_view.py`, `viewer/teleop.py` |
+| the viewer's look (tiles, intensity shading, the Poisson and TSDF surfaces, colours) | `visuals/`: `site_tiles.py` (10 m tiles as GLB, a texel per voxel face), `voxel_intensity.py`, `pcd_mesh.py`, `tsdf_mesh.py`, `visual.py` (picture only, never sensing); the site, storey and layer switches are the panel in `viewer/web_view.py` |
+| Foxglove (map clouds, joint_states, bridge) | `visuals/map_cloud.py`, `config/foxglove/bridge.yaml`, `scripts/foxglove.sh`; mesh URIs in `launch/rsp.launch.py` |
+| publishers, subscribers, the main loop | `ros/ros_node.py`; CLI in `__main__.py` (sets `OPENBLAS_NUM_THREADS=1` before numpy); params in `config.py` |
 | the session, the test driver | `scripts/run_session.sh`, `scripts/nav_test.py` |
 
 ## Running and testing (inside the container)

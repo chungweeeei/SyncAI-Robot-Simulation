@@ -1,9 +1,9 @@
 """The simulator proper, with no ROS in it: world + robot + physics + sensors.
 
-`ros_node.py` wraps this in a node and `__main__.py` drives it; this module can
-also be driven by hand (`--no-ros --teleop`) to check a map or the kinematics
-without the stack. One `step()` is one physics tick (`physics_hz`, 200 by
-default): the fake driver's pending switches are applied, the kinematic base
+`ros/ros_node.py` wraps this in a node and `__main__.py` drives it; this module
+can also be driven by hand (`--no-ros --teleop`) to check a map or the kinematics
+without the stack. One `step()` is one physics tick (`physics_hz`, 500 by
+default, the params' value): the fake driver's pending switches are applied, the kinematic base
 is advanced (`kinematics.advance`), the mocap handle is placed, the prop movers
 are walked, MuJoCo steps, and a trunk pushed off its target by a prop is
 detected. `scan()` renders one lidar scan (`VoxelGrid.cast` for the site,
@@ -67,7 +67,7 @@ class SimConfig:
     kin: KinematicsConfig = field(default_factory=KinematicsConfig)
     lidar: LidarConfig = field(default_factory=LidarConfig)
     lidar_height: float = 0.481
-    physics_hz: float = 200.0
+    physics_hz: float = 500.0  # config.PARAM_DEFAULTS has the same; 2 ms steps
     switch_delay: float = 1.0
     initial_motion_state: int = 1
     initial_policy: int = 0

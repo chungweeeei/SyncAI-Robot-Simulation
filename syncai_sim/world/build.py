@@ -2,16 +2,17 @@
 
     btree.read_occupied_leaves   leaf cubes                    (dp: 3-4 s, 1.6 M)
     cubes_to_voxels              (M, 3) voxel indices          -> VoxelGrid (truth)
-    exposed faces, greedy-merged (F, 3) triangles + vertices   -> MuJoCo visual mesh
+    exposed faces, greedy-merged (F, 3) triangles + vertices   -> the browser's tiles (visuals/)
     greedy_mesh.merge_voxels     big boxes ("plates")          -> MuJoCo collision for props
 
 Why three forms. The *voxel grid* is what the lidar, the ground query and the
 trunk's blocking test read (`voxel_grid.py`): exact, fast, and the same tree
 the Octo3D planner plans on. MuJoCo never sees it. The *visual mesh* is only
-for the picture — it sits in the MJCF with contype 0 so nothing collides with
-its convex hull, and web_view.py sends its tiles to the browser — and is the
-exposed voxel faces merged into rectangles (dp: 4.2 M
-faces -> 1.75 M quads -> 3.5 M triangles, under 2 M with the height band). The
+for the picture: the exposed voxel faces merged into rectangles (dp: 4.2 M
+faces -> 1.75 M quads -> 3.5 M triangles, under 2 M with the height band),
+which `visuals/site_tiles.py` turns into the browser's GLB tiles. It is not in
+the MJCF at all (until 2026-10-26 it was, with contype 0, and cost 628 MB of
+MJB and 5 s of compile for BVHs nothing used). The
 *plates* are the few large boxes the greedy merge produces (floor slabs, long
 walls) kept as real collision geoms so that props — the box the robot pushes,
 the walking cylinder — stand on floors and stop at walls; the small fragments

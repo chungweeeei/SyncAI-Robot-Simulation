@@ -40,37 +40,48 @@ config/sessions/start_sim.yaml     the session spec (start_nav.yaml with the har
 launch/rsp.launch.py               robot_state_publisher alone (bringup.launch.py would start the lidar)
 scripts/run_session.sh             runs a spec as process groups with logs, no byobu (the CI smoke test's loop)
 scripts/nav_test.py                sends a NavigateToGoal and reports collisions / result
-syncai_sim/                        the Python package (python3 -m syncai_sim)
-  btree.py                           OctoMap .bt reader (no octomap dependency)
-  greedy_mesh.py                     voxels -> boxes
-  world.py                           octomap.bt -> VoxelGrid + visual mesh (as rectangles) + collision plates, cached
-  pcd_mesh.py                        map.pcd -> a smooth viewer surface (Poisson, open3d), cached
-  tsdf_mesh.py                       the keyframes' patches + poses.txt -> a TSDF viewer surface (open3d), thin structure kept, cached
-  visual.py                          the viewer's look: colour by height, shaded by the lidar's intensity; or the photo
-  voxel_intensity.py                 map.pcd -> the median intensity of each voxel, cached
-  voxel_colour.py                    the mapping run's bag -> the colour the camera saw at each voxel (config/colour/<map>.npz, scripts/colour_map.py)
-  bag_camera.py                      the bag's images, camera_info and /tf_static, read without ROS
-  site_tiles.py                      the site for the browser: 10 m tiles, every voxel face a texel of its intensity or its colour, as GLB, cached
-  storeys.py                         the site's storeys from poses.txt (the viewer's 1F / 2F switch)
-  map_cloud.py                       map.pcd thinned per storey for Foxglove (sim/map_cloud/storey<N>)
+syncai_sim/                        the Python package (python3 -m syncai_sim): one subpackage per layer (docs/architecture.md)
+  __main__.py, config.py             the CLI; the params (PARAM_DEFAULTS is every sim_node parameter) and the INI
+  world/                             the site as the sim senses it: octomap.bt -> VoxelGrid, the truth for rays, ground, blocking
+    btree.py                           OctoMap .bt reader (no octomap dependency)
+    greedy_mesh.py                     voxels -> boxes
+    voxel_grid.py                      the numba ray caster, ground query, blocking test
+    build.py                           octomap.bt -> VoxelGrid + the exposed faces as rectangles + collision plates, cached (python3 -m syncai_sim.world)
+    storeys.py                         the site's storeys from poses.txt (the viewer's 1F / 2F switch)
+  terrains/                          what the walking feet stand on (collision only; the lidar reads world/)
+    surface_heights.py                 the floor's measured heights, flights fitted as staircases
+    stairs.py                          the fitted flights as fixed boxes under the feet
+    terrain_patch.py                   the voxels around the robot as collision boxes for its feet
+  entity/robot.py                    the workspace URDF -> MJCF: articulated, or rigid with a mocap handle; the body's physics knobs
+  scene/scene.py                     robot + collision plates + props (+ the terrain pool) in one MjSpec, no picture in it; cached as MJB
+  sensor/                            what the robot measures, never what is drawn
+    lidar.py, prop_rays.py             the MID360: its recorded pattern fired frame by frame, rays from where it was when each fired; analytic rays for props
+    livox_bag.py                       CustomMsg frames straight out of a rosbag2 sqlite (no ROS) -> the pattern bank
+  actuator/                          the motors: PD, the motor clamp, delays (lifted out of legged.py next)
+  locomotion/                        who decides the joint command
+    policy.py                          the G23's PPO / HimLoco runners, ported (onnxruntime)
+    legged.py                          motion state -> policy / stand / lie / damping, PD (qfrc or MuJoCo actuators), the motor clamp, the fall check
+    kinematics.py                      the kinematic base: ground following, the step rule, blocking, gates
+  driver/                            the gait controller's side of the nav stack's UDP link
+    fake_driver.py                     set_motion_key / set_policy_mode / mode
+    controller_link.py                 the sim as the gait controller on driver_manager's UDP link (driver_link: udp)
+  envs/simulator.py                  the ROS-free core (step, scan, imu, spawn, teleport)
+  viewer/web_view.py, teleop.py      the browser viewer: the site and the robot sent once, poses streamed, drawn by the host's GPU; its panel's driving
+  visuals/                           the site's picture (nothing the lidar, the feet or the planner see reads it)
+    visual.py                          the viewer's look: colour by height, shaded by the lidar's intensity; or the photo
+    site_tiles.py                      the site for the browser: 10 m tiles, every voxel face a texel of its intensity or its colour, as GLB, cached
+    pcd_mesh.py                        map.pcd -> a smooth viewer surface (Poisson, open3d), cached
+    tsdf_mesh.py                       the keyframes' patches + poses.txt -> a TSDF viewer surface (open3d), thin structure kept, cached
+    voxel_intensity.py                 map.pcd -> the median intensity of each voxel, cached
+    voxel_colour.py                    the mapping run's bag -> the colour the camera saw at each voxel (config/colour/<map>.npz, scripts/colour_map.py)
+    bag_camera.py                      the bag's images, camera_info and /tf_static, read without ROS
+    map_cloud.py                       map.pcd thinned per storey for Foxglove (sim/map_cloud/storey<N>)
+  ros/ros_node.py                    the node: what the Livox driver, Point-LIO, the localizer and driver_manager publish on the robot
 config/foxglove/bridge.yaml        foxglove_bridge's settings (port 8765, the .STL asset allowlist)
 scripts/foxglove.sh                foxglove_bridge (+ robot_state_publisher) for a sim run by hand
-  voxel_grid.py                      the numba ray caster, ground query, blocking test
-  robot.py                           the workspace URDF -> MJCF: articulated, or rigid with a mocap handle
-  scene.py                           robot + collision plates + props (+ the terrain pool) in one MjSpec, no picture in it; the compiled model cached as MJB
-  policy.py                          g2_deploy_rs's PPO / HimLoco runners, ported (onnxruntime)
-  legged.py                          motion state -> policy / stand / lie / damping, PD (qfrc or MuJoCo actuators), the motor clamp, the fall check
 scripts/gait_bench.py              the walking body against a scripted command, ROS-free: the A/B of the body's physics knobs
-  terrain_patch.py                   the voxels around the robot as collision boxes for its feet
-  kinematics.py                      the kinematic base: ground following, the step rule, blocking, gates
-  lidar.py, prop_rays.py             the MID360: its recorded pattern fired frame by frame, rays from where it was when each fired; analytic rays for props
-  livox_bag.py                       CustomMsg frames straight out of a rosbag2 sqlite (no ROS) -> the pattern bank
-config/lidar/mid360_pattern.npz    that bank, from the workspace's record/dp (config/lidar/README.md)
+config/lidar/mid360_pattern.npz    the MID360's recorded pattern bank, from the workspace's record/dp (config/lidar/README.md)
 scripts/lidar_pattern.py           rebuilds it from any MID360 recording
-  fake_driver.py                     set_motion_key / set_policy_mode / mode
-  simulator.py                       the ROS-free core (step, scan, imu, spawn, teleport)
-  ros_node.py, __main__.py           the node and the CLI
-  web_view.py, teleop.py             the viewer: the site and the robot sent to the browser once, poses streamed, drawn by the host's GPU; its panel's driving
 policy/                            the G23's ONNX policies, gitignored: copy them in (policy/README.md)
 tests/                             pytest; ROS-free except test_simulator_synthetic (needs the ROS env + workspace install)
 docs/findings.md                   what the sim found about the navigation stack
@@ -346,7 +357,7 @@ integrated from the mapping run's own keyframe patches and poses
 (`tsdf_mesh.py`: each patch rendered to six cube-face depth images and
 integrated with open3d at 7 cm, free space carved along every ray, so
 handrails, door frames and tread edges keep their shape and unseen places
-stay open; built in 35 m blocks, dp 6 min and 2.5 GB at most, 2 M triangles; `python3 -m syncai_sim.tsdf_mesh map/dp` builds it
+stay open; built in 35 m blocks, dp 6 min and 2.5 GB at most, 2 M triangles; `python3 -m syncai_sim.visuals.tsdf_mesh map/dp` builds it
 ahead). All three are coloured by
 height — floors and treads along a ramp, walls a pale copy, undersides grey
 (`visual.py`) — and shaded by the lidar's intensity, which is what makes a

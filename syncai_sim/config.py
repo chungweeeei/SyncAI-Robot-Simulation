@@ -105,7 +105,7 @@ def build_sim_config(ini: IniSettings, p: dict) -> SimConfig:
 
 
 def world_options(p: dict):
-    """The params' WorldOptions (shared with `python3 -m syncai_sim.pcd_mesh`,
+    """The params' WorldOptions (shared with `python3 -m syncai_sim.visuals.pcd_mesh`,
     whose cache key must match the sim's world)."""
     from syncai_sim.world.build import WorldOptions
     return WorldOptions(

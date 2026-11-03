@@ -1,7 +1,7 @@
 # config/colour — what the camera saw, per voxel, per map
 
 `<map>.npz` is the colour of each voxel of `map/<map>/octomap.bt` as the
-camera of the mapping run saw it (`syncai_sim/voxel_colour.py`): the
+camera of the mapping run saw it (`syncai_sim/visuals/voxel_colour.py`): the
 viewer's `photo` look (the panel's Look switch, `visual_look`) paints the
 site with it instead of the height ramp. Nothing the lidar, the feet or the
 planner see reads these files; they are the picture only.
