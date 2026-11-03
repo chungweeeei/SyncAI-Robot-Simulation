@@ -89,6 +89,17 @@ J60_FRICTIONLOSS = (0.40, 0.40, 0.45)  # Nm
 J60_DAMPING = ((0.81 - 0.40) / 24.6, (0.81 - 0.40) / 24.6, (0.92 - 0.45) / 15.5)  # Nm s/rad
 JOINT_KINDS = ("HipX", "HipY", "Knee")  # the suffix each joint name carries
 
+# The controller's joint order, matched by name to the URDF's joints: (FL, FR,
+# HL, HR) x (HipX, HipY, Knee), which is its (LF, RF, LR, RR) x (hip, thigh,
+# calf) with the same signs (on flat ground PPO walks the URDF as is and falls
+# within a second with the hip signs flipped, 2026-10-23). Every layer above —
+# the policies, the motors, the hardware link, joint_states — uses this order.
+LEGS = ("FL", "FR", "HL", "HR")
+JOINTS = ("HipX", "HipY", "Knee")
+# The controller's default joint pose (its dof_pos_default): the stand state's
+# goal and the zero every policy's observation and action are taken from.
+Q_DEFAULT = np.array([0.0, -0.65, 1.3] * 4, dtype=np.float32)
+
 # Trunk inertial `vendor` (RobotConfig.trunk_inertial): the TORSO of
 # g2_deploy_rs's G23 MJCF (robot/g23/mjcf/g23_mjcf.xml), 9.368 kg against the
 # workspace URDF's 8.03 and a pitch inertia 2.5x the URDF's (0.1425 vs 0.058
@@ -268,8 +279,6 @@ def joint_kind(name: str) -> int:
 
 def _articulated(root: ET.Element, base: ET.Element, cfg: RobotConfig,
                  base_to_lidar: np.ndarray, base_to_imu: np.ndarray) -> RobotModel:
-    from syncai_sim.locomotion.policy import Q_DEFAULT
-
     if cfg.motor_model not in ("ideal", "j60"):
         raise ValueError(f"motor_model {cfg.motor_model!r}: ideal | j60")
     if cfg.trunk_inertial not in ("urdf", "vendor"):
@@ -334,8 +343,8 @@ def _articulated(root: ET.Element, base: ET.Element, cfg: RobotConfig,
     # default pose and the lowest foot sphere touching it.
     model = mujoco.MjModel.from_xml_string(mjcf)
     data = mujoco.MjData(model)
-    for leg in ("FL", "FR", "HL", "HR"):
-        for k, j in enumerate(("HipX", "HipY", "Knee")):
+    for leg in LEGS:
+        for k, j in enumerate(JOINTS):
             jid = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_JOINT, f"{leg}_{j}_joint")
             data.qpos[model.jnt_qposadr[jid]] = Q_DEFAULT[k]
     mujoco.mj_forward(model, data)

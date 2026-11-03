@@ -59,12 +59,12 @@ One subpackage per layer (`docs/architecture.md` draws them); every
 |---|---|
 | map -> voxel world (parse, mesh, plates, cache); ray cast / ground / blocked | `world/`: `build.py`, `btree.py`, `greedy_mesh.py`; `voxel_grid.py` (numba); `storeys.py` |
 | the feet's floor heights, flights fitted as staircases; the voxels -> boxes under the feet | `terrains/`: `surface_heights.py`, `stairs.py`, `terrain_patch.py` (numba, `tests/test_terrain_patch.py`); stairs the track never climbed: `config/stair_walks/<map>.yaml`; slopes across voxel layers: `config/ramps/<map>.yaml` |
-| URDF -> MJCF, mocap weld, standing pose, the body's physics knobs (`motor_model`, `trunk_inertial`, contact, `actuator`) | `entity/robot.py` (`RobotConfig`; `DEFAULT_STANDING` was solved by FK, feet 0.372 m under the hips); their A/B `scripts/gait_bench.py` |
+| URDF -> MJCF, mocap weld, standing pose, the joint order (`LEGS` x `JOINTS`) and default pose (`Q_DEFAULT`), the body's physics knobs (`motor_model`, `trunk_inertial`, contact, `actuator`) | `entity/robot.py` (`RobotConfig`; `DEFAULT_STANDING` was solved by FK, feet 0.372 m under the hips); their A/B `scripts/gait_bench.py` |
 | MjSpec assembly, bitmasks, groups, the MJB scene cache | `scene/scene.py` (`scene_info` reads a loaded model back by name; `scene_key` lists what the cache depends on; the site's picture is not in the model) |
 | the lidar pattern, prop rays | `sensor/lidar.py`, `sensor/prop_rays.py`; the recorded MID360 bank `config/lidar/mid360_pattern.npz` (built by `scripts/lidar_pattern.py` through `sensor/livox_bag.py`, which reads a rosbag2 sqlite without ROS) |
-| the motors: PD, the motor clamp, delays | `actuator/` (empty until the motor side leaves `legged.py`) |
+| the motors: the PD closed every step, the motor clamp, the command delay and torque filter, `JointCommand` | `actuator/motors.py` (`tests/test_motors.py`) |
 | the policies (ported from the robot's controller) | `locomotion/policy.py` (`tests/test_policy.py`; names the source of every constant) |
-| joints per motion state, PD, the motor clamp, falls | `locomotion/legged.py` (`tests/test_legged_motor.py`); the `integrator` and delays are `SimConfig` in `envs/simulator.py` |
+| the motion states (stand / lie / damping / the policy at 50 Hz), falls | `locomotion/legged.py`: each step returns a `JointCommand` for the motors; the `integrator` and delays are `SimConfig` in `envs/simulator.py` |
 | the step rule, gates, collisions (kinematic) | `locomotion/kinematics.py` (pure Python, `tests/test_kinematics.py`) |
 | the gait controller on driver_manager's UDP link (the session); services and `mode` (driver_link: fake) | `driver/controller_link.py` (`tests/test_controller_link.py`), `config/params/driver_manager_sim.yaml`; `driver/fake_driver.py` |
 | one physics tick, scan, spawn, teleport | `envs/simulator.py` |

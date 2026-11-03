@@ -116,7 +116,7 @@ def test_walking_body_knobs_compile_into_the_model(stairs_map, tmp_path):
                            actuator="position", integrator="implicitfast", cmd_delay_ms=4.0)
     m = sim.model
     assert m.opt.integrator == mujoco.mjtIntegrator.mjINT_IMPLICITFAST
-    assert m.nu == 12 and sim.legs.act is not None
+    assert m.nu == 12 and sim.motors.act is not None
     assert math.isclose(m.body_mass[sim.info.base_body], 9.368, abs_tol=1e-6)
     knee = m.joint("FL_Knee_joint")
     assert math.isclose(m.dof_armature[knee.dofadr[0]], J60_ARMATURE[2], rel_tol=1e-6)
@@ -134,7 +134,7 @@ def test_walking_body_knobs_compile_into_the_model(stairs_map, tmp_path):
     assert st["falls"] == 0, st
     # The actuators carry it: torque on the joints, the trunk up on its legs, and
     # it went forward (how fast is scripts/gait_bench.py's business).
-    assert np.abs(sim.legs.tau()).max() > 1.0
+    assert np.abs(sim.motors.tau()).max() > 1.0
     assert sim.data.xpos[sim.info.base_body][2] - sim.state.z_ground > 0.2, st
     assert sim.state.x > first - 3.0 + 0.2, st
 

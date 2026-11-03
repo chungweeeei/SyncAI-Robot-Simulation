@@ -42,6 +42,7 @@ from dataclasses import dataclass, field
 import mujoco
 import numpy as np
 
+from syncai_sim.actuator.motors import Motors
 from syncai_sim.scene import scene as sc
 from syncai_sim.driver.fake_driver import DAMPING, FakeDriver
 from syncai_sim.locomotion.kinematics import BaseState, Event, KinematicsConfig, advance, place
@@ -49,7 +50,7 @@ from syncai_sim.locomotion.legged import LeggedController
 from syncai_sim.sensor.lidar import LidarConfig, LidarModel, rays_along_motion
 from syncai_sim.locomotion.policy import load_policies
 from syncai_sim.sensor.prop_rays import ray_aabb, ray_vertical_cylinder
-from syncai_sim.entity.robot import RobotConfig, RobotModel, load_robot
+from syncai_sim.entity.robot import JOINTS, LEGS, RobotConfig, RobotModel, load_robot
 from syncai_sim.terrains.terrain_patch import TerrainPatch, TerrainPatchConfig
 from syncai_sim.world.build import World, WorldOptions, build_world
 
@@ -187,19 +188,21 @@ class Simulator:
         self.info = sc.scene_info(self.model, self.robot, cfg.props, capacity,
                                   list(self.world.storey_bounds))
         self.data = mujoco.MjData(self.model)
+        self.motors: Motors | None = None
         self.legs: LeggedController | None = None
         self.patch: TerrainPatch | None = None
         self.falls = 0
         self._fallen_from: int | None = None
         self._last_world_hit = -math.inf
         if self.legged:
+            self.motors = Motors(self.model, self.data, motor_model=cfg.motor_model,
+                                 actuator=cfg.actuator, cmd_delay_s=cfg.cmd_delay_ms / 1000.0,
+                                 torque_bw_hz=cfg.torque_bw_hz)
             self.legs = LeggedController(self.model, self.data, self.info.base_body,
                                          load_policies(cfg.ppo_policy, cfg.himloco_policy, log=log,
                                                        policy0_runner=cfg.policy0_runner,
                                                        policy1_runner=cfg.policy1_runner),
-                                         log=log, motor_model=cfg.motor_model,
-                                         actuator=cfg.actuator, cmd_delay_s=cfg.cmd_delay_ms / 1000.0,
-                                         torque_bw_hz=cfg.torque_bw_hz)
+                                         self.motors, log=log)
             self.patch = TerrainPatch(self.world.grid, cfg.terrain, self.surface,
                                       None if stairs is None else stairs.regions)
             self._gyro = self.model.sensor("imu_gyro").adr[0]
@@ -276,6 +279,7 @@ class Simulator:
             return
         s = self.state
         pos = np.array([s.x, s.y, self._floor_under(s.x, s.y, s.z_ground) + self.robot.h_stand + 0.005])
+        self.motors.reset()  # joints at the default pose, at rest, nothing queued
         self.legs.reset()
         sc.set_base_pose(self.model, self.data, self.info, pos, yaw_pitch_quat(s.yaw, 0.0))
         sc.place_terrain(self.data, self.info, self.patch.boxes_around(pos))
@@ -365,7 +369,7 @@ class Simulator:
         base = self.data.xpos[self.info.base_body]
         if self.patch.due(base):
             sc.place_terrain(self.data, self.info, self.patch.boxes_around(base))
-        self.legs.step(cmd, self.driver.policy, self.driver.motion_state)
+        self.motors.apply(self.legs.step(cmd, self.driver.policy, self.driver.motion_state))
         for m in self.movers:
             self._walk_mover(m, dt)
         mujoco.mj_step(self.model, self.data)
@@ -448,10 +452,9 @@ class Simulator:
     def joint_states(self) -> tuple[list[str], np.ndarray]:
         """The twelve leg joints by URDF name: the walking body's, or the
         statue's baked standing angles (robot.py), for robot_state_publisher."""
-        from syncai_sim.locomotion.legged import JOINTS, LEGS
         names = [f"{leg}_{j}_joint" for leg in LEGS for j in JOINTS]
         if self.legged:
-            return names, self.legs.q()
+            return names, self.motors.q()
         standing = self.robot.cfg.standing
         return names, np.array([standing[j] for _ in LEGS for j in JOINTS])
 
@@ -468,8 +471,8 @@ class Simulator:
         _, q = self.joint_states()
         if self.legged:
             omega = self.data.qvel[self.legs.omega_adr:self.legs.omega_adr + 3].copy()
-            dq = self.legs.dq()
-            tau = self.legs.tau()
+            dq = self.motors.dq()
+            tau = self.motors.tau()
         else:
             moving = self.state.last_event is Event.MOVED
             omega = R.T @ np.array([0.0, 0.0, self.cmd[2] if moving else 0.0])

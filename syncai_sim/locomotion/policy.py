@@ -28,8 +28,8 @@ from __future__ import annotations
 
 import numpy as np
 
-# Shared by both runners (dof_pos_default in each file).
-Q_DEFAULT = np.array([0.0, -0.65, 1.3] * 4, dtype=np.float32)
+from syncai_sim.entity.robot import Q_DEFAULT  # dof_pos_default, shared by every runner
+
 OBS_DIM = 45
 
 

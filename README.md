@@ -57,10 +57,10 @@ syncai_sim/                        the Python package (python3 -m syncai_sim): o
   sensor/                            what the robot measures, never what is drawn
     lidar.py, prop_rays.py             the MID360: its recorded pattern fired frame by frame, rays from where it was when each fired; analytic rays for props
     livox_bag.py                       CustomMsg frames straight out of a rosbag2 sqlite (no ROS) -> the pattern bank
-  actuator/                          the motors: PD, the motor clamp, delays (lifted out of legged.py next)
+  actuator/motors.py                 the motors: JointCommand (q_des, dq_des, kp, kd, tau_ff), the PD closed every step, the motor clamp, delays
   locomotion/                        who decides the joint command
     policy.py                          the G23's PPO / HimLoco runners, ported (onnxruntime)
-    legged.py                          motion state -> policy / stand / lie / damping, PD (qfrc or MuJoCo actuators), the motor clamp, the fall check
+    legged.py                          motion state -> policy / stand / lie / damping: the JointCommand for the motors, the fall check
     kinematics.py                      the kinematic base: ground following, the step rule, blocking, gates
   driver/                            the gait controller's side of the nav stack's UDP link
     fake_driver.py                     set_motion_key / set_policy_mode / mode
