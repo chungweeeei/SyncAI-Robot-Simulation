@@ -1,11 +1,12 @@
 """Where the sim's settings come from: the instance INI and the params YAML.
 
-The INI is the workspace's `config/system.ini` — on the robot the instance file
-bind-mounted over it, here `config/instances/sim01.ini` the same way — read the
-way the launch files read it: `[system] robot_id` names the namespace and the
-frame prefix, `[map] pcd` locates the map directory (its `octomap.bt` is the
-world), `[initial_pose]` is the spawn. Resolution of a relative `pcd` follows
-planner_server.launch.py: two directories above the INI is the workspace root.
+The INI is the workspace's `config/system.ini` (docker-compose.yml mounts
+`config/instances/sim01.ini` over it): `[map] pcd` locates the map directory
+(its `octomap.bt` is the world), `[initial_pose]` is the spawn, and
+`[system] robot_id` names the run. A relative `pcd` is resolved the way the
+workspace resolves it: two directories above the INI is the workspace root.
+The params are PARAM_DEFAULTS, overridden by the YAML profiles
+(`load_profile`) and `key:=value` strings (`apply_overrides`).
 """
 
 from __future__ import annotations
@@ -54,7 +55,7 @@ def read_ini(path: str | None = None) -> IniSettings:
 
 
 def build_sim_config(ini: IniSettings, p: dict) -> SimConfig:
-    """ROS params (already read into a dict) + the INI -> SimConfig.
+    """The params (a dict, PARAM_DEFAULTS and its overrides) + the INI -> SimConfig.
 
     Imports are local so that reading an INI needs neither MuJoCo nor numba."""
     import json
@@ -109,39 +110,25 @@ def build_sim_config(ini: IniSettings, p: dict) -> SimConfig:
 
 
 def load_profile(path: str) -> dict:
-    """A params YAML (the `ros__parameters` of any node key, as sim_params.yaml
-    and config/params/controller_profile.yaml are written) as a dict of
-    overrides for PARAM_DEFAULTS, for the entry points that run without ROS:
-    `python3 -m syncai_sim --no-ros --profile`, scripts/gait_bench.py,
-    scripts/controller_bench.py. Under ROS the same file is a second
-    --params-file. A key PARAM_DEFAULTS does not have is an error, as it would
-    be for the node."""
+    """A params YAML — a plain mapping of PARAM_DEFAULTS keys, as
+    config/params/sim_params.yaml and controller_profile.yaml are written — as
+    a dict of overrides. A key PARAM_DEFAULTS does not have is an error: a
+    typo would otherwise be a setting silently ignored."""
     import yaml
 
     with open(path) as f:
         doc = yaml.safe_load(f) or {}
-    found = None
-
-    def walk(node):
-        nonlocal found
-        if isinstance(node, dict):
-            if "ros__parameters" in node and isinstance(node["ros__parameters"], dict):
-                found = node["ros__parameters"]
-                return
-            for v in node.values():
-                walk(v)
-    walk(doc)
-    if found is None:
-        raise SystemExit(f"{path}: no ros__parameters block")
-    unknown = sorted(k for k in found if k not in PARAM_DEFAULTS)
+    if not isinstance(doc, dict):
+        raise SystemExit(f"{path}: expected a mapping of parameters")
+    unknown = sorted(k for k in doc if k not in PARAM_DEFAULTS)
     if unknown:
-        raise SystemExit(f"{path}: not sim_node parameters: {', '.join(unknown)}")
-    return dict(found)
+        raise SystemExit(f"{path}: not sim parameters: {', '.join(unknown)}")
+    return dict(doc)
 
 
 def apply_overrides(params: dict, overrides: list[str]) -> dict:
-    """`key:=value` strings (ros2's -p spelling) onto `params`, each parsed
-    as YAML and typed like its default."""
+    """`key:=value` strings onto `params`, each parsed as YAML and typed like
+    its default."""
     import yaml
 
     for item in overrides:
@@ -149,7 +136,7 @@ def apply_overrides(params: dict, overrides: list[str]) -> dict:
             raise SystemExit(f"-p {item!r}: expected key:=value")
         key, raw = item.split(":=", 1)
         if key not in PARAM_DEFAULTS:
-            raise SystemExit(f"-p {key}: not a sim_node parameter (config.PARAM_DEFAULTS)")
+            raise SystemExit(f"-p {key}: not a sim parameter (config.PARAM_DEFAULTS)")
         value = yaml.safe_load(raw)
         default = PARAM_DEFAULTS[key]
         if isinstance(default, bool):
@@ -179,7 +166,7 @@ PARAM_DEFAULTS: dict = {
     "visual_max_height_above_column_floor_m": 3.0, "plate_min_voxels": 16,
     "clip_spikes_above_neighbours_m": 0.1, "track_clear_radius_m": 0.30, "track_floor_fill_radius_m": 0.30,
     "floor_hole_max_cells": 25, "planner_hole_fill_passes": 2,
-    "visual_mesh": "voxels", "visual_look": "ramp", "publish_map_cloud": True,
+    "visual_mesh": "voxels", "visual_look": "ramp",
     "web_view_port": 8080,
     "driver_link": "fake", "controller_command_port": 50051, "controller_telemetry_port": 50010,
     "controller_telemetry_hz": 50.0, "battery_soc": 90.0, "battery_drain_per_hour": 0.0,
@@ -192,7 +179,6 @@ PARAM_DEFAULTS: dict = {
     "fov_upper_deg": 52.0, "lidar_min_range": 0.1, "lidar_max_range": 40.0,
     "range_noise_sigma": 0.01, "lidar_pattern": "mid360", "lidar_pattern_file": "",
     "mode_switch_delay": 1.0, "initial_motion_state": 1, "initial_policy": 0,
-    "mode_publish_rate_hz": 2.0,
     "locomotion": "policy", "stairs": "fitted",
     "motor_model": "ideal", "trunk_inertial": "urdf", "foot_solref": [0.02, 1.0],
     "foot_friction": [1.0, 0.005, 0.0001], "actuator": "qfrc", "integrator": "euler",
@@ -200,8 +186,7 @@ PARAM_DEFAULTS: dict = {
     "ppo_policy": "/home/syncrobotic/sim/policy/ppo/policy7.onnx",
     "himloco_policy": "/home/syncrobotic/sim/policy/isaacsim/policy_0812.onnx",
     "policy0_runner": "ppo", "policy1_runner": "himloco",
-    "physics_hz": 500.0, "pose_publish_hz": 50.0, "imu_publish_hz": 50.0,
-    "status_publish_hz": 2.0,
+    "physics_hz": 500.0,
     "props_json": "[]",
     # locomotion udp (locomotion/hardware_link.py; config/params/controller_profile.yaml)
     "link_command_port": 20001, "link_state_host": "127.0.0.1", "link_state_port": 30010,

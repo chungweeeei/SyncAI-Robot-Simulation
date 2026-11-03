@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""The walking body against a scripted command, without ROS: the A/B tool for
+"""The walking body against a scripted command, as fast as it runs: the A/B tool for
 the body's physics knobs (motor_model, trunk_inertial, foot_solref,
 foot_friction, actuator, integrator, cmd_delay_ms, torque_bw_hz, physics_hz;
 config/params/sim_params.yaml).
@@ -15,8 +15,8 @@ Each run spawns the robot (`--pose`, or `--before` metres before flight
 `--flight`'s first riser, facing up it), lets it stand `--settle` seconds,
 then drives every `--cmd "vx vy wz seconds"` segment in turn, sampling the
 body every physics step; a fall (the controller's posture check) ends the
-run. What it reports per run and on average is the list docs/findings.md
-finding 5 asks the robot for, so the two can be read side by side: whether
+run. What it reports per run and on average is what to compare with the
+robot's own numbers on the same stairs: whether
 it fell and when, the pitch (mean, 5th / 95th percentile, extremes), the
 roll extremes, stalls (the command above 0.3 m/s while the body makes less
 than 0.05 m/s for over 0.3 s), the speed along the command, the heading
@@ -25,9 +25,7 @@ log/gait/<name>.jsonl under this repository), the summary to stdout.
 
 Runs are deterministic: the sim has no noise of its own in the gait, so
 the spread comes from the start jitter (--jitter-xy, --jitter-yaw) — a
-smaller spread than the navigation stack's timing gives, but the same
-physics. The stack's own 1F <-> 2F batches (nav_test.py through the
-session) are the final word on a knob; this is what to run first.
+smaller spread than a real command stream gives, but the same physics.
 """
 
 from __future__ import annotations
@@ -52,7 +50,7 @@ STALL_S = 0.3  # s: standing still this long under such a command is a stall
 
 
 def parse_override(text: str) -> tuple[str, object]:
-    """key:=value as `ros2 run ... -p` takes it: JSON where it parses, else a string."""
+    """key:=value: JSON where it parses, else a string."""
     if ":=" not in text:
         raise argparse.ArgumentTypeError(f"-p wants key:=value, got {text!r}")
     key, raw = text.split(":=", 1)

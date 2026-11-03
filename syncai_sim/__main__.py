@@ -1,22 +1,27 @@
-"""python3 -m syncai_sim: run the simulator, as a ROS 2 node by default.
+"""python3 -m syncai_sim: run the simulator at wall-clock pace.
 
-    python3 -m syncai_sim [--teleop] [--headless] [--no-ros]
-                          [--system-config INI] [--map DIR] [--seconds S]
-                          [--locomotion policy|kinematic|udp] [--visual-mesh voxels|pointcloud|tsdf]
-                          [--visual-look ramp|photo]
+    python3 -m syncai_sim [--teleop] [--headless] [--system-config INI] [--map DIR]
+                          [--seconds S] [--locomotion policy|kinematic|udp]
+                          [--visual-mesh voxels|pointcloud|tsdf] [--visual-look ramp|photo]
                           [--profile PARAMS.yaml ...] [-p key:=value ...]
-                          [--ros-args --params-file ... -p key:=value ...]
 
-Everything after `--ros-args` goes to rclpy (the params file is
-config/params/sim_params.yaml; see it for every setting). Without ROS the
-same settings come from --profile (a params YAML, e.g.
-config/params/controller_profile.yaml, applied over the defaults) and -p.
-The INI (config/system.ini relative to the cwd, i.e. the workspace root)
-gives the robot_id, the map and the spawn pose, as it does for every launch
-file. The browser viewer (web_view.py, the `web_view_port` parameter) is
+Settings: config.PARAM_DEFAULTS, then config/params/sim_params.yaml (always,
+it documents every key), then each --profile in order (e.g.
+config/params/controller_profile.yaml), then -p, then the flags. The INI
+(config/system.ini relative to the cwd, i.e. the workspace root, or
+$SYNCAI_SYSTEM_INI) gives the map and the spawn pose.
+
+The sim talks to the outside over UDP only:
+
+    driver_link udp      the sim answers as the gait controller on the ASCII
+                         link (driver/controller_link.py: AXES / MODE in on
+                         50051, IMU / joints / MODE_STATE / BMS out to 50010)
+    locomotion udp       the joints are a controller process's
+                         (locomotion/hardware_link.py: the body's record out to
+                         30010, joint commands in on 20001)
+
+The browser viewer (viewer/web_view.py, the `web_view_port` parameter) is
 served unless --headless; --teleop puts the driving controls on its panel.
-`--locomotion udp` (the joints handed to a controller over the hardware
-link) is ROS-free: the sim talks UDP only in that mode.
 """
 
 from __future__ import annotations
@@ -27,92 +32,44 @@ import os
 import sys
 
 # Before numpy is imported anywhere below: numpy's OpenBLAS starts a worker
-# per CPU and the workers busy-wait after each call. The node's only BLAS
-# work is 4x4 TF algebra at 50 Hz (publish_pose), which is single-threaded
-# anyway, and the calls come faster than the workers' spin timeout, so three
-# of them never slept: the ROS node alone, headless, was 350 % CPU; with one
-# thread it is 47 % (2026-10-24).
+# per CPU and the workers busy-wait after each call. The sim's BLAS work is
+# small 4x4 / 3x3 algebra many times a second, single-threaded anyway, and the
+# calls come faster than the workers' spin timeout, so three of them never
+# slept: 350 % CPU for a headless sim, 47 % with one thread (2026-10-24).
 os.environ.setdefault("OPENBLAS_NUM_THREADS", "1")
+
+DEFAULT_PROFILE = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                               "config", "params", "sim_params.yaml")
 
 
 def main(argv=None) -> int:
     argv = sys.argv[1:] if argv is None else argv
-    if "--ros-args" in argv:
-        i = argv.index("--ros-args")
-        own, ros_args = argv[:i], argv[i:]
-    else:
-        own, ros_args = argv, []
     ap = argparse.ArgumentParser(prog="python3 -m syncai_sim", description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--teleop", action="store_true", help="driving controls on the viewer's panel")
     ap.add_argument("--headless", action="store_true", help="no browser viewer")
-    ap.add_argument("--no-ros", action="store_true", help="run without ROS (viewer / teleop only)")
     ap.add_argument("--system-config", default=None, help="the instance INI (default config/system.ini)")
     ap.add_argument("--map", default=None, help="map/<name> directory (default: the INI's [map])")
     ap.add_argument("--seconds", type=float, default=None, help="exit after this much wall time")
     ap.add_argument("--locomotion", choices=("policy", "kinematic", "udp"), default=None,
-                    help="override the locomotion parameter (default: the params file's, policy)")
+                    help="override the locomotion parameter (default: the profiles', policy)")
+    ap.add_argument("--visual-mesh", choices=("voxels", "pointcloud", "tsdf"), default=None,
+                    help="the site the viewer starts with (default: voxels); the panel switches")
+    ap.add_argument("--visual-look", choices=("ramp", "photo"), default=None,
+                    help="the site's look (default: ramp); photo needs config/colour/<map>.npz "
+                         "(scripts/colour_map.py)")
     ap.add_argument("--profile", action="append", default=[], metavar="PARAMS.yaml",
-                    help="a params YAML applied over the defaults (repeatable, in order); "
+                    help="a params YAML applied after sim_params.yaml (repeatable, in order); "
                          "config/params/controller_profile.yaml is the udp locomotion's")
     ap.add_argument("-p", action="append", default=[], metavar="key:=value", dest="overrides",
-                    help="one parameter, ros2's spelling (applied after --profile)")
-    ap.add_argument("--visual-mesh", choices=("voxels", "pointcloud", "tsdf"), default=None,
-                    help="the site the viewer starts with (default: the params file's, voxels); "
-                         "the panel switches between them")
-    ap.add_argument("--visual-look", choices=("ramp", "photo"), default=None,
-                    help="the site's look (default: the params file's, ramp); photo needs "
-                         "config/colour/<map>.npz (scripts/colour_map.py)")
-    a = ap.parse_args(own)
+                    help="one parameter (applied after the profiles)")
+    a = ap.parse_args(argv)
 
     from syncai_sim.config import read_ini
     ini = read_ini(a.system_config)
-    print(f"[sim] INI {ini.path}: robot_id {ini.robot_id}, map {ini.map_dir or '(none)'}, "
-          f"initial_pose {ini.initial_pose}", flush=True)
-
-    if a.no_ros:
-        return _run_without_ros(ini, a)
-
-    import rclpy
-    from syncai_sim.ros.ros_node import ParamNode, SimNode, Spinner, build_sim_config, make_frames, run_loop
-    from syncai_sim.envs.simulator import Simulator
-
-    rclpy.init(args=ros_args)
-    pn = ParamNode(ini.robot_id)
-    params = pn.values()
-    pn.destroy_node()
-    _apply_cli(params, a)
-    if params["locomotion"] == "udp":
-        raise SystemExit("locomotion udp is ROS-free (the sim talks UDP only): run with --no-ros, "
-                         "or scripts/controller_bench.py")
-    cfg = build_sim_config(ini, params)
-    log = print
-    sim = Simulator(cfg, log=log)
-    spawn = _spawn_pose(ini, params)
-    sim.spawn(*spawn[:2], spawn[3], spawn[2])
-
-    node = SimNode(ini, sim, params, make_frames(ini.robot_id))
-    if params["publish_map_cloud"]:
-        from syncai_sim.visuals.map_cloud import load_or_build
-        clouds = load_or_build(cfg.map_dir, cfg.cache_dir, sim.world, log=log)
-        if clouds:
-            node.publish_map_clouds(clouds)
-    spinner = Spinner(node)
-    spinner.start()
-    teleop, viewer_factory = _viewer(a, sim, spawn, params["web_view_port"], log)
-    try:
-        run_loop(node, viewer_factory, teleop, True, a.seconds, log)
-    except KeyboardInterrupt:
-        pass
-    finally:
-        # rclpy raises from a spinning executor on shutdown; a Ctrl-C is a
-        # normal end here, so swallow what the teardown itself throws.
-        for fn in (spinner.stop, node.destroy_node, rclpy.shutdown):
-            try:
-                fn()
-            except Exception:
-                pass
-    return 0
+    print(f"[sim] INI {ini.path}: map {ini.map_dir or '(none)'}, initial_pose {ini.initial_pose}",
+          flush=True)
+    return run(ini, a)
 
 
 def _viewer(a, sim, spawn, web_port: int, log):
@@ -135,10 +92,11 @@ def _viewer(a, sim, spawn, web_port: int, log):
     return teleop, factory
 
 
-def _apply_cli(params: dict, a) -> dict:
-    """The command line's settings over `params`: profiles, -p, then the flags."""
-    from syncai_sim.config import apply_overrides, load_profile
-    for path in a.profile:
+def settings(a) -> dict:
+    """PARAM_DEFAULTS, sim_params.yaml, the profiles, -p, then the flags."""
+    from syncai_sim.config import PARAM_DEFAULTS, apply_overrides, load_profile
+    params = dict(PARAM_DEFAULTS)
+    for path in [DEFAULT_PROFILE, *a.profile]:
         params.update(load_profile(path))
     apply_overrides(params, a.overrides)
     if a.map:
@@ -159,16 +117,33 @@ def _spawn_pose(ini, params) -> tuple[float, float, float, float]:
     return float(s[0]), float(s[1]), float(s[2]), float(s[3])
 
 
-def _run_without_ros(ini, a) -> int:
-    """Viewer + teleop + the same physics loop, no publications."""
+def run(ini, a) -> int:
+    """The physics loop at wall-clock pace: the UDP links polled and ticked,
+    the lidar scanned at its rate, the viewer synced at its own."""
     import time
-    from syncai_sim.config import PARAM_DEFAULTS, build_sim_config
+    from syncai_sim.config import build_sim_config
     from syncai_sim.envs.simulator import Simulator
-    params = _apply_cli(dict(PARAM_DEFAULTS), a)
+    params = settings(a)
+    if params["driver_link"] not in ("fake", "udp"):
+        raise SystemExit(f"driver_link {params['driver_link']!r}: fake | udp")
+    if params["driver_link"] == "udp" and params["locomotion"] == "udp":
+        # Both are the controller's command port: the sim cannot be the
+        # controller and the controller's hardware at once.
+        raise SystemExit("driver_link udp plays the gait controller; locomotion udp hands the "
+                         "joints to one: pick one")
     cfg = build_sim_config(ini, params)
     sim = Simulator(cfg)
     spawn = _spawn_pose(ini, params)
     sim.spawn(*spawn[:2], spawn[3], spawn[2])
+    link = None
+    if params["driver_link"] == "udp":
+        from syncai_sim.driver.controller_link import ControllerLink, LinkConfig
+        link = ControllerLink(sim, sim.driver, LinkConfig(
+            command_port=params["controller_command_port"],
+            telemetry_port=params["controller_telemetry_port"],
+            telemetry_hz=params["controller_telemetry_hz"],
+            battery_soc=params["battery_soc"],
+            battery_drain_per_hour=params["battery_drain_per_hour"]))
     teleop, factory = _viewer(a, sim, spawn, params["web_view_port"], print)
     viewer = factory() if factory else None
     dt = sim.model.opt.timestep
@@ -190,10 +165,14 @@ def _run_without_ros(ini, a) -> int:
             if viewer is not None and not viewer.is_running():
                 break
             steps = max(1, min(int((now - next_t) / dt) + 1, max_catch_up))
+            if link is not None:
+                link.poll()
             if teleop:
                 teleop.apply(sim)
             for _ in range(steps):
                 sim.step()
+            if link is not None:
+                link.tick(sim.sim_time)
             next_t += steps * dt
             if sim.sim_time >= next_scan:
                 next_scan = sim.sim_time + 1.0 / cfg.lidar.scan_rate_hz
@@ -209,13 +188,13 @@ def _run_without_ros(ini, a) -> int:
             if sim.sim_time >= next_print:  # steps come in catch-up batches: never ==
                 next_print += 5.0
                 st = sim.status()
-                link = (f"  link cmds={st['link']['commands']} states={st['link']['states']} "
-                        f"trips={st['link']['watchdog_trips']}" if "link" in st else "")
+                hw = (f"  link cmds={st['link']['commands']} states={st['link']['states']} "
+                      f"trips={st['link']['watchdog_trips']}" if "link" in st else "")
                 rt = sim.sim_time / (now - t_start)
                 print(f"[sim] t={sim.sim_time:6.1f}  x{rt:.2f}  scan {scan_ms:.1f} ms ({n} pts)  "
                       f"{st['last_event']}  xy=({st['x']:.2f},{st['y']:.2f}) z={st['z_ground']:.2f} "
                       f"pitch={math.degrees(st['pitch']):.1f}deg  coll={st['collisions']} "
-                      f"falls={st['falls']}{link}", flush=True)
+                      f"falls={st['falls']}{hw}", flush=True)
             sleep = next_t - time.perf_counter()
             if sleep > 0:
                 time.sleep(sleep)
@@ -224,6 +203,8 @@ def _run_without_ros(ini, a) -> int:
     finally:
         if viewer is not None:
             viewer.close()
+        if link is not None:
+            link.close()
         sim.close()
     return 0
 

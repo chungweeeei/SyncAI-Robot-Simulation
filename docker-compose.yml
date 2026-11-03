@@ -1,6 +1,5 @@
 # =============================================================================
-# One container: the workspace's nav stack + the MuJoCo sim, on a DDS domain of
-# their own.
+# One container: the MuJoCo sim, its browser viewer and its UDP links. No ROS.
 #
 #   cp .env.example .env            # set ROBOT_WS to your workspace checkout
 #   docker compose build
@@ -8,24 +7,14 @@
 #   docker compose logs -f sim      # the sim's output
 #   docker compose exec sim bash    # then see README "Running"
 #
-# Why one container and not a sim container beside robot01: the sim replaces
-# the lidar driver, Point-LIO, the localizer and driver_manager, so it has to
-# share a DDS domain with the planner / controller / task_runner it is testing.
-# Starting those a second time next to a live robot01 would publish over the
-# real ones on domain 1 (the workspace's docs/localizer-offline-replay.md has
-# the same warning), so the whole stack is started HERE, from the mounted
-# workspace, on domain 42 with loopback-only DDS (config/cyclonedds.xml) — the
-# sim can never be heard outside this container.
+# The workspace is mounted, not copied, for two things only: the maps under
+# its map/ and the robot's URDF and meshes under src/syncai_bringup. Nothing
+# in it is built or run here.
 #
-# The workspace is mounted, not copied: the sim exercises whatever is built in
-# its install/ right now, and the maps live under its map/. Build the
-# workspace first with its own docker-compose.build.yml; this image is derived
-# from the same `syncai-robot-base`, so the artefacts load here unchanged.
-#
-# The instance INI is bind-mounted over the workspace's config/system.ini the
-# way the robot's compose does it, so every launch file reads robot_id sim01
-# and [map] name without a single workspace edit. It is a single-file mount:
-# edit it in place (no rename), as the workspace's smoke test does.
+# The instance INI is bind-mounted over the workspace's config/system.ini, so
+# the map and the spawn pose come from it (config.py resolves its relative
+# paths from the workspace root). It is a single-file mount: edit it in place
+# (no rename).
 # =============================================================================
 
 name: syncai-sim
@@ -37,63 +26,43 @@ services:
       dockerfile: Dockerfile
     image: syncai-robot-sim
     container_name: syncai-sim
-    # Host uid/gid so files written into the mounted workspace (build/, log/,
-    # cache/) keep the host user's ownership; HOME is world-writable in the
-    # base image for exactly this (same arrangement as the workspace's build
-    # container).
+    # Host uid/gid so files written into the mounts (cache/, log/) keep the
+    # host user's ownership; HOME is world-writable in the image for this.
     user: "${UID:-1000}:${GID:-1000}"
     working_dir: /home/syncrobotic/robot_ws
     stdin_open: true
     tty: true
-    # PID 1 is the entry script (then `sleep infinity`), which never reaps: a node whose `ros2 launch`
-    # parent is stopped first (lio_bridge, every session stop) stays a zombie
-    # until the container goes. Docker's init reaps them.
+    # PID 1 is the entry script (then `sleep infinity`), which never reaps;
+    # Docker's init reaps what the shells under `docker compose exec` leave.
     init: true
-    # Two ways to sit on the network (.env.example says which knob is which):
-    #
-    #   isolated (the default): a bridge network, ROS_DOMAIN_ID 42, this
-    #     repo's cyclonedds.xml and sim01.ini. Safe anywhere, including next
-    #     to a live robot01 on the same machine (its Jetson).
-    #   integrated (SIM_NETWORK_MODE=host, domain 1, the workspace's
-    #     cyclonedds.xml and an instance file of its own): the robot's own
-    #     topology, so syncai_backend's compose — host network, domain 1, the
-    #     same two files — talks to the sim as it talks to robot01. Both DDS
-    #     configs are loopback-only with multicast off, so nothing leaves the
-    #     machine either way; what this mode must never do is run on a robot's
-    #     Jetson, where the real stack shares that loopback on domain 1.
-    #     With a host network the ports below are discarded (the services
-    #     listen on the host directly; OrbStack forwards them to macOS).
+    # bridge (the default): the ports below reach the sim from the host. host:
+    # the sim's sockets are the host's (the ports below are then ignored);
+    # what a controller process on the host machine finds most simply.
     network_mode: "${SIM_NETWORK_MODE:-bridge}"
     ports:
-      - "${SIM_WEB_VIEW_PORT:-8080}:8080"   # the sim's browser viewer (web_view.py), http://localhost:8080
-      - "8765:8765"   # foxglove_bridge: Foxglove on the host, ws://localhost:8765
+      - "${SIM_WEB_VIEW_PORT:-8080}:8080"   # the browser viewer (viewer/web_view.py)
+      # The sim's UDP inputs. Its outputs go where the params say:
+      # link_state_host:link_state_port (30010), controller_telemetry_port
+      # (50010); from a bridge network to a program on the host, set
+      # link_state_host to host.docker.internal.
+      - "20001:20001/udp"   # locomotion udp: a controller's joint commands
+      - "50051:50051/udp"   # driver_link udp: AXES / MODE for the sim as the gait controller
     environment:
       HOME: /home/syncrobotic
-      ROS_DOMAIN_ID: "${SIM_ROS_DOMAIN_ID:-42}"
-      RMW_IMPLEMENTATION: rmw_cyclonedds_cpp
-      CYCLONEDDS_URI: "${SIM_CYCLONEDDS_URI:-/home/syncrobotic/sim/config/cyclonedds.xml}"
-      # numba's parallel ray caster: the image's TBB is older than numba wants
-      # (a warning per process otherwise); OpenMP is there via gcc's libgomp.
+      # numba's parallel ray caster on OpenMP (gcc's libgomp).
       NUMBA_THREADING_LAYER: omp
-      # Plain-text logs, prompt Python output (same as the robot's compose).
-      RCUTILS_COLORIZED_OUTPUT: "0"
       PYTHONUNBUFFERED: "1"
-      ROS_LOG_DIR: /tmp/ros_log
       # What the container starts (scripts/sim_entry.sh): the sim and its
-      # browser viewer, unless SIM_AUTOSTART is 0 (set it for
-      # scripts/run_session.sh, which starts a sim of its own).
+      # browser viewer, unless SIM_AUTOSTART is 0.
       SIM_AUTOSTART: "${SIM_AUTOSTART:-1}"
-      SIM_ARGS: "${SIM_ARGS:---teleop}"  # appended to --no-ros: no ROS at start
+      SIM_ARGS: "${SIM_ARGS:---teleop}"
     volumes:
       - ${ROBOT_WS:-../SyncAI-Robot-Workspace}:/home/syncrobotic/robot_ws
       - .:/home/syncrobotic/sim
-      # The instance file, over the workspace's config/system.ini as on the
-      # robot. Single-file and edited in place by whoever writes it (the
-      # backend rewrites [map] name when a map is activated), never renamed
-      # over: a rename gives the content a new inode this mount never sees.
+      # The instance file (the map, the spawn), over the workspace's
+      # config/system.ini. Single-file: edit it in place, never rename over it
+      # (a rename gives the content a new inode this mount never sees).
       - ${SIM_INSTANCE_INI:-./config/instances/sim01.ini}:/home/syncrobotic/robot_ws/config/system.ini
-    tmpfs:
-      - /tmp/ros_log:size=134217728,mode=1777
     # The sim and its viewer at start (http://localhost:8080), then the
     # container stays up for `docker compose exec sim bash` whatever the sim
     # does; its output is `docker compose logs -f sim`.

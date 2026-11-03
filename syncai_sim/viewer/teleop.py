@@ -4,11 +4,11 @@ loop under the sim lock.
 
 A command, once set, is sent every loop while it is non-zero and once more
 as a stop when it goes to zero, then nothing: a teleop that set 0 every loop
-would override cmd_vel / the driver's AXES with the panel untouched, and the
-viewer and the nav stack can run together. `drive=False` (the session, no
---teleop) keeps only the teleport: the nav stack owns cmd_vel and
-driver_manager the motion keys, but putting the robot back on the spawn
-after a fall is wanted there most.
+would override the AXES arriving on the UDP link with the panel untouched,
+so the panel and a program on the link can drive together. `drive=False`
+(no --teleop) keeps only the teleport: whatever is on the link owns the
+command and the motion keys, but putting the robot back on the spawn after
+a fall is wanted there most.
 
 Until 2026-10-26 this was the GLFW window's keyboard (hold-to-drive arrows,
 press timers for a browser that reported no key releases); the window went

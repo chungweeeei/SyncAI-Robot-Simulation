@@ -1,11 +1,7 @@
-"""The site as a point cloud for Foxglove: `map.pcd`, thinned, one per storey.
-
-Foxglove on the host draws millions of points on the GPU (and the browser
-viewer, web_view.py, shows the same clouds on request). The sim publishes
-this once, latched (`sim/map_cloud/storey<N>`,
-frame `map`), with the points' intensity, which is what makes a lidar map
-legible — floor markings, signs, glass — and a colour-by-height mode is one
-click in the panel.
+"""The site as a point cloud: `map.pcd`, thinned, one per storey, for the
+browser viewer's "Lidar map" layer (viewer/web_view.py), with the points'
+intensity, which is what makes a lidar map legible — floor markings, signs,
+glass.
 
 The points are those the picture shows elsewhere (pcd_mesh.on_site: on the
 cleaned voxels, under the per-storey ceiling cut), then a `voxel` grid keeps
@@ -47,7 +43,7 @@ def load_or_build(map_dir: str, cache_dir: str, world: World, voxel: float = 0.0
     """storey -> (N, 4) float32 x y z intensity; None without map.pcd."""
     pcd_path = os.path.join(map_dir, "map.pcd")
     if not os.path.isfile(pcd_path):
-        log(f"[map_cloud] {pcd_path} not found; no map cloud for Foxglove")
+        log(f"[map_cloud] {pcd_path} not found; no lidar map layer")
         return None
     st = os.stat(pcd_path)
     key = json.dumps({"format": FORMAT, "pcd": [st.st_size, int(st.st_mtime)],

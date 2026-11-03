@@ -1,13 +1,13 @@
-"""The simulator proper, with no ROS in it: world + robot + physics + sensors.
+"""The simulator proper: world + robot + physics + sensors, in one object.
 
-`ros/ros_node.py` wraps this in a node and `__main__.py` drives it; this module
-can also be driven by hand (`--no-ros --teleop`) to check a map or the kinematics
-without the stack. One `step()` is one physics tick (`physics_hz`, 500 by
+`__main__.py` drives it at wall-clock pace (and the benches in scripts/ as
+fast as they like); everything the sim tells the outside goes over UDP
+(driver/controller_link.py, locomotion/hardware_link.py). One `step()` is one physics tick (`physics_hz`, 500 by
 default, the params' value): the fake driver's pending switches are applied, the kinematic base
 is advanced (`kinematics.advance`), the mocap handle is placed, the prop movers
 are walked, MuJoCo steps, and a trunk pushed off its target by a prop is
 detected. `scan()` renders one lidar scan (`VoxelGrid.cast` for the site,
-`prop_rays` for the props) and `imu_sample()` one IMU reading.
+`prop_rays` for the props).
 
 Three locomotions (`SimConfig.locomotion`):
 
@@ -16,29 +16,23 @@ Three locomotions (`SimConfig.locomotion`):
     policy      the body walks: the G23's own ONNX policies drive twelve PD
                 joints (locomotion/legged.py, policy.py) on a patch of the
                 voxel grid (terrains/terrain_patch.py); MuJoCo decides where
-                the body goes, and `state` is read back from it, so status,
-                the lidar and the ROS side are the same in both. No step rule:
+                the body goes, and `state` is read back from it, so status
+                and the lidar are the same in both. No step rule:
                 whether a policy climbs a flight is now its own business,
                 which is the point.
     udp         the same walking body, its joints handed to a controller
                 process over the hardware link (locomotion/hardware_link.py):
                 every step sends the body's measurements and applies the
                 command that came back. The controller's RL or MPC decides;
-                the sim is its hardware. ROS-free: the panel's keys and AXES
-                go to the controller (driver/udp_driver.py), nothing else is
-                served, and a fall is only counted (the controller locks
-                itself).
+                the sim is its hardware. The panel's keys and AXES go to the
+                controller (driver/udp_driver.py), and a fall is only counted
+                (the controller locks itself).
 
-Frames handed out (4x4, metres):
+Poses handed out (4x4, metres; MuJoCo's world is the map frame):
 
-    T_map_base   base_link in the map (MuJoCo's world IS the map frame)
-    T_map_imu    lidar_top_imu = pointlio_body in the map
-    T_map_odom   where the sim says Point-LIO's odom frame sits — gravity
-                 aligned at the spawn pose, so lio_odom starts at the identity
-                 like the real one, and moved on every teleport so that the
-                 odom chain stays continuous while map -> odom jumps, which is
-                 what the real localizer does on a relocalize (lio_bridge's
-                 own comment says so).
+    T_map_base   base_link in the map
+    T_map_imu    lidar_top_imu in the map: the frame the lidar's cloud is in
+    T_map_lidar  lidar_top in the map: where its rays start
 """
 
 from __future__ import annotations
@@ -59,7 +53,7 @@ from syncai_sim.locomotion.kinematics import BaseState, Event, KinematicsConfig,
 from syncai_sim.locomotion.hardware_link import HardwareLink, HardwareLinkConfig
 from syncai_sim.locomotion.legged import LeggedController
 from syncai_sim.sensor.lidar import LidarConfig, LidarModel, rays_along_motion
-from syncai_sim.sensor.proprioception import LidarImu, Sensors
+from syncai_sim.sensor.proprioception import Sensors
 from syncai_sim.locomotion.policy import load_policies
 from syncai_sim.sensor.prop_rays import ray_aabb, ray_vertical_cylinder
 from syncai_sim.entity.robot import JOINTS, LEGS, RobotConfig, RobotModel, load_robot
@@ -119,7 +113,7 @@ class SimConfig:
     link_watchdog_ms: float = 100.0
     controller_command_port: int = 50051
     # A late loop catches up at most this much sim time in one burst (the
-    # ROS-free loop and the benches; ros_node has its own 0.1). The udp
+    # main loop and controller_bench). The udp
     # profile sets 8 ms so that a controller is never handed a burst of states
     # while its command stays the same.
     max_catch_up_s: float = 0.1
@@ -137,15 +131,6 @@ class Mover:
     pos: np.ndarray = field(default_factory=lambda: np.zeros(2))
     z: float = 0.0
 
-
-def planar(T: np.ndarray) -> np.ndarray:
-    """The yaw-and-translation part of a 4x4 pose (gravity-aligned frame)."""
-    yaw = math.atan2(T[1, 0], T[0, 0])
-    P = np.eye(4)
-    c, s = math.cos(yaw), math.sin(yaw)
-    P[:2, :2] = [[c, -s], [s, c]]
-    P[:3, 3] = T[:3, 3]
-    return P
 
 
 def pose_matrix(pos, R) -> np.ndarray:
@@ -218,7 +203,6 @@ class Simulator:
         self.data = mujoco.MjData(self.model)
         self.motors: Motors | None = None
         self.sensors: Sensors | None = None
-        self.lidar_imu: LidarImu | None = None
         self.legs: LeggedController | None = None  # policy: the in-process RL backend
         self.link: HardwareLink | None = None  # udp: the controller at the other end
         self.patch: TerrainPatch | None = None
@@ -232,7 +216,6 @@ class Simulator:
             self.patch = TerrainPatch(self.world.grid, cfg.terrain, self.surface,
                                       None if stairs is None else stairs.regions)
             self.sensors = Sensors(self.model, self.data, self.info, self.motors)
-            self.lidar_imu = LidarImu(self.model, self.data)
             if cfg.locomotion == "policy":
                 self.legs = LeggedController(self.model, self.data, self.info.base_body,
                                              load_policies(cfg.ppo_policy, cfg.himloco_policy, log=log,
@@ -260,7 +243,6 @@ class Simulator:
         self.cmd = np.zeros(3)
         self.cmd_time = -math.inf
         self.sim_time = 0.0
-        self.T_map_odom = np.eye(4)
         self.prop_collisions = 0
         self._last_prop_hit = -math.inf
         self.movers: list[Mover] = []
@@ -280,7 +262,7 @@ class Simulator:
 
     # -- placement ---------------------------------------------------------------
     def spawn(self, x: float, y: float, yaw: float, z_hint: float | None = None) -> None:
-        """Put the robot down and define the odom frame there."""
+        """Put the robot down at (x, y, yaw), on the floor nearest z_hint."""
         self.state = place(self.state, self.grid, self.cfg.kin, x, y, yaw, z_hint)
         self._put_body()
         for name, (bid, pos) in self._free_props.items():
@@ -289,20 +271,16 @@ class Simulator:
             self._place_mover(m, m.waypoints[0])
         mujoco.mj_forward(self.model, self.data)
         self._lidar_poses[:] = self.T_map_lidar()
-        self.T_map_odom = planar(self.T_map_imu())
         self.log(f"[sim] spawned at ({x:.2f}, {y:.2f}, yaw {yaw:.2f}) on ground z "
                  f"{self.state.z_ground:.2f}")
 
     def teleport(self, x: float, y: float, yaw: float, z_hint: float | None = None) -> None:
-        """Move the robot (a kidnap): odom stays continuous, map -> odom jumps."""
-        before = planar(self.T_map_imu())
+        """Move the robot (a kidnap): the props stay where they are."""
         self.state = place(self.state, self.grid, self.cfg.kin, x, y, yaw, z_hint)
         self._put_body()
         self._lidar_poses[:] = self.T_map_lidar()  # a kidnap: no motion to smear over
-        after = planar(self.T_map_imu())
-        self.T_map_odom = after @ np.linalg.inv(before) @ self.T_map_odom
         self.log(f"[sim] teleported to ({x:.2f}, {y:.2f}, yaw {yaw:.2f}), ground z "
-                 f"{self.state.z_ground:.2f}; map->odom moved")
+                 f"{self.state.z_ground:.2f}")
 
     def _put_body(self) -> None:
         """The body at `state`, at rest. Walking: level, standing on its feet in
@@ -496,7 +474,7 @@ class Simulator:
 
     def joint_states(self) -> tuple[list[str], np.ndarray]:
         """The twelve leg joints by URDF name: the walking body's, or the
-        statue's baked standing angles (robot.py), for robot_state_publisher."""
+        statue's baked standing angles (robot.py)."""
         names = [f"{leg}_{j}_joint" for leg in LEGS for j in JOINTS]
         if self.legged:
             return names, self.motors.q()
@@ -539,20 +517,17 @@ class Simulator:
         p, R = sc.body_frame(self.data, self.info.lidar_body)
         return pose_matrix(p, R)
 
-    def T_odom_imu(self) -> np.ndarray:
-        return np.linalg.inv(self.T_map_odom) @ self.T_map_imu()
-
     # -- sensors -----------------------------------------------------------------
     def _record_lidar_pose(self) -> None:
         self._lidar_poses[self._lidar_i % self._steps_per_scan] = self.T_map_lidar()
         self._lidar_i += 1
 
     def scan(self) -> np.ndarray:
-        """One lidar scan as (K, 4) float32 xyz+intensity in the pointlio_body
+        """One lidar scan as (K, 4) float32 xyz+intensity in the lidar_top_imu
         frame, at the scan's end. Each ray is cast from where the lidar was
         when it fired during the scan window (the last `_steps_per_scan`
         steps), then the cloud is expressed in the end-of-scan body frame:
-        the motion-compensated cloud Point-LIO publishes."""
+        motion-compensated, as a LIO's body cloud is."""
         k = self._steps_per_scan
         chrono = (np.arange(k) + self._lidar_i) % k  # ring slots, oldest first
         dirs_l, t = self.lidar.directions()
@@ -583,21 +558,6 @@ class Simulator:
                 R = d.geom_xmat[g].reshape(3, 3)
                 ext = np.abs(R) @ size  # world-axis half extents of the rotated box
                 yield ray_aabb(origins, dirs_w, pos - ext, pos + ext)
-
-    def imu_sample(self) -> tuple[np.ndarray, np.ndarray]:
-        """(gyro rad/s, accel in g) in the IMU frame: the yaw rate and gravity,
-        or, walking, the gyro and accelerometer on lidar_top_imu."""
-        if self.legged:
-            return self.lidar_imu.sample()
-        T = self.T_map_imu()
-        R = T[:3, :3]
-        vx, vy, wz = (self.cmd if time.monotonic() - self.cmd_time < self.cfg.cmd_timeout
-                      else (0.0, 0.0, 0.0))
-        moving = self.state.last_event is Event.MOVED
-        omega_w = np.array([0.0, 0.0, wz if moving else 0.0])
-        gyro = R.T @ omega_w
-        accel = R.T @ np.array([0.0, 0.0, 1.0])
-        return gyro, accel
 
     # -- status ------------------------------------------------------------------
     def status(self) -> dict:

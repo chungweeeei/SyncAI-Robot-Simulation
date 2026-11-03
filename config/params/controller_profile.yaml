@@ -1,44 +1,39 @@
 # The sim as a controller's hardware: the joints handed to a controller
 # process over the hardware link (syncai_sim/locomotion/hardware_link.py says
-# the protocol). An overlay on sim_params.yaml — ROS-free runs load it with
-# --profile (python3 -m syncai_sim --no-ros, scripts/controller_bench.py,
-# scripts/gait_bench.py); under ROS it would be a second --params-file, but
-# this mode has no ROS session: the sim talks UDP only.
+# the protocol). An overlay on sim_params.yaml, loaded with --profile
+# (python3 -m syncai_sim, scripts/controller_bench.py, scripts/gait_bench.py).
 #
 # The body is set the way a controller's own development simulation models
 # the robot, so what it sees here is what it would see there (README, "The
 # body's physics, as knobs", records where each value comes from and what
 # the A/B against the defaults measured).
-/**:
-  ros__parameters:
-    locomotion: udp
-    # Every physics step is one state datagram; at 1 kHz a controller's
-    # 1 ms loop sees a new timestamp each tick (500 works too: it reads
-    # each state twice).
-    physics_hz: 1000.0
-    # A late loop catches up at most this much sim time in one burst, so a
-    # controller is never handed a quarter second of states in a few ms
-    # while its command stays the same (the default 0.1 is the nav
-    # session's).
-    max_catch_up_s: 0.008
-    # The J60's torque-speed envelope, rotor inertia, friction and damping
-    # instead of the URDF's flat effort clamp.
-    motor_model: j60
-    # The vendor MJCF's trunk (9.368 kg, 2.5x the URDF's pitch inertia).
-    trunk_inertial: vendor
-    # The vendor's contact parameters (stiffer than MuJoCo's default).
-    foot_solref: [0.005, 1.0]
-    foot_friction: [1.0, 0.01, 0.01]
-    # The hand-computed torque: a MuJoCo position actuator cannot apply a
-    # velocity target or a feed-forward torque, and an MPC sends both.
-    actuator: qfrc
-    integrator: euler
-    # The link's ports; the controller's --backend sim must use the same.
-    link_command_port: 20001
-    link_state_host: "127.0.0.1"
-    link_state_port: 30010
-    link_watchdog_ms: 100.0
-    # Where the panel's motion keys and AXES go: the controller's command
-    # port (the same number controller_link.py binds when the sim plays the
-    # controller for the nav session).
-    controller_command_port: 50051
+locomotion: udp
+# Every physics step is one state datagram; at 1 kHz a controller's
+# 1 ms loop sees a new timestamp each tick (500 works too: it reads
+# each state twice).
+physics_hz: 1000.0
+# A late loop catches up at most this much sim time in one burst, so a
+# controller is never handed a quarter second of states in a few ms
+# while its command stays the same (the default is 0.1).
+max_catch_up_s: 0.008
+# The J60's torque-speed envelope, rotor inertia, friction and damping
+# instead of the URDF's flat effort clamp.
+motor_model: j60
+# The vendor MJCF's trunk (9.368 kg, 2.5x the URDF's pitch inertia).
+trunk_inertial: vendor
+# The vendor's contact parameters (stiffer than MuJoCo's default).
+foot_solref: [0.005, 1.0]
+foot_friction: [1.0, 0.01, 0.01]
+# The hand-computed torque: a MuJoCo position actuator cannot apply a
+# velocity target or a feed-forward torque, and an MPC sends both.
+actuator: qfrc
+integrator: euler
+# The link's ports; the controller's --backend sim must use the same.
+link_command_port: 20001
+link_state_host: "127.0.0.1"
+link_state_port: 30010
+link_watchdog_ms: 100.0
+# Where the panel's motion keys and AXES go: the controller's command
+# port (the same number controller_link.py binds when the sim plays the
+# controller itself, driver_link udp).
+controller_command_port: 50051

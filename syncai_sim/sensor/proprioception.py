@@ -23,11 +23,11 @@ the floor, a stair, a prop — not a force threshold, so a foot resting on the
 ground with no load still counts.
 
 Two IMUs, as on the robot: `base_gyro` / `base_acc` sit on `base_link`
-(entity/robot.py adds the site; the robot's body IMU is in the trunk), and
-`imu_gyro` / `imu_acc` on `lidar_top_imu` are the lidar's own, which the
-stack's `livox/imu` carries (`LidarImu`). The lidar's sits ~0.4 m up, so its
-accelerometer sees the lever arm's omega x (omega x r) that the controller's
-filter must not.
+(entity/robot.py adds the site; the robot's body IMU is in the trunk) and
+are what this record reads; `imu_gyro` / `imu_acc` on `lidar_top_imu` are the
+lidar's own, in the model for whoever wants them. The lidar's sits ~0.4 m
+up, so its accelerometer sees the lever arm's omega x (omega x r) that a
+controller's filter must not.
 
 The RL backend does not call `read` (its runner reads MjData itself at
 50 Hz, locomotion/legged.py); the posture check and the trunk's contact
@@ -144,18 +144,3 @@ class Sensors:
         g = self.data.contact.geom[:n]
         return bool(np.any((self._trunk[g[:, 0]] & self._site[g[:, 1]])
                            | (self._trunk[g[:, 1]] & self._site[g[:, 0]])))
-
-
-class LidarImu:
-    """The MID360's built-in IMU on `lidar_top_imu`: (gyro rad/s, accel in g)."""
-
-    def __init__(self, model: mujoco.MjModel, data: mujoco.MjData,
-                 gyro: str = "imu_gyro", acc: str = "imu_acc"):
-        self.data = data
-        self._gyro = _sensor_adr(model, gyro)
-        self._acc = _sensor_adr(model, acc)
-
-    def sample(self) -> tuple[np.ndarray, np.ndarray]:
-        d = self.data
-        return (d.sensordata[self._gyro:self._gyro + 3].copy(),
-                d.sensordata[self._acc:self._acc + 3] / 9.81)

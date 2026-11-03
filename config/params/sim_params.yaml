@@ -1,168 +1,161 @@
-# Parameters of sim_node (python3 -m syncai_sim), loaded with
-#   --ros-args --params-file /home/syncrobotic/sim/config/params/sim_params.yaml
-# Keyed /**/sim_node like the workspace's params files, so the same file works
-# under any robot_id namespace. Frames are derived from robot_id at startup
-# (<robot_id>/pointlio_body ...), never written here.
+# Every sim parameter (config.PARAM_DEFAULTS has the same keys), with why
+# each value is what it is. python3 -m syncai_sim always loads this file, then
+# each --profile (config/params/controller_profile.yaml is the udp
+# locomotion's), then -p key:=value. A plain mapping: an unknown key is an
+# error at load.
 #
-# Every value here mirrors something the navigation stack assumes; the comment
-# names where. Change the two sides together.
-/**/sim_node:
-  ros__parameters:
-    use_sim_time: false   # the whole stack runs wall clock; stamps are `now`
+# Several values are the navigation stack's own numbers (the planner's step
+# height, the costmaps' radius, StairMode's policy): the comment names which,
+# so the kinematic rules and the stand-in driver stay comparable with it.
 
-    # --- world ---------------------------------------------------------------
-    # The map comes from the INI ([map] pcd -> its directory's octomap.bt), like
-    # planner_server.launch.py derives it; `map_dir` overrides it when set.
-    map_dir: ""
-    cache_dir: ""         # default: <sim repo>/cache/<map name>
-    # Viewer mesh only (world.py): faces higher than this above their column's
-    # lowest voxel are not in the picture (dp: every face is 3.5 M triangles,
-    # 3 m keeps 2.5 M; what the browser is sent, and what the llvmpipe window
-    # of before drew at 181 / 119 ms a frame). The lidar and the collision
-    # queries read the full grid regardless. 0 = draw all.
-    visual_max_height_above_column_floor_m: 3.0
-    plate_min_voxels: 16         # 18 k plates on dp; the floor under a prop is covered at 16, not at 100
-    clip_spikes_above_neighbours_m: 0.1   # the mapping robot's own feet and one-return posts (world.py); 0 keeps them
-    track_floor_fill_radius_m: 0.30       # put floor under the mapping robot where the map has none (world.py); 0 = off
-    track_clear_radius_m: 0.30            # erase what stands where the mapping robot's body was (world.py); 0 = off
-    floor_hole_max_cells: 25              # fill enclosed floor holes up to 0.25 m^2 (world.py); 0 = off
-    # Floor wherever the planner infers one (world.py): the passes of
-    # syncai_global_planner's SurfaceMapParams::hole_fill_passes. 0 = off.
-    planner_hole_fill_passes: 2
-    # The site the viewer starts with (its panel switches between them; each
-    # is built once and cached, site_tiles.py): "voxels" = the octomap's cubes,
-    # what the sim senses and the planner plans on; "pointcloud" = a smooth
-    # Poisson surface from <map>/map.pcd (pcd_mesh.py; dp ~3.5 min the first
-    # time; blurs thin structure, bubbles where the map is sparse); "tsdf" = a
-    # TSDF surface integrated from the mapping run's own keyframe patches
-    # (tsdf_mesh.py; dp ~5 min the first time; keeps thin structure, leaves
-    # unseen places open). All three shaded by the lidar's intensity. A
-    # picture either way.
-    visual_mesh: voxels
-    # The site's look (the panel's Look switch; visual.py): "ramp" = colour
-    # by height, shaded by the lidar's intensity; "photo" = the colour the
-    # mapping run's camera saw at each voxel (voxel_colour.py), from
-    # config/colour/<map>.npz built by scripts/colour_map.py out of the run's
-    # bag; without that file the ramp is shown. Grey where the camera never
-    # looked (the robot's back, ceilings).
-    visual_look: ramp
-    # Foxglove's site (map_cloud.py): map.pcd thinned to 6 cm, latched once on
-    # sim/map_cloud/storey<N> (dp: 3.7 M points, 59 MB; first build 11 s).
-    publish_map_cloud: true
-    # The browser viewer (--web-view, web_view.py): its port inside the
-    # container (docker-compose.yml maps it to SIM_WEB_VIEW_PORT, 8080).
-    web_view_port: 8080
+# --- world ---------------------------------------------------------------
+# The map comes from the INI ([map] pcd -> its directory's octomap.bt), like
+# planner_server.launch.py derives it; `map_dir` overrides it when set.
+map_dir: ""
+cache_dir: ""         # default: <sim repo>/cache/<map name>
+# Viewer mesh only (world.py): faces higher than this above their column's
+# lowest voxel are not in the picture (dp: every face is 3.5 M triangles,
+# 3 m keeps 2.5 M; what the browser is sent, and what the llvmpipe window
+# of before drew at 181 / 119 ms a frame). The lidar and the collision
+# queries read the full grid regardless. 0 = draw all.
+visual_max_height_above_column_floor_m: 3.0
+plate_min_voxels: 16         # 18 k plates on dp; the floor under a prop is covered at 16, not at 100
+clip_spikes_above_neighbours_m: 0.1   # the mapping robot's own feet and one-return posts (world.py); 0 keeps them
+track_floor_fill_radius_m: 0.30       # put floor under the mapping robot where the map has none (world.py); 0 = off
+track_clear_radius_m: 0.30            # erase what stands where the mapping robot's body was (world.py); 0 = off
+floor_hole_max_cells: 25              # fill enclosed floor holes up to 0.25 m^2 (world.py); 0 = off
+# Floor wherever the planner infers one (world.py): the passes of
+# syncai_global_planner's SurfaceMapParams::hole_fill_passes. 0 = off.
+planner_hole_fill_passes: 2
+# The site the viewer starts with (its panel switches between them; each
+# is built once and cached, site_tiles.py): "voxels" = the octomap's cubes,
+# what the sim senses and the planner plans on; "pointcloud" = a smooth
+# Poisson surface from <map>/map.pcd (pcd_mesh.py; dp ~3.5 min the first
+# time; blurs thin structure, bubbles where the map is sparse); "tsdf" = a
+# TSDF surface integrated from the mapping run's own keyframe patches
+# (tsdf_mesh.py; dp ~5 min the first time; keeps thin structure, leaves
+# unseen places open). All three shaded by the lidar's intensity. A
+# picture either way.
+visual_mesh: voxels
+# The site's look (the panel's Look switch; visual.py): "ramp" = colour
+# by height, shaded by the lidar's intensity; "photo" = the colour the
+# mapping run's camera saw at each voxel (voxel_colour.py), from
+# config/colour/<map>.npz built by scripts/colour_map.py out of the run's
+# bag; without that file the ramp is shown. Grey where the camera never
+# looked (the robot's back, ceilings).
+visual_look: ramp
+# The browser viewer (viewer/web_view.py): its port inside the container
+# (docker-compose.yml maps it to SIM_WEB_VIEW_PORT, 8080).
+web_view_port: 8080
 
-    # --- spawn ---------------------------------------------------------------
-    # Default: the INI's [initial_pose] (x, y, z = ground, yaw). z is a hint for
-    # which floor; the sim snaps to the ground under (x, y) nearest to it.
-    use_ini_initial_pose: true
-    spawn: [0.0, 0.0, 0.0, 0.0]   # x y z yaw, used when use_ini_initial_pose is false
+# --- spawn ---------------------------------------------------------------
+# Default: the INI's [initial_pose] (x, y, z = ground, yaw). z is a hint for
+# which floor; the sim snaps to the ground under (x, y) nearest to it.
+use_ini_initial_pose: true
+spawn: [0.0, 0.0, 0.0, 0.0]   # x y z yaw, used when use_ini_initial_pose is false
 
-    # --- robot geometry (syncai_global_planner / syncai_controller params) -----
-    lidar_height: 0.481          # lidar_top_imu over the ground when standing
-    robot_radius: 0.25           # the costmaps' inscribed radius
-    body_clearance: 0.6          # Octo3D / TerrainLayer body_clearance
-    min_obstacle_height: 0.1     # TerrainLayer min_obstacle_height
-    max_step_height: 0.17        # Octo3D max_step_height
-    stair_tread_window: 0.45     # a second riser within this travel = a flight (kinematics.py)
-    max_drop: 0.3                # never walked down in one step
-    require_backward_descent: true   # stair_descend_backwards must show as vx < 0
-    stair_policy: 1              # StairMode stair_policy_mode (HIMLOCO)
-    walk_vx_min: 0.0             # 0 = off; MPPI walk_vx_min is 0.30 if you want the dead zone
-    in_place_wz_min: 0.0         # 0 = off; MPPI in_place_wz_min is 0.45
+# --- robot geometry (syncai_global_planner / syncai_controller params) -----
+lidar_height: 0.481          # lidar_top_imu over the ground when standing
+robot_radius: 0.25           # the costmaps' inscribed radius
+body_clearance: 0.6          # Octo3D / TerrainLayer body_clearance
+min_obstacle_height: 0.1     # TerrainLayer min_obstacle_height
+max_step_height: 0.17        # Octo3D max_step_height
+stair_tread_window: 0.45     # a second riser within this travel = a flight (kinematics.py)
+max_drop: 0.3                # never walked down in one step
+require_backward_descent: true   # stair_descend_backwards must show as vx < 0
+stair_policy: 1              # StairMode stair_policy_mode (HIMLOCO)
+walk_vx_min: 0.0             # 0 = off; MPPI walk_vx_min is 0.30 if you want the dead zone
+in_place_wz_min: 0.0         # 0 = off; MPPI in_place_wz_min is 0.45
 
-    # --- lidar (Livox MID360, bringup.yaml publish_freq 10) -------------------
-    # mid360: the directions and firing times the robot's own lidar fired, from
-    # a recording (config/lidar/mid360_pattern.npz, built by
-    # scripts/lidar_pattern.py from the workspace's record/dp; lidar.py), frame
-    # after frame, each ray cast from where the lidar was when it fired.
-    # random: fresh uniform directions every scan, the sim before 2026-10-26.
-    lidar_pattern: mid360
-    lidar_pattern_file: ""       # "" = config/lidar/mid360_pattern.npz
-    points_per_scan: 20000       # random: exactly; mid360: at most (a frame fires ~16 k that return)
-    scan_rate_hz: 10.0
-    fov_lower_deg: -7.0          # random only: the recording fires what the MID360 fires (-7.0..52.7)
-    fov_upper_deg: 52.0
-    lidar_min_range: 0.1
-    lidar_max_range: 40.0
-    range_noise_sigma: 0.01      # along the ray; 2 cm pushes returns across the 0.1 m voxel steps (lidar.py)
+# --- lidar (Livox MID360, bringup.yaml publish_freq 10) -------------------
+# mid360: the directions and firing times the robot's own lidar fired, from
+# a recording (config/lidar/mid360_pattern.npz, built by
+# scripts/lidar_pattern.py from the workspace's record/dp; lidar.py), frame
+# after frame, each ray cast from where the lidar was when it fired.
+# random: fresh uniform directions every scan, the sim before 2026-10-26.
+lidar_pattern: mid360
+lidar_pattern_file: ""       # "" = config/lidar/mid360_pattern.npz
+points_per_scan: 20000       # random: exactly; mid360: at most (a frame fires ~16 k that return)
+scan_rate_hz: 10.0
+fov_lower_deg: -7.0          # random only: the recording fires what the MID360 fires (-7.0..52.7)
+fov_upper_deg: 52.0
+lidar_min_range: 0.1
+lidar_max_range: 40.0
+range_noise_sigma: 0.01      # along the ray; 2 cm pushes returns across the 0.1 m voxel steps (lidar.py)
 
-    # --- the driver ----------------------------------------------------------------
-    # fake: the sim serves set_motion_key / set_policy_mode / mode itself and
-    #   reads cmd_vel (fake_driver.py). udp: the workspace's real
-    #   syncai_driver_manager runs (the session passes driver_link:=udp and starts
-    #   it with config/params/driver_manager_sim.yaml) and the sim is its gait
-    #   controller on loopback UDP (controller_link.py); syncai_robot_state then
-    #   gets battery_state / motor_states / mode / safety_locked from the real
-    #   driver, and get_mode from the sim.
-    driver_link: fake
-    controller_command_port: 50051      # driver_manager_sim.yaml command_target_port
-    controller_telemetry_port: 50010    # driver_manager_sim.yaml telemetry_recv_port
-    controller_telemetry_hz: 50.0       # IMU / joints / MODE_STATE datagrams
-    battery_soc: 90.0                   # % at start (BMS_V2)
-    battery_drain_per_hour: 0.0         # 0 = never empties; e.g. 300 reaches robot_state's 20 % WARNING in ~14 min
+# --- the driver ----------------------------------------------------------------
+# fake: the controller's state machine stood in for (driver/fake_driver.py),
+#   driven from the viewer's panel; nothing goes out.
+# udp: the sim also answers as the gait controller on the ASCII UDP link
+#   driver_manager speaks (driver/controller_link.py): AXES / MODE / ESTOP
+#   in on controller_command_port, IMU / joints / MODE_STATE / BMS_V2 out
+#   to controller_telemetry_port. Not with locomotion udp, where a real
+#   controller owns that command port.
+driver_link: fake
+controller_command_port: 50051      # the controller's command port
+controller_telemetry_port: 50010    # where its telemetry goes
+controller_telemetry_hz: 50.0       # IMU / joints / MODE_STATE datagrams
+battery_soc: 90.0                   # % at start (BMS_V2)
+battery_drain_per_hour: 0.0         # 0 = never empties
 
-    # --- fake driver_manager ---------------------------------------------------
-    # Must stay below StairMode's stair_policy_settle_time (3.0 s): it does not
-    # wait for `mode` to report the policy, it settles and climbs. 4.0 is the
-    # "slow driver" negative test; 6.0 also fails WaitForMotionState (5 s).
-    mode_switch_delay: 1.0
-    initial_motion_state: 1      # Locomotion; the controller's own boot value is 8 UNKNOWN
-    initial_policy: 0
-    mode_publish_rate_hz: 2.0
+# --- the stand-in state machine (fake_driver.py) --------------------------
+# How long a motion key or a policy takes to show (the controller's
+# response time). The nav stack's StairMode settles 3 s without waiting
+# for it, so a value above 3 is a "slow driver".
+mode_switch_delay: 1.0
+initial_motion_state: 1      # Locomotion; the controller's own boot value is 8 UNKNOWN
+initial_policy: 0
 
-    # --- locomotion -------------------------------------------------------------
-    # policy: the G23 walks on its own ONNX policies, as g2_deploy_rs runs them
-    # (syncai_sim/locomotion/policy.py names the source files): set_policy_mode 0 = PPO,
-    # 1 = HimLoco (StairMode stair_policy_mode), anything else PPO. The files
-    # are main.rs's defaults, copied into this repo's policy/ (gitignored; see
-    # policy/README.md for where they come from and their checksums).
-    # kinematic: the carried statue with the step rule (kinematics.py).
-    locomotion: policy
-    ppo_policy: /home/syncrobotic/sim/policy/ppo/policy7.onnx
-    # HimLoco from 2026-10-27: policy_1027.onnx, other weights in main.rs's
-    # policy_0812 layout (obs [1, 270] = 6 x 45, actions [1, 12]); sha256
-    # 4f35d05a... (policy/README.md has 0812's, still the robot's default).
-    himloco_policy: /home/syncrobotic/sim/policy/isaacsim/policy_1027.onnx
-    # Which runner each number walks (policy.py RUNNERS): ppo | himloco |
-    # stair_history. stair_history is the Locomotion repo's StairHistory actor
-    # (31 x 45-d history, tanh-squashed targets), which g2_deploy_rs has no
-    # runner for: sim only. To try it, policy0_runner: stair_history with
-    # ppo_policy: /home/syncrobotic/sim/policy/isaacsim/g23_blind_gd16500.onnx.
-    policy0_runner: ppo
-    policy1_runner: himloco
-    # policy only. fitted: the flights surface_heights.py fitted are fixed boxes, one
-    # per tread at the fitted depth (stairs.py); voxels: the patch's 0.1 m boxes
-    # there too, which put every riser on the column grid (treads 0.20 / 0.30 m
-    # for dp's 0.22-0.255). voxels is the sim before 2026-10-25, for comparison.
-    stairs: fitted
+# --- locomotion -------------------------------------------------------------
+# policy: the G23 walks on its own ONNX policies, as the robot's controller runs them
+# (syncai_sim/locomotion/policy.py names the source files): set_policy_mode 0 = PPO,
+# 1 = HimLoco (StairMode stair_policy_mode), anything else PPO. The files
+# are main.rs's defaults, copied into this repo's policy/ (gitignored; see
+# policy/README.md for where they come from and their checksums).
+# kinematic: the carried statue with the step rule (kinematics.py).
+# udp: the joints are a controller process's, over the hardware link
+#   (locomotion/hardware_link.py; config/params/controller_profile.yaml).
+locomotion: policy
+ppo_policy: /home/syncrobotic/sim/policy/ppo/policy7.onnx
+# HimLoco from 2026-10-27: policy_1027.onnx, other weights in main.rs's
+# policy_0812 layout (obs [1, 270] = 6 x 45, actions [1, 12]); sha256
+# 4f35d05a... (policy/README.md has 0812's, still the robot's default).
+himloco_policy: /home/syncrobotic/sim/policy/isaacsim/policy_1027.onnx
+# Which runner each number walks (policy.py RUNNERS): ppo | himloco |
+# stair_history. stair_history is the Locomotion repo's StairHistory actor
+# (31 x 45-d history, tanh-squashed targets), which g2_deploy_rs has no
+# runner for: sim only. To try it, policy0_runner: stair_history with
+# ppo_policy: /home/syncrobotic/sim/policy/isaacsim/g23_blind_gd16500.onnx.
+policy0_runner: ppo
+policy1_runner: himloco
+# policy only. fitted: the flights surface_heights.py fitted are fixed boxes, one
+# per tread at the fitted depth (stairs.py); voxels: the patch's 0.1 m boxes
+# there too, which put every riser on the column grid (treads 0.20 / 0.30 m
+# for dp's 0.22-0.255). voxels is the sim before 2026-10-25, for comparison.
+stairs: fitted
 
-    # --- the walking body's physics (policy only) --------------------------------
-    # Knobs for the A/B against the robot (scripts/gait_bench.py; docs/findings.md
-    # finding 5: HimLoco's stair falls are pitch swings the sim's idealised
-    # body may be making up). Each default is the sim before 2026-10-26; the
-    # alternatives are what g2_deploy_rs's own MuJoCo simulation of the G23
-    # uses (robot.py and legged.py cite the lines).
-    motor_model: ideal           # ideal: URDF effort clamp, armature 0.01 | j60: the J60's torque-speed envelope, armature, friction, damping
-    trunk_inertial: urdf         # urdf: base_link 8.03 kg | vendor: the vendor MJCF's TORSO, 9.368 kg, 2.5x the pitch inertia
-    foot_solref: [0.02, 1.0]     # legs / feet / terrain boxes contact; the vendor sim has [0.005, 1.0]
-    foot_friction: [1.0, 0.005, 0.0001]   # sliding, torsional, rolling; the vendor sim has [1.0, 0.01, 0.01]
-    actuator: qfrc               # qfrc: PD torque computed in legged.py | position: MuJoCo position actuators (gains from legged.py)
-    integrator: euler            # euler | implicitfast (the pair for actuator position: -kd dq integrated implicitly)
-    cmd_delay_ms: 0.0            # motor commands held back this long (G2_SIM_CMD_DELAY_MS there)
-    torque_bw_hz: 0.0            # first-order torque filter, qfrc only; 0 = off (G2_SIM_TORQUE_BW_HZ)
+# --- the walking body's physics (policy only) --------------------------------
+# Knobs for the A/B against the robot (scripts/gait_bench.py: HimLoco's
+# stair falls were pitch swings the sim's idealised body may be making
+# up). Each default is the sim before 2026-10-26; the
+# alternatives are what g2_deploy_rs's own MuJoCo simulation of the G23
+# uses (robot.py and legged.py cite the lines).
+motor_model: ideal           # ideal: URDF effort clamp, armature 0.01 | j60: the J60's torque-speed envelope, armature, friction, damping
+trunk_inertial: urdf         # urdf: base_link 8.03 kg | vendor: the vendor MJCF's TORSO, 9.368 kg, 2.5x the pitch inertia
+foot_solref: [0.02, 1.0]     # legs / feet / terrain boxes contact; the vendor sim has [0.005, 1.0]
+foot_friction: [1.0, 0.005, 0.0001]   # sliding, torsional, rolling; the vendor sim has [1.0, 0.01, 0.01]
+actuator: qfrc               # qfrc: PD torque computed in legged.py | position: MuJoCo position actuators (gains from legged.py)
+integrator: euler            # euler | implicitfast (the pair for actuator position: -kd dq integrated implicitly)
+cmd_delay_ms: 0.0            # motor commands held back this long (G2_SIM_CMD_DELAY_MS there)
+torque_bw_hz: 0.0            # first-order torque filter, qfrc only; 0 = off (G2_SIM_TORQUE_BW_HZ)
 
-    # --- rates -----------------------------------------------------------------
-    # A multiple of the policies' 50 Hz. 2 ms: both policies walk the same at
-    # 1, 2 and 5 ms on flat ground; the margin is for stair edges.
-    physics_hz: 500.0
-    pose_publish_hz: 50.0        # TF x2 + pointlio/lio_odom (lio_bridge ticks at 20)
-    imu_publish_hz: 50.0
-    status_publish_hz: 2.0
+# --- rates -----------------------------------------------------------------
+# A multiple of the policies' 50 Hz. 2 ms: both policies walk the same at
+# 1, 2 and 5 ms on flat ground; the margin is for stair edges.
+physics_hz: 500.0
 
-    # --- props -----------------------------------------------------------------
-    # JSON list of PropSpec dicts (scene.py). A mover has waypoints and walks
-    # between them; a prop without waypoints is a free body the trunk can push.
-    props_json: >-
-      []
+# --- props -----------------------------------------------------------------
+# JSON list of PropSpec dicts (scene.py). A mover has waypoints and walks
+# between them; a prop without waypoints is a free body the trunk can push.
+props_json: >-
+  []

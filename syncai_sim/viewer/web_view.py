@@ -12,9 +12,8 @@ mouse gave the camera. The panel holds the storey switch, the layers, the
 status, the teleport, and with --teleop the sliders and motion keys
 (teleop.py applies them under the sim lock).
 
-Foxglove is still the stack's view (plans, costmaps, the map clouds); this
-one shows what the sim itself is made of — which tiles exist, what the feet
-stand on, where the rays went.
+It shows what the sim itself is made of — which tiles exist, what the feet
+stand on, where the rays went, the lidar map per storey.
 
 Until 2026-10-26 the picture was a GLFW window of our own on the container's
 Xvnc display, Mesa's llvmpipe behind it, served by noVNC: ten frames a
@@ -45,7 +44,7 @@ TERRAIN_COLOUR = (230, 110, 60)
 STAIR_COLOUR = (60, 150, 230)
 ROBOT_DEFAULT_COLOUR = (70, 70, 78)  # the URDF's visuals carry no colour (visual.py: "dark STL")
 MAP_POINT_M = 0.04
-MAP_INTENSITY_MAX = 150.0  # Foxglove's layout clamps the clouds' intensity here too
+MAP_INTENSITY_MAX = 150.0  # a marking's 90-150; above is glare
 # The light: an HDRI environment for the ambient and the reflections, the
 # default directional lights with shadows (the robot on the floor, the
 # treads on each other), a pale sky as the background and a fog of the same
@@ -313,7 +312,7 @@ class WebView:
         self._terrain = gui.add_checkbox("Terrain boxes", False,
                                          hint="the voxel boxes and fitted stairs under the feet")
         self._map_cloud = gui.add_checkbox("Lidar map", False,
-                                           hint="map.pcd per storey, shaded by intensity (Foxglove's)")
+                                           hint="map.pcd per storey, shaded by intensity")
         self._status = gui.add_markdown("")
 
         @self._storeys.on_update
@@ -341,7 +340,7 @@ class WebView:
 
         if self.teleop is None:
             return
-        # The teleport is wanted in the session too (a fall leaves the robot
+        # The teleport is wanted without --teleop too (a fall leaves the robot
         # in Damping; teleop.py); the rest only when the sim is driven by hand.
         home = gui.add_button("Teleport to the spawn", hint="back on the spawn, standing")
         home.on_click(lambda _e: self.teleop.teleport_home())

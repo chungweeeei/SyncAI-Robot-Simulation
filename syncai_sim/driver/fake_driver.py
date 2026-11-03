@@ -1,31 +1,18 @@
-"""What the sim answers in place of `syncai_driver_manager`.
+"""The gait controller's state machine, stood in for when the sim walks its own
+policies: motion keys and policy numbers in, the state it is in out.
 
-The real driver_manager is a UDP bridge to the gait controller: `set_motion_key`
-maps a key to a `MODE x` datagram, `set_policy_mode` to `MODE <n>`, both return
-success at once (the send is fire-and-forget), and the controller's telemetry is
-echoed on `mode` as `Int32MultiArray [policy, motion_state]` — only when a
-telemetry datagram arrives, never periodically. The sim keeps the key table and
-the two services' semantics and adds the one thing a test needs: a settable
-delay between the request and the reported state, `switch_delay`, because that
-is what the stack waits on.
+`set_motion_key` takes the key table driver_manager uses ("0".."5": stand,
+locomotion, lie down, damping, e-stop, MPC), `set_policy_mode` a policy
+number; both succeed at once, and the reported state follows after
+`switch_delay`, the controller's response time — what anything waiting on
+the state (the nav stack's StairMode settles 3 s without waiting) sees.
+`mode_array()` is the [policy, motion_state] pair the controller's telemetry
+carries (driver/controller_link.py sends it). The viewer's panel
+(viewer/teleop.py) and the ASCII link drive it.
 
-Two consumers, two coupling constraints (see the workspace's stair_mode.cpp and
-wait_for_motion_state.cpp):
-
-* `StairMode` sends policy 1 before a flight and does NOT wait for `mode` to
-  report it — it settles `stair_policy_settle_time` (3 s) and climbs. So
-  `switch_delay` must stay below 3 s for a correct controller to pass; 4 s is
-  the "slow driver" negative test. It also restores the policy to whatever
-  `mode` reported before the switch (`flat_policy_mode: -1`), so the sim must
-  have published a valid non-stair policy before the first stair: the node
-  republishes `mode` at 2 Hz for that.
-* `WaitForMotionState` (the dock trees) compares `mode` data[1] with the key it
-  sent and times out after 5 s, so a dock test with the default 1 s delay sees
-  the switch and one with 6 s does not.
-
-The controller's own boot value is 8 (UNKNOWN) and `move_3d.xml` never sends a
-motion key, so the sim boots in Locomotion (1) by default — "the operator stood
-the robot up" — or nothing would ever move.
+The controller's own boot value is 8 (UNKNOWN); the sim boots in Locomotion
+(1) by default — "the operator stood the robot up" — or nothing would move
+until a key came.
 """
 
 from __future__ import annotations

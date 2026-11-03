@@ -1,47 +1,47 @@
 # =============================================================================
-# The simulation container: the robot's own dev image plus MuJoCo.
+# The simulation container: Ubuntu 22.04 + Python + MuJoCo. No ROS.
 #
-# FROM the workspace's `dev` stage (built there as `syncai-robot-base`, see its
-# docker-compose.build.yml) rather than a ros:humble image, because the nav
-# stack this container runs is the workspace's build/ + install/ bind-mounted
-# in, and a .so built against that image's exact ROS / GTSAM / xtensor set only
-# loads in that image. Everything the sim adds on top is Python.
+# The sim talks to the outside over UDP only (the gait controller's ASCII link,
+# the hardware link to a controller process), so nothing here needs ROS: the
+# image is the Python packages in requirements.txt on the distribution the
+# robot runs (22.04, Python 3.10 — ruff.toml's py310). Until 2026-11-03 it was
+# FROM the workspace's ROS image, for the nav session it ran; that is gone.
 #
-# No display, no GPU, no rendering in here: the picture is the browser
-# viewer (syncai_sim/web_view.py, viser), a websocket the host's browser
-# draws from with its own GPU. Until 2026-10-26 the container ran an X server
-# of its own (TigerVNC's Xvnc with Mesa's llvmpipe, noVNC on 6080) for
-# MuJoCo's GLFW window, which llvmpipe drew at ten frames a second; XQuartz
-# had been tried before that and fails at GLX context creation (OpenGL 1.4).
-# libgl1 stays: open3d's wheel (pcd_mesh.py) links libGL.so.1 to import.
-#
-# numpy: the base image has ROS Humble's python3-numpy and cv_bridge & co. are
-# compiled against it, so mujoco is installed with numpy pinned < 2 — pip
-# would otherwise pull a 2.x into /usr/local that shadows the apt one and breaks
-# those imports. mujoco's manylinux_2_28 aarch64 wheel imports fine on 1.x.
+# No display, no GPU, no rendering in here: the picture is the browser viewer
+# (syncai_sim/viewer/web_view.py, viser), a websocket the host's browser draws
+# from with its own GPU. libgl1 and libgomp1 stay: open3d's wheel links
+# libGL.so.1 to import, numba's parallel ray caster runs on OpenMP.
 # =============================================================================
-FROM syncai-robot-base:latest
+FROM ubuntu:22.04
 
-USER root
+ENV DEBIAN_FRONTEND=noninteractive \
+    LANG=C.UTF-8 \
+    LC_ALL=C.UTF-8
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
+        python3 \
+        python3-pip \
         libgl1 \
-        ros-humble-foxglove-bridge \
+        libgomp1 \
+        libglib2.0-0 \
+        ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
 COPY requirements.txt /tmp/sim-requirements.txt
-RUN pip3 install --no-cache-dir "numpy<2" -r /tmp/sim-requirements.txt \
-    && python3 -c "import mujoco, numpy, viser; print('mujoco', mujoco.__version__, 'numpy', numpy.__version__, 'viser', viser.__version__)" \
+RUN pip3 install --no-cache-dir -r /tmp/sim-requirements.txt \
+    && python3 -c "import mujoco, numpy, numba, onnxruntime, viser, yaml; print('mujoco', mujoco.__version__, 'numpy', numpy.__version__, 'viser', viser.__version__)" \
     && rm /tmp/sim-requirements.txt
 
-USER syncrobotic
+# docker-compose.yml runs the container as the host's uid/gid (so cache/ and
+# log/ written into the mounts keep the host user's ownership) with HOME here:
+# world-writable, as no passwd entry exists for that uid.
+RUN mkdir -p /home/syncrobotic && chmod 1777 /home/syncrobotic
 
 # The sim package is bind-mounted at /home/syncrobotic/sim (docker-compose.yml);
-# on PYTHONPATH so `python3 -m syncai_sim` works from the workspace root, which
-# is where every pane runs (the launch files resolve config/system.ini
-# relative to the cwd).
-ENV PYTHONPATH=/home/syncrobotic/sim
-RUN echo 'export PYTHONPATH=/home/syncrobotic/sim:${PYTHONPATH}' >> /home/syncrobotic/.bashrc
+# on PYTHONPATH so `python3 -m syncai_sim` works from the workspace root, where
+# the instance INI's relative paths resolve.
+ENV PYTHONPATH=/home/syncrobotic/sim \
+    HOME=/home/syncrobotic
 
 WORKDIR /home/syncrobotic/robot_ws
 CMD ["bash"]

@@ -1,15 +1,15 @@
-"""The sim as the gait controller, on driver_manager's UDP link.
+"""The sim as the gait controller, on the controller's ASCII UDP link.
 
-On the robot, syncai_driver_manager (Rust, in the workspace) is a UDP bridge to
-the gait controller: cmd_vel and the two services go out as ASCII commands,
-and the controller's telemetry comes back as ASCII datagrams that become
-`imu`, `motor_states`, `battery_state` and `mode`. The safety lock lives in
-the driver. With the sim answering on that link, the real driver_manager —
-and syncai_robot_state on top of it, and the backend on top of that — run
-unchanged in the sim session (`driver_link: udp`); the sim's own services and
-`mode` publisher (fake_driver.py) stand down so nothing is served twice.
+On the robot, the nav side talks to the gait controller over plain UDP text:
+velocity and mode commands in, one telemetry line per tick out
+(syncai_driver_manager is the program on the other end there). With
+`driver_link: udp` the sim answers on that link as the controller would, so
+anything that speaks it — driver_manager, a script, a test — drives the
+sim's own policies and reads its body (`python3 -m syncai_sim` polls and
+ticks it). Not with `locomotion: udp`, where a real controller owns the
+command port.
 
-The protocol, from the workspace's src/syncai_driver_manager/src/driver_manager_node/protocol.rs:
+The protocol (driver_manager's protocol.rs is the other side's copy):
 
     commands in   AXES <vx> <vy> <wz> | MODE <char> | MODE <uint> | ESTOP
                   MODE Z/C/X/R/M = motion keys 0/1/2/3/5, ESTOP = key 4,
