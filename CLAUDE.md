@@ -6,18 +6,23 @@ short list of what you must know to edit it correctly.
 
 ## What this is
 
-A MuJoCo simulation of the SyncAI G23 in a real mapped site, so the navigation
-stack of `chungweeeei/SyncAI-Robot-Workspace` (a sibling checkout, mounted into
-the container) runs end to end with no robot. The G23 walks on its own ONNX
-policies (`policy.py`, a port of `g2_deploy_rs`'s runners; `legged.py` drives
-the joints) on a patch of the voxel grid (`terrain_patch.py`); `locomotion:
-kinematic` keeps the older rigid body carried by rules (`kinematics.py`);
-`locomotion: udp` hands the joints to a controller process over the hardware
-link (`hardware_link.py`), ROS-free — the sim talks UDP only there, and that
-is where the controller's MPC is studied (`docs/architecture.md`).
-The two ONNX files live in `policy/`, gitignored: copied from g2_deploy_rs,
-where they are not versioned either (`policy/README.md`); never commit them.
-Python throughout (decided
+A MuJoCo simulation of the SyncAI G23 in a real mapped site, for two things:
+
+* **the nav stack end to end** — `chungweeeei/SyncAI-Robot-Workspace` (a
+  sibling checkout, mounted into the container) runs with no robot while the
+  G23 walks on its own ONNX policies in this process (`locomotion: policy`:
+  `locomotion/policy.py` + `locomotion/legged.py`) on a patch of the voxel grid
+  (`terrains/terrain_patch.py`);
+* **a controller's hardware** — `locomotion: udp` hands the joints to a
+  controller process over the hardware link (`locomotion/hardware_link.py`),
+  ROS-free: the sim talks UDP only there. The consumer is
+  SyncAI-Robot-Control's `--backend sim`; this is where its MPC (LMA) is
+  studied.
+
+`locomotion: kinematic` keeps the older rigid body carried by rules
+(`locomotion/kinematics.py`). The layers and one tick of each mode are drawn
+in `docs/architecture.md`. The ONNX files live in `policy/`, gitignored
+(`policy/README.md`); never commit them. Python throughout (decided
 2026-10-23); one container (`docker-compose.yml`), the workspace mounted at
 `/home/syncrobotic/robot_ws`, this repo at `/home/syncrobotic/sim`.
 
@@ -46,17 +51,32 @@ Python throughout (decided
    TF); `initialpose` moves `map -> pointlio_odom`, never the body; goals carry
    the floor's ground z.
 4. **Wall clock.** `use_sim_time` is false everywhere in the stack and the sim
-   paces fixed 2 ms steps to real time. Never publish a stamp that is not `now`.
-5. **Comments explain why**, as in the workspace, and record measurements and
+   paces fixed physics steps to real time (2 ms; 1 ms in the udp profile).
+   Never publish a ROS stamp that is not `now`. The hardware link's `t` is
+   the exception by design: `epoch + sim_time`, strictly increasing across
+   restarts and teleports (a controller treats a repeated time as the same
+   sample).
+5. **The hardware link is a protocol with a consumer.** Its spec is the
+   docstring of `locomotion/hardware_link.py` plus `tests/test_hardware_link.py`
+   (228-byte state out, 240-byte command in, field order, frames, the
+   watchdog); a change there is a change in SyncAI-Robot-Control's `--backend
+   sim` too, said so in the commit message. Keep the udp mode ROS-free:
+   `ros/ros_node.py` knows nothing of it, and `python3 -m syncai_sim` refuses
+   it without `--no-ros`.
+6. **Layers stay layers.** One subpackage per layer; every `__init__.py` is a
+   docstring and re-exports nothing (import by full path). The picture
+   (`visuals/`, `viewer/`) is never read by anything that senses or stands;
+   a backend returns a `JointCommand` and only `actuator/motors.py` writes
+   the joints; only `sensor/` reads the body for others.
+7. **Comments explain why**, as in the workspace, and record measurements and
    rejected alternatives. A bare number without its reason is out of place.
-6. Python: `ruff.toml` (the workspace's rule set, py310, 100 columns). Tests:
+8. Python: `ruff.toml` (the workspace's rule set, py310, 100 columns). Tests:
    `pytest tests` in the container; `test_simulator_synthetic.py` needs the
    ROS environment sourced (it runs the planner CLI through `ros2 run`).
 
 ## Where things happen
 
-One subpackage per layer (`docs/architecture.md` draws them); every
-`__init__.py` is a docstring and re-exports nothing, so import by full path.
+Paths are under `syncai_sim/`; `docs/architecture.md` draws the layers.
 
 | Need | Place |
 |---|---|
@@ -90,6 +110,10 @@ python3 -m pytest /home/syncrobotic/sim/tests
 # the sim as a controller's hardware (locomotion udp, ROS-free; docs/architecture.md):
 python3 /home/syncrobotic/sim/scripts/controller_bench.py --profile /home/syncrobotic/sim/config/params/controller_profile.yaml --fake-controller --seconds 5
 ```
+
+`test_simulator_synthetic.py::test_stairs_need_the_policy` fails on `dev`
+too (2026-11-03, the kinematic step rule walks into the synthetic flight): a
+red run with only that test is not a regression of your change.
 
 Do not run `docker compose build` or the session on your own after an edit;
 leave that to the user unless asked — the session starts the workspace's whole
