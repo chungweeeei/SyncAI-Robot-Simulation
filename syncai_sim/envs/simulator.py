@@ -112,8 +112,9 @@ class SimConfig:
     link_state_port: int = 30010
     link_watchdog_ms: float = 100.0
     controller_command_port: int = 50051
-    # A late loop catches up at most this much sim time in one burst (the
-    # main loop and controller_bench). The udp
+    # A late loop catches up at most this much sim time in one burst, and
+    # drops a debt past it (envs/pacing.py, the main loop and controller_bench).
+    # The udp
     # profile sets 8 ms so that a controller is never handed a burst of states
     # while its command stays the same.
     max_catch_up_s: float = 0.1

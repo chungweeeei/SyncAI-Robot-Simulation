@@ -537,7 +537,9 @@ food for the planner's dynamic overlay and TerrainLayer's `obstacle_memory`.
 * **The workspace is read, not modified.** The sim takes its maps and the
   robot's URDF; the instance INI is bind-mounted over its `config/system.ini`.
 * **Wall clock.** The sim runs fixed physics steps paced to real time (2 ms;
-  1 ms in the controller profile), catching up a late loop in short bursts.
+  1 ms in the controller profile), catching up a late loop in short bursts
+  and dropping what one burst cannot repay, as MuJoCo's `simulate` does
+  (`envs/pacing.py`: a carried debt put the MID360's stamps 0.45 s ahead).
   A walking step costs ~0.25 ms on dp, policy inference included.
 * **The policies are ported; the controller is run (2026-11-03).** Until
   then only the port existed: the runners are ~150 lines of Python against

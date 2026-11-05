@@ -127,6 +127,7 @@ def main(argv=None) -> int:
     ini = read_ini(a.ini)
     cfg = build_sim_config(ini, params)
 
+    from syncai_sim.envs.pacing import Pacer
     from syncai_sim.envs.simulator import Simulator
     sim = Simulator(cfg, log=print)
     if a.pose:
@@ -151,7 +152,6 @@ def main(argv=None) -> int:
           f"commands to 127.0.0.1:{cfg.controller_command_port}")
 
     dt = sim.model.opt.timestep
-    max_catch_up = max(1, int(round(cfg.max_catch_up_s / dt)))
     sends = list(a.send)
     next_send = 0.0  # sim time
     axes_from = len(sends) * a.gap
@@ -162,11 +162,11 @@ def main(argv=None) -> int:
     falls0 = sim.falls
     z0, x0, y0 = sim.state.z_ground, sim.state.x, sim.state.y
     t_start = time.perf_counter()
-    next_t = t_start
+    pacer = Pacer(dt, cfg.max_catch_up_s, t_start)  # envs/pacing.py
     try:
         while time.perf_counter() - t_start < a.seconds:
             now = time.perf_counter()
-            steps = max(1, min(int((now - next_t) / dt) + 1, max_catch_up))
+            steps = pacer.steps(now)
             for _ in range(steps):
                 t = sim.sim_time
                 if sends and t >= next_send:
@@ -187,8 +187,7 @@ def main(argv=None) -> int:
                 h = sim.state.yaw
                 fwd.append(float(v[0] * math.cos(h) + v[1] * math.sin(h)))
                 driven.append(a.axes is not None and sim.sim_time >= axes_from)
-            next_t += steps * dt
-            sleep = next_t - time.perf_counter()
+            sleep = pacer.sleep_s(time.perf_counter())
             if sleep > 0:
                 time.sleep(sleep)
     except KeyboardInterrupt:

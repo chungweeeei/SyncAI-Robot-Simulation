@@ -146,6 +146,7 @@ def run(ini, a) -> int:
     the lidar scanned at its rate, the viewer synced at its own."""
     import time
     from syncai_sim.config import build_sim_config
+    from syncai_sim.envs.pacing import Pacer
     from syncai_sim.envs.simulator import Simulator
     params = settings(a)
     if params["driver_link"] not in ("fake", "udp"):
@@ -175,15 +176,15 @@ def run(ini, a) -> int:
     viewer = factory() if factory else None
     dt = sim.model.opt.timestep
     t_start = time.perf_counter()
-    next_t = t_start
+    # A late loop catches up in short bursts and drops what one cannot repay
+    # (envs/pacing.py says why; the udp profile keeps a burst to 8 ms:
+    # locomotion/hardware_link.py says why).
+    pacer = Pacer(dt, cfg.max_catch_up_s, t_start)
     next_scan = 0.0
     next_view = 0.0
     next_print = 5.0
     scan_ms = 0.0
     n = 0
-    # A late loop catches up in a burst of at most this many steps (the udp
-    # profile keeps it to 8 ms: locomotion/hardware_link.py says why).
-    max_catch_up = max(1, int(round(cfg.max_catch_up_s / dt)))
     try:
         while True:
             now = time.perf_counter()
@@ -191,7 +192,7 @@ def run(ini, a) -> int:
                 break
             if viewer is not None and not viewer.is_running():
                 break
-            steps = max(1, min(int((now - next_t) / dt) + 1, max_catch_up))
+            steps = pacer.steps(now)
             if link is not None:
                 link.poll()
             if livox is not None:
@@ -204,7 +205,6 @@ def run(ini, a) -> int:
                 link.tick(sim.sim_time)
             if livox is not None:
                 livox.tick(sim.sim_time, sim.lidar_imu)
-            next_t += steps * dt
             if sim.sim_time >= next_scan:
                 next_scan = sim.sim_time + 1.0 / cfg.lidar.scan_rate_hz
                 t0 = time.perf_counter()
@@ -227,13 +227,14 @@ def run(ini, a) -> int:
                 if livox is not None:
                     ls = livox.stats
                     hw += (f"  livox pts={ls['point_packets']} imu={ls['imu_packets']} "
-                           f"cmds={ls['commands']} reanchors={livox.clock.reanchors}")
+                           f"cmds={ls['commands']} reanchors={livox.clock.reanchors} "
+                           f"resyncs={pacer.resyncs}")
                 rt = sim.sim_time / (now - t_start)
                 print(f"[sim] t={sim.sim_time:6.1f}  x{rt:.2f}  scan {scan_ms:.1f} ms ({n} pts)  "
                       f"{st['last_event']}  xy=({st['x']:.2f},{st['y']:.2f}) z={st['z_ground']:.2f} "
                       f"pitch={math.degrees(st['pitch']):.1f}deg  coll={st['collisions']} "
                       f"falls={st['falls']}{hw}", flush=True)
-            sleep = next_t - time.perf_counter()
+            sleep = pacer.sleep_s(time.perf_counter())
             if sleep > 0:
                 time.sleep(sleep)
     except KeyboardInterrupt:

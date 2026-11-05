@@ -61,7 +61,9 @@ repo at `/home/syncrobotic/sim`.
    protocol as driver_manager speaks it: keep it byte-compatible. Do not add
    ROS, DDS or any other transport back.
 4. **Wall clock.** The sim paces fixed physics steps to real time (2 ms; 1 ms
-   in the udp profile) and catches up in short bursts (`max_catch_up_s`). The
+   in the udp profile) and catches up in short bursts (`max_catch_up_s`),
+   dropping what one burst cannot repay (`envs/pacing.py`: carrying it put
+   the MID360's stamps in the future). The
    hardware link's `t` is `epoch + sim_time`, strictly increasing across
    restarts and teleports (a controller treats a repeated time as the same
    sample).

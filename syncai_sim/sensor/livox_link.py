@@ -245,8 +245,9 @@ class DeviceClock:
     epoch clock (module docstring). Tied once to the wall clock, then moved
     forward whenever the sim has fallen behind it by more than `slack_ns` —
     never back, since Point-LIO clears its buffers on a stamp that goes back.
-    A sim running ahead (catching up in a burst) is left ahead: by at most
-    its catch-up limit."""
+    So a lag it has moved past must never be repaid: the main loop drops
+    what one catch-up burst cannot cover and repays the rest before this
+    reads the time (envs/pacing.py says what carrying it did)."""
 
     def __init__(self, slack_ns: int = 20_000_000, wall_ns=time.time_ns):
         self.slack_ns = slack_ns
