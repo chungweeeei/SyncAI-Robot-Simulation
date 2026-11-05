@@ -59,7 +59,7 @@ def rpy_of_quat(w: float, x: float, y: float, z: float) -> tuple[float, float, f
     return roll, pitch, yaw
 
 
-def _sensor_adr(model: mujoco.MjModel, name: str) -> int:
+def sensor_adr(model: mujoco.MjModel, name: str) -> int:
     sid = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_SENSOR, name)
     if sid < 0:
         raise ValueError(f"the model has no sensor {name!r} (entity/robot.py adds it to the "
@@ -78,8 +78,8 @@ class Sensors:
         self.t = 0.0
         self.quat_wxyz = np.zeros(4)
         self.base_angvel = np.zeros(3)  # body frame, the free joint's rotational qvel
-        self._gyro = _sensor_adr(model, "base_gyro")
-        self._acc = _sensor_adr(model, "base_acc")
+        self._gyro = sensor_adr(model, "base_gyro")
+        self._acc = sensor_adr(model, "base_acc")
         self._vadr = int(model.jnt_dofadr[model.body_jntadr[info.base_body]])
         # Which geom is which foot (-1 elsewhere), and which geoms are the
         # trunk's and the site's, as lookups over all geoms so that one pass

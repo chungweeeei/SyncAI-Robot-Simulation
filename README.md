@@ -23,7 +23,7 @@ feet's floor (`terrains/`), the robot and the MuJoCo scene (`entity/`,
 state machine and its UDP link (`driver/`), and the picture (`viewer/`,
 `visuals/`).
 
-Two UDP links, the only ways in and out:
+Three UDP links, the only ways in and out:
 
 * **The sim as the gait controller** (`driver_link: udp`, with `locomotion:
   policy`, the default): the sim walks its own policies and answers on the
@@ -38,6 +38,11 @@ Two UDP links, the only ways in and out:
   that controller's RL or its MPC (LMA) decides and the sim is its hardware.
   The consumer is SyncAI-Robot-Control's `--backend sim`; this is where the
   MPC gets studied.
+* **The sim as the robot's lidar** (`lidar_link: livox`): the sim is a
+  MID360 / MID360s on the Livox protocol (`sensor/livox_link.py`), so the
+  workspace's own livox_ros_driver2 finds it and reads its points and IMU,
+  and Point-LIO, the localizer and the planner run on the sim — the robot's
+  pose in the map is the sim's (section "The sim as the robot's lidar").
 
 A third locomotion, **kinematic**, keeps the robot as a rigid statue carried
 along the ground by rules (`locomotion/kinematics.py`): what the sim was
@@ -205,6 +210,46 @@ the panel's motion keys and sliders go to the controller's command port
 are the controller's command port. The controller process itself
 (SyncAI-Robot-Control's `--backend sim`) is the next step, not in this
 repository.
+
+### The sim as the robot's lidar
+
+With `-p lidar_link:=livox` the sim answers the Livox driver as the robot's
+lidar does: discovery on 56000, commands on 56100, points from 56300 and the
+IMU from 56400, every packet in the SDK's own format (`sensor/livox_link.py`
+documents the protocol and where each rule is in the vendored SDK). The
+workspace's nav session runs unchanged against it — bringup's driver,
+Point-LIO, the localizer, lio_bridge — and the robot's pose in the map, the
+planner and anything built on them (the console's route preview, a goal)
+follow the sim's body. Measured on dp, 2026-11-05: IMU at 199 Hz,
+Point-LIO at 9.8 Hz, `map -> base_link` within 4 cm of the sim's pose, a
+route planned to a waypoint 16 m off.
+
+The lidar's IP and model are the instance INI's `[sensor.lidar]` (the ones
+bringup writes into the driver's JSON; `livox_lidar_ip` /
+`livox_lidar_type` override them). The model matters: the JSON is keyed by
+it, so a MID360 (dev_type 9) answering a driver configured for a MID360s
+(35) is ignored without a word. Two addresses must exist on the host the
+sim and the robot container share (both on host networking): the lidar's
+IP, which the sim binds, and the driver's `host_ip` (bringup.yaml,
+192.168.1.103), which the SDK binds and whose packets the SDK refuses to
+take as a device's. On a Mac (OrbStack) neither is there; add them to the
+VM's loopback, then restart the robot container so its driver can bind:
+
+```bash
+docker run --rm --net host --privileged alpine ip addr add 192.168.1.103/32 dev lo
+docker run --rm --net host --privileged alpine ip addr add 192.168.1.172/32 dev lo
+docker restart robot01
+SIM_ARGS="--teleop -p lidar_link:=livox" docker compose up -d
+```
+
+`[livox] found by the driver` and `[livox] configured: ...` in the sim's log
+say the driver has taken it; the status line counts the packets. Time is
+the device's own (PTP, `time_type` 1), the host's epoch clock tied to sim
+time, because Point-LIO stamps the pose with it and lio_bridge stamps its
+TF with the host's clock; a sim that falls behind the wall moves it forward
+(`reanchors` in the status line), never back. The localizer starts from
+its own last pose or the INI's `[initial_pose]`, which is where the sim
+spawns the robot, so the two agree at the start.
 
 ## The world, the robot, the rules
 

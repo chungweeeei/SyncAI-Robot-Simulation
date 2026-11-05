@@ -29,6 +29,10 @@ class IniSettings:
     robot_id: str
     map_dir: str  # "" when the INI names no map
     initial_pose: tuple[float, float, float, float] | None  # x y z yaw
+    # [sensor.lidar]: the robot's lidar as its driver is configured for it,
+    # which the sim plays with `lidar_link: livox` (sensor/livox_link.py).
+    lidar_ip: str = ""
+    lidar_type: str = ""  # mid360 | mid360s; "" = none named
 
 
 def read_ini(path: str | None = None) -> IniSettings:
@@ -50,8 +54,11 @@ def read_ini(path: str | None = None) -> IniSettings:
             pose = tuple(c.getfloat("initial_pose", k, fallback=0.0) for k in ("x", "y", "z", "yaw"))
         except ValueError:
             pose = None
+    lidar_ip = c.get("sensor.lidar", "ip", fallback="").strip() if found else ""
+    lidar_type = c.get("sensor.lidar", "type", fallback="").strip().lower() if found else ""
     return IniSettings(path=path, workspace_root=workspace_root, robot_id=robot_id,
-                       map_dir=map_dir, initial_pose=pose)
+                       map_dir=map_dir, initial_pose=pose, lidar_ip=lidar_ip,
+                       lidar_type=lidar_type)
 
 
 def build_sim_config(ini: IniSettings, p: dict) -> SimConfig:
@@ -170,6 +177,8 @@ PARAM_DEFAULTS: dict = {
     "web_view_port": 8080,
     "driver_link": "fake", "controller_command_port": 50051, "controller_telemetry_port": 50010,
     "controller_telemetry_hz": 50.0, "battery_soc": 90.0, "battery_drain_per_hour": 0.0,
+    "lidar_link": "none", "livox_lidar_ip": "", "livox_lidar_type": "",
+    "livox_points_per_packet": 96, "livox_imu_hz": 200.0,
     "use_ini_initial_pose": True, "spawn": [0.0, 0.0, 0.0, 0.0],
     "lidar_height": 0.481, "robot_radius": 0.25, "body_clearance": 0.6,
     "min_obstacle_height": 0.1, "max_step_height": 0.17, "stair_tread_window": 0.45,
