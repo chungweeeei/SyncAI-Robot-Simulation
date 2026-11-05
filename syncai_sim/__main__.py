@@ -163,7 +163,9 @@ def run(ini, a) -> int:
     if params["driver_link"] == "udp":
         from syncai_sim.driver.controller_link import ControllerLink, LinkConfig
         link = ControllerLink(sim, sim.driver, LinkConfig(
+            command_ip=params["controller_command_ip"],
             command_port=params["controller_command_port"],
+            telemetry_host=params["controller_telemetry_host"],
             telemetry_port=params["controller_telemetry_port"],
             telemetry_hz=params["controller_telemetry_hz"],
             battery_soc=params["battery_soc"],

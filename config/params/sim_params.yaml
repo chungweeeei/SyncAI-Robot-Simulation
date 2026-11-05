@@ -92,7 +92,13 @@ range_noise_sigma: 0.01      # along the ray; 2 cm pushes returns across the 0.1
 #   to controller_telemetry_port. Not with locomotion udp, where a real
 #   controller owns that command port.
 driver_link: fake
+# The workspace's driver_manager_params.yaml as it ships talks to the robot's
+# controller at 192.168.1.120 and listens on 192.168.1.103: to drive the sim
+# with it unchanged, take those (both addresses of this host, README "The sim
+# as the robot's lidar"); 127.0.0.1 for a driver pointed at the sim.
+controller_command_ip: 127.0.0.1    # the address the sim takes as the controller
 controller_command_port: 50051      # the controller's command port
+controller_telemetry_host: 127.0.0.1  # where the driver listens (its telemetry_recv_ip)
 controller_telemetry_port: 50010    # where its telemetry goes
 controller_telemetry_hz: 50.0       # IMU / joints / MODE_STATE datagrams
 battery_soc: 90.0                   # % at start (BMS_V2)
