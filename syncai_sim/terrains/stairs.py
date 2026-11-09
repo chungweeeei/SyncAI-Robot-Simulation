@@ -39,6 +39,17 @@ someone looked at, and the walls either side still stop the growth. A track
 flight keeps the strict test: the well between a U stair's flights is just
 such a column.
 
+Where the top: the slab past the last riser ends at its column's edge and the
+voxels take over, but a fit need not end where the map's flight does. A
+measured stair (surface_heights.py) holds the tape's tread, and dp's west
+flights then end a tread short of their points: 7 risers on 0.27 m where the
+points pick 8 on 0.24, the map's last step 0.2-0.3 m past the fit's. That
+step, 0.1-0.3 m under the fitted top, was a pit between the top slab and the
+landing; HimLoco put a hind foot in it, stood nose-up and tipped over the
+posture check (scratch harness, 2 of 20 climbs, 2026-11-09). So the top slab
+runs on over the columns past it while one of them is a pit under the top
+and none rises over it (the landing, or a wall), at most `RUNOUT_MAX`.
+
 The lidar, the planner and the kinematic base still read the voxels
 (CLAUDE.md, rule 2): these boxes are what the feet touch, nothing else.
 """
@@ -55,6 +66,9 @@ MAX_HALF_WIDTH = 0.8  # m either side of the track's line; dp's flights are 1.4-
 CLEAR_LOW, CLEAR_HIGH = 0.15, 0.8  # m over a tread that must be free in a column of the flight
 STEP_BELOW = 0.35  # m under a tread's height where the column must have a voxel
 COLUMN_OK = 0.7  # share of a column's treads that must pass for the column to count
+RUNOUT_MAX = 0.4  # m the top slab may run on past its column: a tread and a bit
+RUNOUT_LIP = 0.06  # m under the top that reads as a pit, over the voxels' rounding (0.05)
+RUNOUT_DEPTH = 0.6  # m under the top that a pit's floor is looked for
 
 
 @dataclass
@@ -83,6 +97,37 @@ def _column_ok(occ: np.ndarray, origin: np.ndarray, res: float, f, c: float) -> 
         clear = not col[z(h + CLEAR_LOW):z(h + CLEAR_HIGH) + 1].any()
         hits += bool((step or unseen_ok) and clear)
     return hits >= COLUMN_OK * max(f.n - 1, 1)
+
+
+def _top_runout(occ: np.ndarray, origin: np.ndarray, res: float, f, lo: float, hi: float,
+                u_end: float, top: float) -> float:
+    """How far past `u_end` (the top slab's end, a column edge) the slab runs on: a
+    column at a time while one of the flight's columns there is a pit under the
+    top (its highest voxel more than RUNOUT_LIP under it, or none within
+    RUNOUT_DEPTH) and none steps up over it (a voxel up to CLEAR_LOW over the
+    top), at most RUNOUT_MAX. Higher up is a handrail or a wall, not the floor:
+    the rail of dp's west well stands 0.7 m over the second flight's top."""
+    z = lambda v: int(np.clip(np.floor((v - origin[2]) / res), 0, occ.shape[2]))  # noqa: E731
+    ext = 0.0
+    while ext + res <= RUNOUT_MAX + 1e-9:
+        u = u_end + ext + 0.5 * res
+        pit = False
+        for c in np.arange(lo + 0.5 * res, hi, res):
+            p = [0.0, 0.0]
+            p[f.axis], p[1 - f.axis] = f.sign * u, c
+            ix, iy = (int(np.floor((p[i] - origin[i]) / res)) for i in range(2))
+            if not (0 <= ix < occ.shape[0] and 0 <= iy < occ.shape[1]):
+                continue
+            col = occ[ix, iy]
+            if col[z(top + RUNOUT_LIP):z(top + CLEAR_LOW) + 1].any():
+                return ext  # a step up: the landing, the flight has ended
+            below = np.nonzero(col[z(top - RUNOUT_DEPTH):z(top + RUNOUT_LIP)])[0]
+            ground = origin[2] + (z(top - RUNOUT_DEPTH) + below[-1] + 1) * res if below.size else None
+            pit |= ground is None or ground < top - RUNOUT_LIP
+        if not pit:
+            return ext
+        ext += res
+    return ext
 
 
 def build(flights: list, occ: np.ndarray, origin: np.ndarray, res: float, log=print) -> StairBoxes:
@@ -114,6 +159,7 @@ def build(flights: list, occ: np.ndarray, origin: np.ndarray, res: float, log=pr
         tops = np.concatenate([[float(f.height(np.array([0.5 * (u_lo + risers[0])]))[0])],
                                f.bottom + f.riser * np.arange(1, f.n),
                                [float(f.height(np.array([0.5 * (risers[-1] + u_hi)]))[0])]])
+        edges[-1] += _top_runout(occ, origin, res, f, lo, hi, u_hi, tops[-1])
         for k in range(edges.size - 1):
             u0, u1 = edges[k], edges[k + 1]
             if u1 - u0 < 1e-3:

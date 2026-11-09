@@ -114,3 +114,40 @@ def test_unseen_treads_count_on_a_stair_walk_only():
     walk = stairs.build([f], occ, ORIGIN, RES, log=lambda *a: None)
     assert np.isclose(walk.regions[0][0], 1.0 - stairs.MAX_HALF_WIDTH)
     assert np.isclose(walk.regions[0][1], 1.7)
+
+
+def test_the_top_slab_runs_on_over_a_pit_to_the_landing():
+    # A fit that ends a tread short of the map's flight (a measured stair:
+    # stairs.py "Where the top"): the two columns past the top slab are a
+    # step under the top, the landing at the top from the third on.
+    f = _flight()
+    occ = _occ(f)
+    occ[:, 20:22, :] = False
+    occ[:, 20:22, :7] = True  # tops 0.6, 0.15 under the flight's top of 0.75
+    sb = stairs.build([f], occ, ORIGIN, RES, log=lambda *a: None)
+    top = sb.boxes[np.argmax(sb.boxes[:, 2])]
+    assert np.isclose(top[1] + top[4], 2.2)  # over both pit columns, not into the landing
+    assert np.isclose(top[2] + top[5], 0.75)
+    assert np.isclose(sb.regions[:, 3].max(), 2.2)
+
+
+def test_the_top_slab_stops_at_the_landing_and_at_its_cap():
+    f = _flight()
+    sb = stairs.build([f], _occ(f), ORIGIN, RES, log=lambda *a: None)
+    assert np.isclose(sb.regions[:, 3].max(), 2.0)  # the landing is right there: no run-on
+    occ = _occ(f)
+    occ[:, 20:, :] = False  # nothing past the flight: a run-on of RUNOUT_MAX at most
+    sb = stairs.build([f], occ, ORIGIN, RES, log=lambda *a: None)
+    assert np.isclose(sb.regions[:, 3].max(), 2.0 + stairs.RUNOUT_MAX)
+
+
+def test_a_handrail_over_the_pit_does_not_stop_the_run_on():
+    # dp's west well: a rail 0.7 m over the second flight's top in its edge
+    # columns; it is no step up, the slab still covers the pit under it.
+    f = _flight()
+    occ = _occ(f)
+    occ[:, 20:22, :] = False
+    occ[:, 20:22, :7] = True
+    occ[2:4, 20:22, 15] = True  # a rail voxel at 1.4-1.5, 0.65 over the top
+    sb = stairs.build([f], occ, ORIGIN, RES, log=lambda *a: None)
+    assert np.isclose(sb.regions[:, 3].max(), 2.2)
