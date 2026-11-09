@@ -1,0 +1,31 @@
+# Measured stairs, for surface_heights.py's flight fit (its module docstring,
+# "Measured stairs"): per stair a box [x0, x1, y0, y1] in the map frame that
+# holds the middle of each of its flights, and the tread and riser measured on
+# site (m). A flight in a box is fitted with that tread and the whole number of
+# that riser nearest its floor-to-floor rise; every other flight is fitted
+# freely from the points. Measured by the user, 2026-11-09.
+
+stairs:
+  # The west stairwell (escape stair), four flights with U landings, walked
+  # while mapping (keyframes 2222-2334). Fitted freely: 8 / 8 / 8 / 7 risers
+  # of 0.161-0.174 m on 0.220-0.255 m treads.
+  - name: dp west stairwell
+    box: [-12.0, -8.0, -13.0, -9.5]
+    tread: 0.27
+    riser: 0.19
+
+  # 2F's small area: two short flights along x at y -18.6 and -19.8
+  # (keyframes 2896-2901, 2939-2945), 2F 4.5 -> 5.2. Fitted freely: 5 risers
+  # of 0.145 m on 0.300-0.310 m treads.
+  - name: dp 2F small-area stairs
+    box: [-2.5, 0.5, -20.6, -17.8]
+    tread: 0.31
+    riser: 0.13
+
+  # The middle U stair (config/stair_walks/dp.yaml, walk 0): flight 1 up
+  # north at x 6.2, flight 2 up south at x 4.3. Fitted freely: 16 / 17
+  # risers of 0.161 / 0.174 m on 0.295 / 0.300 m treads.
+  - name: dp middle stair
+    box: [3.0, 7.5, -13.5, -6.5]
+    tread: 0.31
+    riser: 0.18

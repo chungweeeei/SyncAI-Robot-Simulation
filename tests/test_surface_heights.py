@@ -7,6 +7,7 @@ from syncai_sim.terrains.surface_heights import (
     build,
     fit_track_flights,
     read_ramps,
+    read_stair_shapes,
     read_stair_walks,
     smooth,
     smooth_ramps,
@@ -298,3 +299,32 @@ def test_a_ramp_spreads_the_lips_of_a_quantised_hump(tmp_path):
     assert np.array_equal(out.lookup(np.stack([np.arange(nx), np.full(nx, 2),
                                                np.ones(nx, np.int64)], axis=1)), outside)
     assert read_ramps(str(tmp_path / "none.yaml")) == []
+
+
+def test_a_measured_stair_holds_its_tread_and_riser(tmp_path):
+    # The same flight with a stair-shapes box over it: the tape's tread
+    # (0.30 against the points' 0.25) and the whole number of its riser
+    # nearest the 0.9 m rise (0.18 -> 5 risers of 0.18) are kept, only where
+    # the staircase starts is fitted, and the note gives the free fit beside
+    # it. A box elsewhere changes nothing.
+    g, pts, track = _stair_case(drift=False)
+    path = tmp_path / "site.yaml"
+    path.write_text("stairs:\n  - name: test stair\n    box: [0.0, 3.6, 0.0, 3.0]\n"
+                    "    tread: 0.30\n    riser: 0.18\n")
+    shapes = read_stair_shapes(str(path))
+    assert shapes == [("test stair", (0.0, 3.6, 0.0, 3.0), 0.30, 0.18)]
+    sh = build(pts, FakeWorld(g))
+    notes: list[str] = []
+    out, fits, skipped = fit_track_flights(sh, g.grid, g.origin_m, RES, track, pts,
+                                           shapes=shapes, notes=notes)
+    assert skipped == [] and len(fits) == 1
+    f = fits[0]
+    assert f.n == 5 and abs(f.tread - 0.30) < 1e-9 and abs(f.riser - 0.18) < 0.01
+    assert len(notes) == 1 and "measured stair 'test stair'" in notes[0] and "free fit 6" in notes[0]
+    tops = _column_tops(g, out, 15)
+    assert abs(tops[5] - 0.5) < 0.01 and abs(tops[30] - 1.4) < 0.01
+
+    elsewhere = [("other", (10.0, 11.0, 10.0, 11.0), 0.30, 0.18)]
+    _, fits, _ = fit_track_flights(sh, g.grid, g.origin_m, RES, track, pts, shapes=elsewhere)
+    assert fits[0].n == 6 and abs(fits[0].tread - 0.25) < 0.011
+    assert read_stair_shapes(str(tmp_path / "none.yaml")) == []
