@@ -1,9 +1,11 @@
 # Measured stairs, for surface_heights.py's flight fit (its module docstring,
 # "Measured stairs"): per stair a box [x0, x1, y0, y1] in the map frame that
 # holds the middle of each of its flights, and the tread and riser measured on
-# site (m). A flight in a box is fitted with that tread and the whole number of
-# that riser nearest its floor-to-floor rise; every other flight is fitted
-# freely from the points. Measured by the user, 2026-11-09.
+# site (m). A flight in a box is fitted with that tread and with the count of
+# risers, of the two either side of its floor-to-floor rise over that riser,
+# whose riser is within SHAPE_RISER_TOL of it and the points fit better; every
+# other flight is fitted freely from the points. Measured by the user,
+# 2026-11-09.
 
 stairs:
   # The west stairwell (escape stair), four flights with U landings, walked

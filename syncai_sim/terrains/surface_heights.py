@@ -133,11 +133,20 @@ flight (roll 13, pitch -45 deg at (-8.69, -11.20), 2026-11-09). The two short
 flights in 2F's small area (x -1.6 .. -0.4) read 0.145 on 0.30-0.31 (on site
 0.13 on 0.31), the middle stair 0.161-0.174 on 0.295-0.30 (0.18 on 0.31). `config/stair_shapes/<map>.yaml`
 lists the measured tread and riser per stair with a box in the map frame;
-a flight whose keyframes' middle is in a box is fitted with that tread and
-the whole number of that riser nearest the floor-to-floor rise (the floors
-are still the measured landings, so the riser is the rise over n: 0.196 m
-for the west stair's 1.39 m first flight), and only where the staircase
-starts is searched. It is used whatever its residual -- the tape measure is
+a flight whose keyframes' middle is in a box is fitted with that tread, and
+with n risers for the two whole numbers either side of its floor-to-floor
+rise over the measured riser whose riser is within `SHAPE_RISER_TOL` of the
+tape, whichever the points fit better (the floors are still the measured
+landings, so the riser is the rise over n), and only where the staircase
+starts is searched. The tolerance because the points are worst exactly
+where a measurement was needed: on the west stair's third flight, whose
+points fit 8 risers of 0.161 on 0.22, they picked 6 of 0.215 over 7 of
+0.183 for a 0.19 m tape. Not the nearest whole number: on
+the middle stair's flight 2 (2.95 m) that is 16 risers of 0.184 where the
+points show 17 of 0.174 over 4.8 m, and 16 treads of 0.31 ended the flight
+0.38 m short of the 2F edge, leaving an 8 cm hump before the first riser
+down that HimLoco stalled on backwards (2026-11-09: 0.12 m down in 10 s and
+1 fall in 5 runs of gait_bench, against 1.16 m and none on the free fit). It is used whatever its residual -- the tape measure is
 the truth here, the points are not -- and the log names it with the free
 fit's numbers beside it. A flight in no box is fitted as before.
 
@@ -162,8 +171,8 @@ from syncai_sim import REPO_DIR
 # 6: an unmeasured voxel prefers its own layer (dropped in 12); 7: seams keyed by column and band;
 # 8: flights fitted as staircases; 9: the fits saved too (stairs.py builds them as boxes);
 # 10: stair walks; 11: ramps; 12: an unmeasured voxel takes the mean of all three layers;
-# 13: measured stair shapes
-FORMAT = 13
+# 13: measured stair shapes; 14: their riser count picked by the points within a tolerance
+FORMAT = 14
 WIDE_RADIUS = 6  # columns, the second pass (module docstring)
 
 # Seams (blend_track_seams). poses.txt is the IMU; its ground is z - this.
@@ -202,6 +211,7 @@ FLIGHT_OFFSET = 0.07  # m, the points against the landings
 FLIGHT_MAX_ERR = 0.03  # m, mean (truncated) residual of a fit that is used
 FLIGHT_END = 0.6  # m at most between a flight's end riser and the landing floor it is joined to
 SHAPES_DIR = os.path.join(REPO_DIR, "config", "stair_shapes")
+SHAPE_RISER_TOL = 0.015  # m: a count of risers whose riser is this far off the tape is not a candidate
 # Stair walks (read_stair_walks): keyframes this far apart, as on dp's track
 # over a flight (0.05-0.5 m), so _flight_runs' +-2 keyframes span 0.8 m.
 WALK_STEP = 0.2
@@ -590,8 +600,19 @@ def fit_track_flights(sh: SurfaceHeights, occ: np.ndarray, origin: np.ndarray, r
         if shape is not None:
             free = _fit_staircase(uc, env, f0, f1)
             sname, _, tread, riser = shape
-            n = max(2, int(round((f1 - f0) / riser)))
-            fit = _fit_staircase(uc, env, f0, f1, n_fixed=n, tread_fixed=tread)
+            # The tape gives the riser, the landings the rise: the two whole
+            # numbers of risers either side of rise / riser are the
+            # candidates, and the points pick (module docstring).
+            q = (f1 - f0) / riser
+            counts = sorted({max(2, int(np.floor(q))), max(2, int(np.ceil(q)))})
+            near = [n for n in counts if abs((f1 - f0) / n - riser) <= SHAPE_RISER_TOL]
+            counts = near or [min(counts, key=lambda n: abs((f1 - f0) / n - riser))]
+            fit = None
+            for n in counts:
+                c = _fit_staircase(uc, env, f0, f1, n_fixed=n, tread_fixed=tread)
+                if c is not None and (fit is None or c[0] < fit[0]):
+                    fit = c
+            n = fit[1] if fit is not None else 0
             if notes is not None and fit is not None:
                 was = ("no free fit" if free is None else
                        f"free fit {free[1]} risers of {(f1 - f0) / free[1]:.3f} m on "
