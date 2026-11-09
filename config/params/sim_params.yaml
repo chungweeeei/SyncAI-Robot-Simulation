@@ -92,11 +92,32 @@ range_noise_sigma: 0.01      # along the ray; 2 cm pushes returns across the 0.1
 #   to controller_telemetry_port. Not with locomotion udp, where a real
 #   controller owns that command port.
 driver_link: fake
+# The workspace's driver_manager_params.yaml as it ships talks to the robot's
+# controller at 192.168.1.120 and listens on 192.168.1.103: to drive the sim
+# with it unchanged, take those (both addresses of this host, README "The sim
+# as the robot's lidar"); 127.0.0.1 for a driver pointed at the sim.
+controller_command_ip: 127.0.0.1    # the address the sim takes as the controller
 controller_command_port: 50051      # the controller's command port
+controller_telemetry_host: 127.0.0.1  # where the driver listens (its telemetry_recv_ip)
 controller_telemetry_port: 50010    # where its telemetry goes
 controller_telemetry_hz: 50.0       # IMU / joints / MODE_STATE datagrams
 battery_soc: 90.0                   # % at start (BMS_V2)
 battery_drain_per_hour: 0.0         # 0 = never empties
+
+# --- the lidar on the network ------------------------------------------------
+# none: the scans stay in the sim (the viewer draws them).
+# livox: the sim is the robot's MID360 / MID360s on the Livox protocol
+#   (sensor/livox_link.py): the workspace's livox_ros_driver2 finds it and
+#   reads its points and IMU as it reads the robot's, so Point-LIO, the
+#   localizer and the planner run on the sim. Its IP has to be an address of
+#   this host and the driver's host_ip another (README, "The sim as the
+#   robot's lidar"); with driver_link udp the sim is the whole robot to the
+#   stack.
+lidar_link: none
+livox_lidar_ip: ""            # "" = the INI's [sensor.lidar] ip, the driver's lidar_configs ip
+livox_lidar_type: ""          # mid360 | mid360s; "" = the INI's [sensor.lidar] type (the JSON is keyed by it)
+livox_points_per_packet: 96   # the MID360's own
+livox_imu_hz: 200.0           # the MID360's own; Point-LIO warns past a 30 ms gap
 
 # --- the stand-in state machine (fake_driver.py) --------------------------
 # How long a motion key or a policy takes to show (the controller's

@@ -41,7 +41,14 @@ MODE_CHARS = {"Z": "0", "C": "1", "X": "2", "R": "3", "M": "5"}
 
 @dataclass
 class LinkConfig:
+    # The controller's address, which the sim takes: 127.0.0.1 for a driver
+    # pointed at it, or the robot's controller IP (driver_manager_params.yaml
+    # command_target_ip, 192.168.1.120) for the workspace's own driver
+    # unchanged, with that IP made an address of this host.
+    command_ip: str = "127.0.0.1"
     command_port: int = 50051  # driver_manager_sim.yaml command_target_port
+    # Where the driver listens (driver_manager_params.yaml telemetry_recv_ip:
+    # it binds that address, so 127.0.0.1 never reaches a driver on another).
     telemetry_host: str = "127.0.0.1"
     telemetry_port: int = 50010  # driver_manager_sim.yaml telemetry_recv_port
     telemetry_hz: float = 50.0
@@ -87,7 +94,7 @@ class ControllerLink:
         self.battery = Battery(self.cfg.battery_soc, self.cfg.battery_drain_per_hour)
         self.rx = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         self.rx.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        self.rx.bind(("127.0.0.1", self.cfg.command_port))
+        self.rx.bind((self.cfg.command_ip, self.cfg.command_port))
         self.rx.setblocking(False)
         self.tx = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         self.dest = (self.cfg.telemetry_host, self.cfg.telemetry_port)
@@ -95,7 +102,8 @@ class ControllerLink:
         self._next_bms = 0.0
         self._last_t: float | None = None
         self.commands = 0
-        log(f"[link] gait controller on udp 127.0.0.1:{self.cfg.command_port}, telemetry to "
+        log(f"[link] gait controller on udp {self.cfg.command_ip}:{self.cfg.command_port}, "
+            f"telemetry to "
             f"{self.dest[0]}:{self.dest[1]} at {self.cfg.telemetry_hz:g} Hz")
 
     # -- commands from driver_manager ---------------------------------------------

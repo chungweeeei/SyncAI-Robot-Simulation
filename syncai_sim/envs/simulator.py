@@ -52,8 +52,8 @@ from syncai_sim.driver.udp_driver import UdpDriver
 from syncai_sim.locomotion.kinematics import BaseState, Event, KinematicsConfig, advance, place
 from syncai_sim.locomotion.hardware_link import HardwareLink, HardwareLinkConfig
 from syncai_sim.locomotion.legged import LeggedController
-from syncai_sim.sensor.lidar import LidarConfig, LidarModel, rays_along_motion
-from syncai_sim.sensor.proprioception import Sensors
+from syncai_sim.sensor.lidar import LidarConfig, LidarModel, in_firing_frame, rays_along_motion
+from syncai_sim.sensor.proprioception import Sensors, sensor_adr
 from syncai_sim.locomotion.policy import load_policies
 from syncai_sim.sensor.prop_rays import ray_aabb, ray_vertical_cylinder
 from syncai_sim.entity.robot import JOINTS, LEGS, RobotConfig, RobotModel, load_robot
@@ -112,11 +112,24 @@ class SimConfig:
     link_state_port: int = 30010
     link_watchdog_ms: float = 100.0
     controller_command_port: int = 50051
-    # A late loop catches up at most this much sim time in one burst (the
-    # main loop and controller_bench). The udp
+    # A late loop catches up at most this much sim time in one burst, and
+    # drops a debt past it (envs/pacing.py, the main loop and controller_bench).
+    # The udp
     # profile sets 8 ms so that a controller is never handed a burst of states
     # while its command stays the same.
     max_catch_up_s: float = 0.1
+
+
+@dataclass
+class RawScan:
+    """One scan as the lidar itself reports it (sensor/livox_link.py sends it):
+    every ray fired, in firing order, each point in the lidar_top frame of the
+    moment it was fired — not motion-compensated — and a miss as (0, 0, 0),
+    which the MID360 sends too and the stack drops by its blind zone."""
+
+    points: np.ndarray  # (N, 3) float32, metres, lidar_top
+    t: np.ndarray  # (N,) float64, sim seconds each ray was fired, ascending
+    end: float  # sim time at the scan's end
 
 
 @dataclass
@@ -216,6 +229,8 @@ class Simulator:
             self.patch = TerrainPatch(self.world.grid, cfg.terrain, self.surface,
                                       None if stairs is None else stairs.regions)
             self.sensors = Sensors(self.model, self.data, self.info, self.motors)
+            self._imu_gyro = sensor_adr(self.model, "imu_gyro")
+            self._imu_acc = sensor_adr(self.model, "imu_acc")
             if cfg.locomotion == "policy":
                 self.legs = LeggedController(self.model, self.data, self.info.base_body,
                                              load_policies(cfg.ppo_policy, cfg.himloco_policy, log=log,
@@ -234,6 +249,7 @@ class Simulator:
         self._lidar_poses = np.tile(np.eye(4), (self._steps_per_scan, 1, 1))
         self._lidar_i = 0
         self.last_scan: np.ndarray | None = None  # the cloud `scan()` last returned
+        self.last_raw_scan: RawScan | None = None  # the same scan as the lidar reports it
         if self.link is not None:
             self.driver = UdpDriver(command_port=cfg.controller_command_port, log=log)
         else:
@@ -529,10 +545,11 @@ class Simulator:
         steps), then the cloud is expressed in the end-of-scan body frame:
         motion-compensated, as a LIO's body cloud is."""
         k = self._steps_per_scan
+        dt = self.model.opt.timestep
         chrono = (np.arange(k) + self._lidar_i) % k  # ring slots, oldest first
+        poses = self._lidar_poses[chrono]
         dirs_l, t = self.lidar.directions()
-        origins, dirs_w = rays_along_motion(self._lidar_poses[chrono], t,
-                                            self.model.opt.timestep, dirs_l)
+        origins, dirs_w = rays_along_motion(poses, t, dt, dirs_l)
         dist, pts = self.grid.cast(origins, dirs_w, self.cfg.lidar.max_range)
         dist = np.where(dist < 0, np.inf, dist)
         for tp in self._prop_distances(origins, dirs_w):
@@ -541,9 +558,27 @@ class Simulator:
                 pts[nearer] = origins[nearer] + dirs_w[nearer] * tp[nearer, None]
                 dist = np.where(nearer, tp, dist)
         dist = np.where(np.isfinite(dist), dist, -1.0)
-        pts_w = self.lidar.returns(dirs_w, dist, pts)
+        ok, pts_w = self.lidar.returns_masked(dirs_w, dist, pts)
         self.last_scan = self.lidar.cloud_xyzi(pts_w, self.T_map_imu())
+        raw = np.zeros((t.shape[0], 3), dtype=np.float32)
+        raw[ok] = in_firing_frame(poses, t[ok], dt, pts_w)
+        self.last_raw_scan = RawScan(points=raw, t=self.sim_time - k * dt + t, end=self.sim_time)
         return self.last_scan
+
+    def lidar_imu(self) -> tuple[np.ndarray, np.ndarray]:
+        """The MID360's built-in IMU, on lidar_top_imu: (angular rate rad/s,
+        specific force m/s^2), both in that frame, +9.81 up at rest. The
+        walking body reads its MuJoCo gyro and accelerometer; the statue has
+        none and reports gravity and the commanded turn, as controller_telemetry
+        does for it."""
+        if self.legged:
+            d = self.data
+            return (d.sensordata[self._imu_gyro:self._imu_gyro + 3].copy(),
+                    d.sensordata[self._imu_acc:self._imu_acc + 3].copy())
+        R = self.T_map_imu()[:3, :3]
+        moving = self.state.last_event is Event.MOVED
+        omega = R.T @ np.array([0.0, 0.0, self.cmd[2] if moving else 0.0])
+        return omega, R.T @ np.array([0.0, 0.0, 9.81])
 
     def _prop_distances(self, origins: np.ndarray, dirs_w: np.ndarray):
         m, d = self.model, self.data

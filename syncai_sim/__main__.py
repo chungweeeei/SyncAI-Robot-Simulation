@@ -19,6 +19,9 @@ The sim talks to the outside over UDP only:
     locomotion udp       the joints are a controller process's
                          (locomotion/hardware_link.py: the body's record out to
                          30010, joint commands in on 20001)
+    lidar_link livox     the sim is the robot's MID360 on the Livox protocol
+                         (sensor/livox_link.py: discovery on 56000, commands on
+                         56100, points / IMU out from 56300 / 56400)
 
 The browser viewer (viewer/web_view.py, the `web_view_port` parameter) is
 served unless --headless; --teleop puts the driving controls on its panel.
@@ -110,6 +113,27 @@ def settings(a) -> dict:
     return params
 
 
+def _livox_link(ini, params):
+    """The sim as the robot's lidar (sensor/livox_link.py), or None. Its IP
+    and model are the INI's [sensor.lidar], the ones the driver is
+    configured with, unless the params name others."""
+    if params["lidar_link"] == "none":
+        return None
+    if params["lidar_link"] != "livox":
+        raise SystemExit(f"lidar_link {params['lidar_link']!r}: none | livox")
+    from syncai_sim.sensor.livox_link import DEV_TYPES, LivoxLink, LivoxLinkConfig
+    ip = params["livox_lidar_ip"] or ini.lidar_ip
+    kind = (params["livox_lidar_type"] or ini.lidar_type or "mid360").lower()
+    if not ip:
+        raise SystemExit("lidar_link livox: no lidar IP (the INI's [sensor.lidar] ip, or "
+                         "livox_lidar_ip)")
+    if kind not in DEV_TYPES:
+        raise SystemExit(f"lidar_link livox: lidar type {kind!r}: {' | '.join(DEV_TYPES)}")
+    return LivoxLink(LivoxLinkConfig(lidar_ip=ip, dev_type=DEV_TYPES[kind],
+                                     points_per_packet=params["livox_points_per_packet"],
+                                     imu_hz=params["livox_imu_hz"]), log=print)
+
+
 def _spawn_pose(ini, params) -> tuple[float, float, float, float]:
     if params.get("use_ini_initial_pose", True) and ini.initial_pose is not None:
         return tuple(ini.initial_pose)
@@ -122,6 +146,7 @@ def run(ini, a) -> int:
     the lidar scanned at its rate, the viewer synced at its own."""
     import time
     from syncai_sim.config import build_sim_config
+    from syncai_sim.envs.pacing import Pacer
     from syncai_sim.envs.simulator import Simulator
     params = settings(a)
     if params["driver_link"] not in ("fake", "udp"):
@@ -139,24 +164,27 @@ def run(ini, a) -> int:
     if params["driver_link"] == "udp":
         from syncai_sim.driver.controller_link import ControllerLink, LinkConfig
         link = ControllerLink(sim, sim.driver, LinkConfig(
+            command_ip=params["controller_command_ip"],
             command_port=params["controller_command_port"],
+            telemetry_host=params["controller_telemetry_host"],
             telemetry_port=params["controller_telemetry_port"],
             telemetry_hz=params["controller_telemetry_hz"],
             battery_soc=params["battery_soc"],
             battery_drain_per_hour=params["battery_drain_per_hour"]))
+    livox = _livox_link(ini, params)
     teleop, factory = _viewer(a, sim, spawn, params["web_view_port"], print)
     viewer = factory() if factory else None
     dt = sim.model.opt.timestep
     t_start = time.perf_counter()
-    next_t = t_start
+    # A late loop catches up in short bursts and drops what one cannot repay
+    # (envs/pacing.py says why; the udp profile keeps a burst to 8 ms:
+    # locomotion/hardware_link.py says why).
+    pacer = Pacer(dt, cfg.max_catch_up_s, t_start)
     next_scan = 0.0
     next_view = 0.0
     next_print = 5.0
     scan_ms = 0.0
     n = 0
-    # A late loop catches up in a burst of at most this many steps (the udp
-    # profile keeps it to 8 ms: locomotion/hardware_link.py says why).
-    max_catch_up = max(1, int(round(cfg.max_catch_up_s / dt)))
     try:
         while True:
             now = time.perf_counter()
@@ -164,22 +192,28 @@ def run(ini, a) -> int:
                 break
             if viewer is not None and not viewer.is_running():
                 break
-            steps = max(1, min(int((now - next_t) / dt) + 1, max_catch_up))
+            steps = pacer.steps(now)
             if link is not None:
                 link.poll()
+            if livox is not None:
+                livox.poll()
             if teleop:
                 teleop.apply(sim)
             for _ in range(steps):
                 sim.step()
             if link is not None:
                 link.tick(sim.sim_time)
-            next_t += steps * dt
+            if livox is not None:
+                livox.tick(sim.sim_time, sim.lidar_imu)
             if sim.sim_time >= next_scan:
                 next_scan = sim.sim_time + 1.0 / cfg.lidar.scan_rate_hz
                 t0 = time.perf_counter()
                 xyzi = sim.scan()
                 n = xyzi.shape[0]
                 scan_ms = (time.perf_counter() - t0) * 1000
+                if livox is not None:
+                    raw = sim.last_raw_scan
+                    livox.send_scan(raw.points, raw.t)
                 if viewer is not None:
                     viewer.show_scan(sim)
             if viewer is not None and now >= next_view:
@@ -190,12 +224,17 @@ def run(ini, a) -> int:
                 st = sim.status()
                 hw = (f"  link cmds={st['link']['commands']} states={st['link']['states']} "
                       f"trips={st['link']['watchdog_trips']}" if "link" in st else "")
+                if livox is not None:
+                    ls = livox.stats
+                    hw += (f"  livox pts={ls['point_packets']} imu={ls['imu_packets']} "
+                           f"cmds={ls['commands']} reanchors={livox.clock.reanchors} "
+                           f"resyncs={pacer.resyncs}")
                 rt = sim.sim_time / (now - t_start)
                 print(f"[sim] t={sim.sim_time:6.1f}  x{rt:.2f}  scan {scan_ms:.1f} ms ({n} pts)  "
                       f"{st['last_event']}  xy=({st['x']:.2f},{st['y']:.2f}) z={st['z_ground']:.2f} "
                       f"pitch={math.degrees(st['pitch']):.1f}deg  coll={st['collisions']} "
                       f"falls={st['falls']}{hw}", flush=True)
-            sleep = next_t - time.perf_counter()
+            sleep = pacer.sleep_s(time.perf_counter())
             if sleep > 0:
                 time.sleep(sleep)
     except KeyboardInterrupt:
@@ -205,6 +244,8 @@ def run(ini, a) -> int:
             viewer.close()
         if link is not None:
             link.close()
+        if livox is not None:
+            livox.close()
         sim.close()
     return 0
 

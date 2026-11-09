@@ -15,6 +15,10 @@ outside over **UDP only** (no ROS anywhere, removed 2026-11-03):
   (`terrains/terrain_patch.py`). With `driver_link: udp` the sim also answers
   as the gait controller on its ASCII UDP link (`driver/controller_link.py`:
   AXES / MODE in on 50051, telemetry out to 50010).
+* **the sim is the robot's lidar** (`lidar_link: livox`): a MID360 / MID360s
+  on the Livox protocol (`sensor/livox_link.py`), read by the workspace's own
+  livox_ros_driver2, so Point-LIO, the localizer and the planner run on it.
+  Keep it byte-compatible with the vendored Livox-SDK2.
 * **the sim is a controller's hardware** (`locomotion: udp`): the joints are
   handed to a controller process over the binary hardware link
   (`locomotion/hardware_link.py`: the body's record out to 30010, joint
@@ -57,7 +61,9 @@ repo at `/home/syncrobotic/sim`.
    protocol as driver_manager speaks it: keep it byte-compatible. Do not add
    ROS, DDS or any other transport back.
 4. **Wall clock.** The sim paces fixed physics steps to real time (2 ms; 1 ms
-   in the udp profile) and catches up in short bursts (`max_catch_up_s`). The
+   in the udp profile) and catches up in short bursts (`max_catch_up_s`),
+   dropping what one burst cannot repay (`envs/pacing.py`: carrying it put
+   the MID360's stamps in the future). The
    hardware link's `t` is `epoch + sim_time`, strictly increasing across
    restarts and teleports (a controller treats a repeated time as the same
    sample).
@@ -84,6 +90,7 @@ Paths are under `syncai_sim/`; `docs/architecture.md` draws the layers.
 | URDF -> MJCF, mocap weld, standing pose, the joint order (`LEGS` x `JOINTS`) and default pose (`Q_DEFAULT`), the body's physics knobs (`motor_model`, `trunk_inertial`, contact, `actuator`) | `entity/robot.py` (`RobotConfig`; `DEFAULT_STANDING` was solved by FK, feet 0.372 m under the hips); their A/B `scripts/gait_bench.py` |
 | MjSpec assembly, bitmasks, groups, the MJB scene cache | `scene/scene.py` (`scene_info` reads a loaded model back by name; `scene_key` lists what the cache depends on; the site's picture is not in the model) |
 | the body's measurements (the body IMU, joints, the base's truth, foot contacts), posture, the trunk's contact | `sensor/proprioception.py` (`Sensors`, one float32 record per step; `tests/test_sensors.py`) |
+| the sim as the robot's MID360 on the Livox protocol (`lidar_link: livox`): discovery, commands, point and IMU packets, the device clock | `sensor/livox_link.py` (its docstring is the protocol's spec, with the vendored SDK's file for each rule; `tests/test_livox_link.py` pins the SDK's own bytes); the raw scan it sends is `Simulator.last_raw_scan`, the IMU `Simulator.lidar_imu` |
 | the lidar pattern, prop rays | `sensor/lidar.py`, `sensor/prop_rays.py`; the recorded MID360 bank `config/lidar/mid360_pattern.npz` (built by `scripts/lidar_pattern.py` through `sensor/livox_bag.py`, which reads a rosbag2 sqlite file directly) |
 | the motors: the PD closed every step, the motor clamp, the command delay and torque filter, `JointCommand` | `actuator/motors.py` (`tests/test_motors.py`) |
 | the policies (ported from the robot's controller) | `locomotion/policy.py` (`tests/test_policy.py`; names the source of every constant) |

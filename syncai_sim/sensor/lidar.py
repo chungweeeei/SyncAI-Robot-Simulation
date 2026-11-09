@@ -147,12 +147,19 @@ class LidarModel:
         dist: distance along each ray (-1 = no hit); pts_world: the return
         points (see VoxelGrid.cast). Returns the (K, 3) world points of the
         rays that produced a return, noise added along the ray."""
+        return self.returns_masked(dirs_world, dist, pts_world)[1]
+
+    def returns_masked(self, dirs_world: np.ndarray, dist: np.ndarray,
+                       pts_world: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+        """`returns`, with the (N,) mask of the rays that produced them: a
+        Livox packet carries every ray fired, a miss included, in firing order
+        (sensor/livox_link.py)."""
         ok = (dist >= self.cfg.min_range) & (dist <= self.cfg.max_range)
         pts = pts_world[ok]
         if self.cfg.range_noise_sigma > 0:
             noise = self.rng.normal(0.0, self.cfg.range_noise_sigma, pts.shape[0])
             pts = pts + dirs_world[ok] * noise[:, None]
-        return pts
+        return ok, pts
 
     def cloud_xyzi(self, pts_world: np.ndarray, T_map_body: np.ndarray) -> np.ndarray:
         """(K, 4) float32 points in the body (IMU) frame, intensity constant."""
@@ -172,10 +179,24 @@ def rays_along_motion(poses: np.ndarray, t: np.ndarray, dt: float,
     scan's end), `t` the rays' firing times from the window's start, `dt` the
     step. A ray fired at t takes the pose of step floor(t / dt). Returns
     (origins (N, 3), directions (N, 3))."""
-    k = poses.shape[0]
-    j = np.clip((np.asarray(t, dtype=np.float64) / dt).astype(np.int64), 0, k - 1)
-    T = poses[j]
+    T = poses[firing_step(t, dt, poses.shape[0])]
     return np.ascontiguousarray(T[:, :3, 3]), np.einsum("nij,nj->ni", T[:, :3, :3], dirs_lidar)
+
+
+def firing_step(t: np.ndarray, dt: float, k: int) -> np.ndarray:
+    """The physics step of the scan window each ray was fired in (the pose
+    rays_along_motion casts it from): floor(t / dt), within the window."""
+    return np.clip((np.asarray(t, dtype=np.float64) / dt).astype(np.int64), 0, k - 1)
+
+
+def in_firing_frame(poses: np.ndarray, t: np.ndarray, dt: float,
+                    pts_world: np.ndarray) -> np.ndarray:
+    """World points back into the lidar frame of the moment each was fired:
+    what a real lidar reports, before any motion compensation (Point-LIO
+    deskews them itself from the IMU). `poses` and `t` as rays_along_motion."""
+    T = poses[firing_step(t, dt, poses.shape[0])]
+    rel = pts_world - T[:, :3, 3]
+    return np.einsum("nji,nj->ni", T[:, :3, :3], rel)
 
 
 def rotate_rows(R: np.ndarray, v: np.ndarray) -> np.ndarray:

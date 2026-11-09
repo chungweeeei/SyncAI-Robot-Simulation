@@ -124,6 +124,32 @@ such places as boxes with a height band; inside one every top in the band
 becomes the plain mean of the band's tops within `RAMP_RADIUS` columns
 (0.7 m), so a lip is spread over its neighbours and the arch stays.
 
+**Measured stairs** (`read_stair_shapes`): the fit above takes its tread and
+riser from the points, and the points are the lidar's -- treads it saw from
+above or not at all, risers 0.1 m voxels apart under a handrail. On dp's west
+stairwell it read eight risers of 0.161-0.174 m on 0.22-0.255 m treads per
+flight where the building has 0.19 on 0.27, and HimLoco fell on its second
+flight (roll 13, pitch -45 deg at (-8.69, -11.20), 2026-11-09). The two short
+flights in 2F's small area (x -1.6 .. -0.4) read 0.145 on 0.30-0.31 (on site
+0.13 on 0.31), the middle stair 0.161-0.174 on 0.295-0.30 (0.18 on 0.31). `config/stair_shapes/<map>.yaml`
+lists the measured tread and riser per stair with a box in the map frame;
+a flight whose keyframes' middle is in a box is fitted with that tread, and
+with n risers for the two whole numbers either side of its floor-to-floor
+rise over the measured riser whose riser is within `SHAPE_RISER_TOL` of the
+tape, whichever the points fit better (the floors are still the measured
+landings, so the riser is the rise over n), and only where the staircase
+starts is searched. The tolerance because the points are worst exactly
+where a measurement was needed: on the west stair's third flight, whose
+points fit 8 risers of 0.161 on 0.22, they picked 6 of 0.215 over 7 of
+0.183 for a 0.19 m tape. Not the nearest whole number: on
+the middle stair's flight 2 (2.95 m) that is 16 risers of 0.184 where the
+points show 17 of 0.174 over 4.8 m, and 16 treads of 0.31 ended the flight
+0.38 m short of the 2F edge, leaving an 8 cm hump before the first riser
+down that HimLoco stalled on backwards (2026-11-09: 0.12 m down in 10 s and
+1 fall in 5 runs of gait_bench, against 1.16 m and none on the free fit). It is used whatever its residual -- the tape measure is
+the truth here, the points are not -- and the log names it with the free
+fit's numbers beside it. A flight in no box is fitted as before.
+
 All of this moves where the feet touch, nothing else: the lidar, the planner
 and the kinematic base still read the voxels (CLAUDE.md, rule 2).
 
@@ -144,8 +170,9 @@ from syncai_sim import REPO_DIR
 # 2: smoothed; 3: every surface voxel, one point is enough; 4: the wide pass; 5: seams;
 # 6: an unmeasured voxel prefers its own layer (dropped in 12); 7: seams keyed by column and band;
 # 8: flights fitted as staircases; 9: the fits saved too (stairs.py builds them as boxes);
-# 10: stair walks; 11: ramps; 12: an unmeasured voxel takes the mean of all three layers
-FORMAT = 12
+# 10: stair walks; 11: ramps; 12: an unmeasured voxel takes the mean of all three layers;
+# 13: measured stair shapes; 14: their riser count picked by the points within a tolerance
+FORMAT = 14
 WIDE_RADIUS = 6  # columns, the second pass (module docstring)
 
 # Seams (blend_track_seams). poses.txt is the IMU; its ground is z - this.
@@ -183,6 +210,8 @@ FLIGHT_TREADS = (0.22, 0.33)  # m
 FLIGHT_OFFSET = 0.07  # m, the points against the landings
 FLIGHT_MAX_ERR = 0.03  # m, mean (truncated) residual of a fit that is used
 FLIGHT_END = 0.6  # m at most between a flight's end riser and the landing floor it is joined to
+SHAPES_DIR = os.path.join(REPO_DIR, "config", "stair_shapes")
+SHAPE_RISER_TOL = 0.015  # m: a count of risers whose riser is this far off the tape is not a candidate
 # Stair walks (read_stair_walks): keyframes this far apart, as on dp's track
 # over a flight (0.05-0.5 m), so _flight_runs' +-2 keyframes span 0.8 m.
 WALK_STEP = 0.2
@@ -474,16 +503,23 @@ def _flight_runs(ground: np.ndarray) -> list[np.ndarray]:
     return [np.array(r) for r in runs if np.ptp(ground[r]) > FLIGHT_RISE]
 
 
-def _fit_staircase(uc: np.ndarray, env: np.ndarray, bottom: float, top: float
+def _fit_staircase(uc: np.ndarray, env: np.ndarray, bottom: float, top: float,
+                   n_fixed: int | None = None, tread_fixed: float | None = None
                    ) -> tuple[float, int, float, float] | None:
     """(err, n, tread, u0) of the staircase from `bottom` to `top` that best
-    fits the envelope `env` at `uc` (the flight's keyframes' stretch), or None."""
+    fits the envelope `env` at `uc` (the flight's keyframes' stretch), or None.
+    `n_fixed` / `tread_fixed` hold n and the tread (a measured stair) and
+    leave only u0 to search."""
     rise = top - bottom
     best = None
     lo_u, hi_u = float(uc.min()), float(uc.max())
-    for n in range(max(2, int(np.ceil(rise / FLIGHT_RISERS[1]))), int(np.floor(rise / FLIGHT_RISERS[0])) + 1):
+    ns = ([n_fixed] if n_fixed is not None else
+          range(max(2, int(np.ceil(rise / FLIGHT_RISERS[1]))), int(np.floor(rise / FLIGHT_RISERS[0])) + 1))
+    ds = ([tread_fixed] if tread_fixed is not None else
+          np.arange(FLIGHT_TREADS[0], FLIGHT_TREADS[1] + 1e-9, 0.005))
+    for n in ns:
         r = rise / n
-        for d in np.arange(FLIGHT_TREADS[0], FLIGHT_TREADS[1] + 1e-9, 0.005):
+        for d in ds:
             u0s = np.arange(lo_u - 0.8, hi_u + 0.8 - (n - 1) * d, 0.01)
             if u0s.size == 0:
                 continue
@@ -500,12 +536,15 @@ def _fit_staircase(uc: np.ndarray, env: np.ndarray, bottom: float, top: float
 
 
 def fit_track_flights(sh: SurfaceHeights, occ: np.ndarray, origin: np.ndarray, res: float,
-                      track: np.ndarray, points: np.ndarray, walk: int = -1
+                      track: np.ndarray, points: np.ndarray, walk: int = -1,
+                      shapes: list[tuple[str, tuple[float, ...], float, float]] = (),
+                      notes: list[str] | None = None
                       ) -> tuple[SurfaceHeights, list[FlightFit], list[str]]:
     """Replace the surface of every flight on the track by a fitted staircase
     (module docstring). `occ` is the voxel grid, `points` map.pcd; `track` may
-    be stair walk `walk`'s keyframes (read_stair_walks). Returns the heights,
-    the fits used and why the others were not."""
+    be stair walk `walk`'s keyframes (read_stair_walks); `shapes` are the
+    measured stairs (read_stair_shapes), and what each did goes to `notes`.
+    Returns the heights, the fits used and why the others were not."""
     if track.shape[0] < 5 or sh.keys.size == 0:
         return sh, [], []
     ground = track[:, 2] - LIDAR_HEIGHT
@@ -555,8 +594,35 @@ def fit_track_flights(sh: SurfaceHeights, occ: np.ndarray, origin: np.ndarray, r
         if uc.size < 10:
             skipped.append(f"{name}: too few points on the flight")
             continue
-        fit = _fit_staircase(uc, env, f0, f1)
-        if fit is None or fit[0] > FLIGHT_MAX_ERR:
+        mid = xy.mean(axis=0)
+        shape = next((sp for sp in shapes
+                      if sp[1][0] <= mid[0] <= sp[1][1] and sp[1][2] <= mid[1] <= sp[1][3]), None)
+        if shape is not None:
+            free = _fit_staircase(uc, env, f0, f1)
+            sname, _, tread, riser = shape
+            # The tape gives the riser, the landings the rise: the two whole
+            # numbers of risers either side of rise / riser are the
+            # candidates, and the points pick (module docstring).
+            q = (f1 - f0) / riser
+            counts = sorted({max(2, int(np.floor(q))), max(2, int(np.ceil(q)))})
+            near = [n for n in counts if abs((f1 - f0) / n - riser) <= SHAPE_RISER_TOL]
+            counts = near or [min(counts, key=lambda n: abs((f1 - f0) / n - riser))]
+            fit = None
+            for n in counts:
+                c = _fit_staircase(uc, env, f0, f1, n_fixed=n, tread_fixed=tread)
+                if c is not None and (fit is None or c[0] < fit[0]):
+                    fit = c
+            n = fit[1] if fit is not None else 0
+            if notes is not None and fit is not None:
+                was = ("no free fit" if free is None else
+                       f"free fit {free[1]} risers of {(f1 - f0) / free[1]:.3f} m on "
+                       f"{free[2]:.3f} m, residual {free[0]:.3f} m")
+                notes.append(f"{name}: measured stair '{sname}' ({riser:.3f} m on {tread:.3f} m): "
+                             f"{n} risers of {(f1 - f0) / n:.3f} m on {tread:.3f} m, residual "
+                             f"{fit[0]:.3f} m ({was})")
+        else:
+            fit = _fit_staircase(uc, env, f0, f1)
+        if fit is None or (shape is None and fit[0] > FLIGHT_MAX_ERR):
             skipped.append(f"{name}: no staircase fits"
                            + ("" if fit is None else f" (residual {fit[0]:.3f} m)"))
             continue
@@ -633,6 +699,19 @@ def read_stair_walks(path: str) -> list[tuple[str, np.ndarray]]:
     return out
 
 
+def read_stair_shapes(path: str) -> list[tuple[str, tuple[float, ...], float, float]]:
+    """(name, (x0, x1, y0, y1), tread, riser) per stair in a stair-shapes file
+    (module docstring, "Measured stairs"); [] without one."""
+    if not os.path.isfile(path):
+        return []
+    import yaml
+
+    with open(path) as f:
+        spec = yaml.safe_load(f) or {}
+    return [(str(s["name"]), tuple(float(v) for v in s["box"]), float(s["tread"]), float(s["riser"]))
+            for s in spec.get("stairs", [])]
+
+
 def read_ramps(path: str) -> list[tuple[str, tuple[float, ...]]]:
     """(name, (x0, x1, y0, y1, z0, z1)) per ramp in a ramps file (module
     docstring); [] without one."""
@@ -678,8 +757,8 @@ def smooth_ramps(sh: SurfaceHeights, origin: np.ndarray, res: float,
 
 
 def load_or_build(map_dir: str, cache_dir: str, world: World, log=print,
-                  walks_dir: str = WALKS_DIR, ramps_dir: str = RAMPS_DIR
-                  ) -> SurfaceHeights | None:
+                  walks_dir: str = WALKS_DIR, ramps_dir: str = RAMPS_DIR,
+                  shapes_dir: str = SHAPES_DIR) -> SurfaceHeights | None:
     """The cached heights, built first if needed; None without map.pcd (voxel tops then)."""
     pcd_path = os.path.join(map_dir, "map.pcd")
     if not os.path.isfile(pcd_path):
@@ -692,7 +771,9 @@ def load_or_build(map_dir: str, cache_dir: str, world: World, log=print,
     walks = read_stair_walks(walks_path)
     ramps_path = os.path.join(ramps_dir, os.path.basename(os.path.normpath(map_dir)) + ".yaml")
     ramps = read_ramps(ramps_path)
-    key = json.dumps({"format": FORMAT, "pcd": [st.st_size, int(st.st_mtime)],
+    shapes_path = os.path.join(shapes_dir, os.path.basename(os.path.normpath(map_dir)) + ".yaml")
+    shapes = read_stair_shapes(shapes_path)
+    key = json.dumps({"shapes": shapes, "format": FORMAT, "pcd": [st.st_size, int(st.st_mtime)],
                       "poses": [pst.st_size, int(pst.st_mtime)] if pst else None,
                       "walks": [[n, np.round(kf, 4).tolist()] for n, kf in walks],
                       "ramps": ramps,
@@ -717,12 +798,17 @@ def load_or_build(map_dir: str, cache_dir: str, world: World, log=print,
     sh = smooth_ramps(sh, g.origin_m, g.res, ramps)
     for name, box in ramps:
         log(f"[surface] ramp: {name} ({ramps_path}), box {box[:4]}, band {box[4:]}")
-    sh, fits, skipped = fit_track_flights(sh, g.grid, g.origin_m, g.res, track, points)
+    notes: list[str] = []
+    sh, fits, skipped = fit_track_flights(sh, g.grid, g.origin_m, g.res, track, points,
+                                          shapes=shapes, notes=notes)
     for i, (name, kf) in enumerate(walks):
         log(f"[surface] stair walk {i}: {name} ({kf.shape[0]} keyframes, {walks_path})")
-        sh, wf, ws = fit_track_flights(sh, g.grid, g.origin_m, g.res, kf, points, walk=i)
+        sh, wf, ws = fit_track_flights(sh, g.grid, g.origin_m, g.res, kf, points, walk=i,
+                                       shapes=shapes, notes=notes)
         fits += wf
         skipped += ws
+    for n in notes:
+        log(f"[surface] flight at {n} ({shapes_path})")
     for f in fits:
         rs = [f.sign * (f.u0 + k * f.tread) for k in range(f.n)]
         log(f"[surface] flight at {f.name} "
