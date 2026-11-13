@@ -67,7 +67,6 @@ def build_sim_config(ini: IniSettings, p: dict) -> SimConfig:
     Imports are local so that reading an INI needs neither MuJoCo nor numba."""
     import json
 
-    from syncai_sim.locomotion.kinematics import KinematicsConfig
     from syncai_sim.sensor.lidar import LidarConfig
     from syncai_sim.scene.scene import PropSpec
     from syncai_sim.envs.simulator import SimConfig
@@ -86,31 +85,22 @@ def build_sim_config(ini: IniSettings, p: dict) -> SimConfig:
         cache_dir=p["cache_dir"] or default_cache_dir(map_dir),
         urdf_path=os.path.join(ini.workspace_root, "src", "syncai_bringup", "description", "G23.urdf"),
         world=world_options(p),
-        kin=KinematicsConfig(
-            max_step_height=p["max_step_height"], stair_tread_window=p["stair_tread_window"],
-            max_drop=p["max_drop"], require_backward_descent=p["require_backward_descent"],
-            stair_policy=p["stair_policy"], robot_radius=p["robot_radius"],
-            body_clearance=p["body_clearance"], min_obstacle_height=p["min_obstacle_height"],
-            walk_vx_min=p["walk_vx_min"], in_place_wz_min=p["in_place_wz_min"]),
         lidar=LidarConfig(
             points_per_scan=p["points_per_scan"], scan_rate_hz=p["scan_rate_hz"],
             fov_lower_deg=p["fov_lower_deg"], fov_upper_deg=p["fov_upper_deg"],
             min_range=p["lidar_min_range"], max_range=p["lidar_max_range"],
             range_noise_sigma=p["range_noise_sigma"], pattern=p["lidar_pattern"],
             pattern_file=p["lidar_pattern_file"]),
-        lidar_height=p["lidar_height"], physics_hz=p["physics_hz"],
-        switch_delay=p["mode_switch_delay"], initial_motion_state=p["initial_motion_state"],
-        initial_policy=p["initial_policy"], props=props,
-        locomotion=p["locomotion"], ppo_policy=p["ppo_policy"],
-        himloco_policy=p["himloco_policy"], policy0_runner=p["policy0_runner"],
-        policy1_runner=p["policy1_runner"], visual_mesh=p["visual_mesh"],
+        lidar_height=p["lidar_height"], physics_hz=p["physics_hz"], props=props,
+        visual_mesh=p["visual_mesh"],
         visual_look=p["visual_look"], stairs=p["stairs"],
         motor_model=p["motor_model"], trunk_inertial=p["trunk_inertial"],
         foot_solref=tuple(p["foot_solref"]), foot_friction=tuple(p["foot_friction"]),
-        actuator=p["actuator"], integrator=p["integrator"],
+        integrator=p["integrator"],
         cmd_delay_ms=p["cmd_delay_ms"], torque_bw_hz=p["torque_bw_hz"],
         link_command_port=int(p["link_command_port"]), link_state_host=p["link_state_host"],
         link_state_port=int(p["link_state_port"]), link_watchdog_ms=p["link_watchdog_ms"],
+        controller_command_ip=p["controller_command_ip"],
         controller_command_port=int(p["controller_command_port"]),
         max_catch_up_s=p["max_catch_up_s"],
     )
@@ -118,7 +108,7 @@ def build_sim_config(ini: IniSettings, p: dict) -> SimConfig:
 
 def load_profile(path: str) -> dict:
     """A params YAML — a plain mapping of PARAM_DEFAULTS keys, as
-    config/params/sim_params.yaml and controller_profile.yaml are written — as
+    config/params/sim_params.yaml is written — as
     a dict of overrides. A key PARAM_DEFAULTS does not have is an error: a
     typo would otherwise be a setting silently ignored."""
     import yaml
@@ -175,30 +165,21 @@ PARAM_DEFAULTS: dict = {
     "floor_hole_max_cells": 25, "planner_hole_fill_passes": 2,
     "visual_mesh": "voxels", "visual_look": "ramp",
     "web_view_port": 8080,
-    "driver_link": "fake", "controller_command_ip": "127.0.0.1", "controller_command_port": 50051,
-    "controller_telemetry_host": "127.0.0.1", "controller_telemetry_port": 50010,
-    "controller_telemetry_hz": 50.0, "battery_soc": 90.0, "battery_drain_per_hour": 0.0,
+    "controller_command_ip": "127.0.0.1", "controller_command_port": 50051,
     "lidar_link": "none", "livox_lidar_ip": "", "livox_lidar_type": "",
     "livox_points_per_packet": 96, "livox_imu_hz": 200.0,
     "use_ini_initial_pose": True, "spawn": [0.0, 0.0, 0.0, 0.0],
-    "lidar_height": 0.481, "robot_radius": 0.25, "body_clearance": 0.6,
-    "min_obstacle_height": 0.1, "max_step_height": 0.17, "stair_tread_window": 0.45,
-    "max_drop": 0.3, "require_backward_descent": True, "stair_policy": 1,
-    "walk_vx_min": 0.0, "in_place_wz_min": 0.0,
+    "lidar_height": 0.481,
     "points_per_scan": 20000, "scan_rate_hz": 10.0, "fov_lower_deg": -7.0,
     "fov_upper_deg": 52.0, "lidar_min_range": 0.1, "lidar_max_range": 40.0,
     "range_noise_sigma": 0.01, "lidar_pattern": "mid360", "lidar_pattern_file": "",
-    "mode_switch_delay": 1.0, "initial_motion_state": 1, "initial_policy": 0,
-    "locomotion": "policy", "stairs": "fitted",
-    "motor_model": "ideal", "trunk_inertial": "urdf", "foot_solref": [0.02, 1.0],
-    "foot_friction": [1.0, 0.005, 0.0001], "actuator": "qfrc", "integrator": "euler",
+    "stairs": "fitted",
+    "motor_model": "j60", "trunk_inertial": "vendor", "foot_solref": [0.005, 1.0],
+    "foot_friction": [1.0, 0.01, 0.01], "integrator": "euler",
     "cmd_delay_ms": 0.0, "torque_bw_hz": 0.0,
-    "ppo_policy": "/home/syncrobotic/sim/policy/ppo/policy7.onnx",
-    "himloco_policy": "/home/syncrobotic/sim/policy/isaacsim/policy_0812.onnx",
-    "policy0_runner": "ppo", "policy1_runner": "himloco",
-    "physics_hz": 500.0,
+    "physics_hz": 1000.0,
     "props_json": "[]",
-    # locomotion udp (locomotion/hardware_link.py; config/params/controller_profile.yaml)
+    # The hardware link (locomotion/hardware_link.py)
     "link_command_port": 20001, "link_state_host": "127.0.0.1", "link_state_port": 30010,
-    "link_watchdog_ms": 100.0, "max_catch_up_s": 0.1,
+    "link_watchdog_ms": 100.0, "max_catch_up_s": 0.008,
 }

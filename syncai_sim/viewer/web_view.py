@@ -340,8 +340,9 @@ class WebView:
 
         if self.teleop is None:
             return
-        # The teleport is wanted without --teleop too (a fall leaves the robot
-        # in Damping; teleop.py); the rest only when the sim is driven by hand.
+        # The teleport is wanted without --teleop too (a fall leaves the
+        # controller locked; teleop.py); the rest only when the sim is driven
+        # by hand.
         home = gui.add_button("Teleport to the spawn", hint="back on the spawn, standing")
         home.on_click(lambda _e: self.teleop.teleport_home())
         if not self.teleop.drive:
@@ -397,10 +398,10 @@ class WebView:
         if hasattr(self.sim, "realtime"):
             rt = f"realtime x{self.sim.realtime:.2f}  "
         self._status.content = (
-            f"**t** {st['sim_time']:.1f} s  {rt}**{st['last_event']}**  \n"
+            f"**t** {st['sim_time']:.1f} s  {rt}  \n"
             f"xy ({st['x']:.2f}, {st['y']:.2f}) yaw {math.degrees(st['yaw']):.0f}° "
             f"ground z {st['z_ground']:.2f} pitch {math.degrees(st['pitch']):.1f}°  \n"
-            f"motion state {st['motion_state']}  policy {st['policy']}  "
+            f"link cmds {st['link']['commands']}  trips {st['link']['watchdog_trips']}  "
             f"falls {st['falls']}  collisions {st['collisions']}")
 
     def _recentre(self, event) -> None:

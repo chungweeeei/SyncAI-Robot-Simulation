@@ -4,10 +4,9 @@
 # container comes up, then keep the container alive whatever the sim does.
 #
 #   SIM_AUTOSTART  1 (default): run `python3 -m syncai_sim $SIM_ARGS`. 0: nothing.
-#   SIM_ARGS       the sim's arguments (default `--teleop`: the sim walking on its
-#                  own policies, driven from the viewer's panel). The
-#                  controller's hardware instead:
-#                  `--teleop --profile /home/syncrobotic/sim/config/params/controller_profile.yaml`
+#   SIM_ARGS       the sim's arguments (default `--teleop`: the controller's
+#                  hardware, the viewer's panel driving the controller). The
+#                  robot's lidar on the network too: `--teleop -p lidar_link:=livox`
 #
 # Why the container outlives the sim: `docker compose exec sim bash` is how
 # everything else here is run (the tests, the benches), and a sim that stops

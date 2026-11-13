@@ -3,9 +3,10 @@
 What the sim is made of, one subpackage per layer, and what crosses between
 them. The rule that organises it: **the voxel grid is the truth, MuJoCo is the
 robot, the props and the feet's floor, the browser is the picture, and the
-joints are commanded by whichever locomotion backend is chosen** — the
-kinematic rules, the in-process RL policies, or a controller process at the
-other end of a UDP link, whose RL or MPC then decides.
+joints are commanded by a controller process** at the other end of a UDP
+link, whose RL or MPC decides. The sim is the robot's hardware: it decides
+no motion of its own (since 2026-11-13; before, it could walk the robot's
+ONNX policies in-process or carry a rigid statue by rules).
 
 ```
    map/<name>/octomap.bt, map.pcd, poses.txt, the mapping bag
@@ -29,7 +30,7 @@ other end of a UDP link, whose RL or MPC then decides.
           │
           ▼
    ┌─────────────────────────── MuJoCo ────────────────────────────┐
-   │   mj_step on 1-2 ms steps, paced to the wall clock            │
+   │   mj_step on 1 ms steps, paced to the wall clock              │
    └───────────┬───────────────────────────────────────┬───────────┘
                │ reads                                 ▲ writes
                ▼                                       │
@@ -44,22 +45,12 @@ other end of a UDP link, whose RL or MPC then decides.
                │                                             the URDF effort)
                │                                       ▲
                ▼                                       │ JointCommand
-   locomotion/   who decides the joint command         │
-     kinematics.py   `kinematic`: the statue carried by rules (moves the mocap;
-                     no joints, no motors)
-     legged.py       `policy`: the controller's motion states + the ONNX
-       policy.py     runners at 50 Hz, in this process
-     hardware_link.py `udp`: every step's record out, the controller's
+   locomotion/hardware_link.py   every step's record out, the controller's
                      command in — a controller PROCESS (SyncAI-Robot-Control
                      --backend sim) runs its RL or LMA against this
                │
-   driver/     the gait controller's state machine, and its ASCII UDP link
-     fake_driver.py      the controller's state machine stood in for (motion
-                         keys, policy mode, the switch delay) — policy / kinematic
-     udp_driver.py       the same surface forwarding MODE / ESTOP / AXES to the
-                         controller process — udp
-     controller_link.py  the sim AS the controller on its ASCII UDP link
-                         (`driver_link: udp`: AXES / MODE in, telemetry out)
+   driver/udp_driver.py   the panel's motion keys, policy number and AXES,
+                     forwarded to the controller's command port as ASCII
                │
    envs/simulator.py   the composition root: one tick, scan, spawn, teleport
                │
@@ -70,36 +61,23 @@ other end of a UDP link, whose RL or MPC then decides.
     UDP links)
 ```
 
-## One physics tick, walking
+## One physics tick
 
 ```
-driver.update() -> cmd_vel (clamped) -> terrain patch moved if due
--> JointCommand = legs.step(cmd_vel, policy, motion_state)        policy
-               or link.poll(sim_time)                              udp
--> motors.apply(JointCommand)                                      every step
+terrain patch moved if due
+-> JointCommand = link.poll(sim_time)       the controller's newest, or damping
+-> motors.apply(JointCommand)
 -> props walked -> mj_step -> sim_time += dt
--> [udp] sensors.read(epoch + sim_time); link.send(sensors)        every step
+-> sensors.read(epoch + sim_time); link.send(sensors)
 -> the lidar pose recorded -> state read back (posture, collisions, falls)
 ```
 
-The RL path pays nothing for the record or the packet: its runner reads
-MjData itself at 50 Hz, and the posture check and the trunk's contact test
-are separate queries. The udp path builds the 55-float record in place and
-sends it as one datagram per step.
-
-## The three locomotions
-
-| `locomotion` | the joints | the driver | who walks | runs under |
-|---|---|---|---|---|
-| `kinematic` | none: a rigid statue on a mocap weld, placed by the step rule | `FakeDriver` | `locomotion/kinematics.py` | `python3 -m syncai_sim` |
-| `policy` | twelve PD joints on the terrain patch | `FakeDriver` (with `driver_link: udp`, also the ASCII link) | the ONNX policies in this process (`legged.py`, `policy.py`) | `python3 -m syncai_sim`, `scripts/gait_bench.py` |
-| `udp` | the same, commanded over the hardware link | `UdpDriver` (forwards keys and AXES to the controller) | a controller process: its RL or its MPC | `python3 -m syncai_sim`, `scripts/controller_bench.py` |
+The 55-float record is built in place and sent as one datagram per step.
+cmd_vel never reaches the body: the panel's AXES go to the controller
+(driver/udp_driver.py), which turns them into joint commands.
 
 Everything the sim tells the outside goes over UDP (removed 2026-11-03: the
-ROS node, the nav session and the image's ROS base). `driver_link: udp` and
-`locomotion: udp` cannot run together: both are the controller's command
-port, and the sim cannot be the controller and the controller's hardware at
-once.
+ROS node, the nav session and the image's ROS base).
 
 ## What a controller needs from the sim, and why
 
@@ -124,33 +102,28 @@ one state datagram per physics step and takes a command datagram back.
 Two things the link does that a motor driver would not: a **watchdog**
 (100 ms without a command → damping, kp 0 / kd 2, logged once), so a dead
 controller does not leave its last torque on the joints; and a **short
-catch-up burst** (`max_catch_up_s`, 8 ms in the profile), so a late loop never
+catch-up burst** (`max_catch_up_s`, 8 ms), so a late loop never
 hands the controller a quarter second of states while its command stays
 the same.
 
 ## Running it
 
 ```bash
-# the RL path, as before
+# the sim as a controller's hardware: nothing on the link, the motors in damping
 python3 -m syncai_sim --teleop
 
-# the sim as a controller's hardware: nothing on the link, the motors in damping
-python3 -m syncai_sim --teleop --profile /home/syncrobotic/sim/config/params/controller_profile.yaml
-
 # the link end to end with no controller process: the stand-in's PD stands the robot
-python3 /home/syncrobotic/sim/scripts/controller_bench.py \
-    --profile /home/syncrobotic/sim/config/params/controller_profile.yaml --fake-controller --seconds 5
+python3 /home/syncrobotic/sim/scripts/controller_bench.py --fake-controller --seconds 5
 
 # a controller process on the link (its --backend sim, ports 20001 / 30010 / 50051):
 python3 /home/syncrobotic/sim/scripts/controller_bench.py \
-    --profile /home/syncrobotic/sim/config/params/controller_profile.yaml \
     --send "MODE Z" --send "MODE M" --gap 3 --axes 0.5 0 0 --seconds 15 --listen
 ```
 
-`config/params/controller_profile.yaml` sets the body the way a controller's
-own development simulation models it (the J60 envelope, the vendor trunk and
-contact, 1 kHz, the hand-computed torque) so that what a controller sees here
-is what it would see there; every value says why.
+The defaults (config/params/sim_params.yaml) set the body the way a
+controller's own development simulation models it (the J60 envelope, the
+vendor trunk and contact, 1 kHz, the hand-computed torque) so that what a
+controller sees here is what it would see there; every value says why.
 
 ## What is next
 

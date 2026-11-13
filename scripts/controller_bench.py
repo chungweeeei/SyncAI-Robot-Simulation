@@ -1,17 +1,17 @@
 #!/usr/bin/env python3
-"""The sim as a controller's hardware, headless: the bench for `locomotion: udp`.
+"""The sim as a controller's hardware, headless: the bench for the hardware link.
 
     # the link end to end with no controller process (the stand-in answers every
     # state with a PD to the default pose): 0 falls, ~5000 states in 5 s
-    python3 scripts/controller_bench.py --profile config/params/controller_profile.yaml \\
-        --fake-controller --seconds 5
+    python3 scripts/controller_bench.py --fake-controller --seconds 5
 
     # a controller process on the link (its --backend sim): stand, enter its MPC,
     # walk at 0.5 m/s, reading its MODE_STATE from the telemetry it sends
-    python3 scripts/controller_bench.py --profile config/params/controller_profile.yaml \\
+    python3 scripts/controller_bench.py \\
         --send "MODE Z" --send "MODE M" --gap 3 --axes 0.5 0 0 --seconds 15 --listen
 
-The sim is built as `python3 -m syncai_sim` builds it (the profile, -p),
+The sim is built as `python3 -m syncai_sim` builds it (the defaults, any
+--profile, -p),
 spawned at the INI's pose or --pose, and stepped at wall-clock pace with no
 viewer. Lines given with --send go to the controller's command port in order,
 --gap seconds apart (MODE Z, then MODE M or MODE C; RESET_SAFETY after a fall);
@@ -20,8 +20,8 @@ AXES watchdog fed. --listen binds the controller's telemetry port (50010) and
 reads MODE_STATE into the driver, so the report has the state transitions;
 only one program can bind it, so not while driver_manager runs.
 
-The report is gait_bench's — falls, the pitch's mean / 5th / 95th percentile /
-extremes, roll, speed, distance — plus the link's counters (states sent,
+The report is falls, the pitch's mean / 5th / 95th percentile / extremes,
+roll, speed, distance, plus the link's counters (states sent,
 commands received, watchdog trips), the state transitions seen, and the last
 command's gains and feed-forward, so what the controller sent can be read
 next to what the body did. One JSON line per run in log/bench/<name>.jsonl.
@@ -93,7 +93,7 @@ def main(argv=None) -> int:
     ap.add_argument("--ini", default=None, help="the instance INI (default config/system.ini)")
     ap.add_argument("--map", default=None, help="map/<name> directory (default: the INI's)")
     ap.add_argument("--profile", action="append", default=[], metavar="PARAMS.yaml",
-                    help="a params YAML over the defaults (config/params/controller_profile.yaml)")
+                    help="a params YAML over the defaults (repeatable, in order)")
     ap.add_argument("-p", dest="overrides", action="append", default=[], metavar="key:=value")
     ap.add_argument("--pose", type=float, nargs=4, metavar=("X", "Y", "Z", "YAW_DEG"),
                     help="where to spawn (default: the INI's initial_pose)")
@@ -109,7 +109,9 @@ def main(argv=None) -> int:
                     help="AXES sent at 10 Hz after the last --send line")
     ap.add_argument("--listen", action="store_true",
                     help="read MODE_STATE from the controller's telemetry port "
-                         "(controller_telemetry_port, 50010; not while driver_manager runs)")
+                         "(--telemetry-port; not while driver_manager runs)")
+    ap.add_argument("--telemetry-port", type=int, default=50010,
+                    help="where the controller sends its telemetry (its telemetry_target)")
     ap.add_argument("--name", default="bench", help="label of this run")
     ap.add_argument("--out", default=None, help="jsonl (default log/bench/<name>.jsonl)")
     a = ap.parse_args(argv)
@@ -121,9 +123,6 @@ def main(argv=None) -> int:
     apply_overrides(params, a.overrides)
     if a.map:
         params["map_dir"] = a.map
-    if params["locomotion"] != "udp":
-        raise SystemExit("controller_bench is for locomotion udp: pass "
-                         "--profile config/params/controller_profile.yaml (or -p locomotion:=udp)")
     ini = read_ini(a.ini)
     cfg = build_sim_config(ini, params)
 
@@ -147,9 +146,9 @@ def main(argv=None) -> int:
         ctrl.start()
         print(f"[bench] stand-in controller on {cfg.link_state_host}:{cfg.link_state_port} -> "
               f"{cfg.link_command_port}: a PD to the default pose")
-    telemetry = Telemetry(int(params["controller_telemetry_port"])) if a.listen else None
+    telemetry = Telemetry(a.telemetry_port) if a.listen else None
     print(f"[bench] {a.name}: {a.seconds:g} s, sends {a.send}, axes {a.axes}, "
-          f"commands to 127.0.0.1:{cfg.controller_command_port}")
+          f"commands to {cfg.controller_command_ip}:{cfg.controller_command_port}")
 
     dt = sim.model.opt.timestep
     sends = list(a.send)

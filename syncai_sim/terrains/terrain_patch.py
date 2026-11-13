@@ -71,7 +71,7 @@ class TerrainPatchConfig:
     below: float = 0.9  # the feet are ~0.35 under the base, a step down another 0.2
     above: float = 0.4  # the trunk's top is ~0.1 over the base; walls above it never meet a leg
     refresh_dist: float = 0.15
-    # dp's flights have 0.3 m jumps between quantised treads (kinematics.py,
+    # dp's flights have 0.3 m jumps between quantised treads (placement.py,
     # ground_search_up); a table is ~0.7 m.
     solid_step: float = 0.3
     fill_min_neighbours: int = 6

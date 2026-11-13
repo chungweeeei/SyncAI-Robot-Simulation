@@ -1,6 +1,7 @@
 """Teleop from the browser viewer's panel (web_view.py): a command held until
 the next one or a stop, and the controller's keys, each applied on the main
-loop under the sim lock.
+loop under the sim lock. All of it goes to the controller process
+(driver/udp_driver.py): the sim walks nowhere by itself.
 
 A command, once set, is sent every loop while it is non-zero and once more
 as a stop when it goes to zero, then nothing: a teleop that set 0 every loop
@@ -37,7 +38,7 @@ class Teleop:
             self._cmd = (0.0, 0.0, 0.0)
 
     def motion_key(self, key: str) -> None:
-        """set_motion_key through the driver: "1" RL, "5" MPC (fake_driver.py)."""
+        """A motion key to the controller: "1" RL, "5" MPC (driver/udp_driver.py)."""
         if self.drive:
             self._pending.append(
                 lambda sim: self.log(f"[teleop] key {key} -> {sim.driver.set_motion_key(key)}"))

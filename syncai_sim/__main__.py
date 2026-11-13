@@ -1,24 +1,24 @@
 """python3 -m syncai_sim: run the simulator at wall-clock pace.
 
     python3 -m syncai_sim [--teleop] [--headless] [--system-config INI] [--map DIR]
-                          [--seconds S] [--locomotion policy|kinematic|udp]
+                          [--seconds S]
                           [--visual-mesh voxels|pointcloud|tsdf] [--visual-look ramp|photo]
                           [--profile PARAMS.yaml ...] [-p key:=value ...]
 
 Settings: config.PARAM_DEFAULTS, then config/params/sim_params.yaml (always,
-it documents every key), then each --profile in order (e.g.
-config/params/controller_profile.yaml), then -p, then the flags. The INI
+it documents every key), then each --profile in order, then -p, then the
+flags. The INI
 (config/system.ini relative to the cwd, i.e. the workspace root, or
 $SYNCAI_SYSTEM_INI) gives the map and the spawn pose.
 
-The sim talks to the outside over UDP only:
+The sim is the robot's hardware and talks to the outside over UDP only:
 
-    driver_link udp      the sim answers as the gait controller on the ASCII
-                         link (driver/controller_link.py: AXES / MODE in on
-                         50051, IMU / joints / MODE_STATE / BMS out to 50010)
-    locomotion udp       the joints are a controller process's
+    the hardware link    the joints are a controller process's
                          (locomotion/hardware_link.py: the body's record out to
-                         30010, joint commands in on 20001)
+                         30010, joint commands in on 20001); without one the
+                         watchdog holds them in damping and the robot lies down
+    the panel's driving  motion keys, policy numbers and AXES to the
+                         controller's command port, 50051 (driver/udp_driver.py)
     lidar_link livox     the sim is the robot's MID360 on the Livox protocol
                          (sensor/livox_link.py: discovery on 56000, commands on
                          56100, points / IMU out from 56300 / 56400)
@@ -54,16 +54,13 @@ def main(argv=None) -> int:
     ap.add_argument("--system-config", default=None, help="the instance INI (default config/system.ini)")
     ap.add_argument("--map", default=None, help="map/<name> directory (default: the INI's [map])")
     ap.add_argument("--seconds", type=float, default=None, help="exit after this much wall time")
-    ap.add_argument("--locomotion", choices=("policy", "kinematic", "udp"), default=None,
-                    help="override the locomotion parameter (default: the profiles', policy)")
     ap.add_argument("--visual-mesh", choices=("voxels", "pointcloud", "tsdf"), default=None,
                     help="the site the viewer starts with (default: voxels); the panel switches")
     ap.add_argument("--visual-look", choices=("ramp", "photo"), default=None,
                     help="the site's look (default: ramp); photo needs config/colour/<map>.npz "
                          "(scripts/colour_map.py)")
     ap.add_argument("--profile", action="append", default=[], metavar="PARAMS.yaml",
-                    help="a params YAML applied after sim_params.yaml (repeatable, in order); "
-                         "config/params/controller_profile.yaml is the udp locomotion's")
+                    help="a params YAML applied after sim_params.yaml (repeatable, in order)")
     ap.add_argument("-p", action="append", default=[], metavar="key:=value", dest="overrides",
                     help="one parameter (applied after the profiles)")
     a = ap.parse_args(argv)
@@ -104,8 +101,6 @@ def settings(a) -> dict:
     apply_overrides(params, a.overrides)
     if a.map:
         params["map_dir"] = a.map
-    if a.locomotion:
-        params["locomotion"] = a.locomotion
     if a.visual_mesh:
         params["visual_mesh"] = a.visual_mesh
     if a.visual_look:
@@ -149,36 +144,18 @@ def run(ini, a) -> int:
     from syncai_sim.envs.pacing import Pacer
     from syncai_sim.envs.simulator import Simulator
     params = settings(a)
-    if params["driver_link"] not in ("fake", "udp"):
-        raise SystemExit(f"driver_link {params['driver_link']!r}: fake | udp")
-    if params["driver_link"] == "udp" and params["locomotion"] == "udp":
-        # Both are the controller's command port: the sim cannot be the
-        # controller and the controller's hardware at once.
-        raise SystemExit("driver_link udp plays the gait controller; locomotion udp hands the "
-                         "joints to one: pick one")
     cfg = build_sim_config(ini, params)
     sim = Simulator(cfg)
     spawn = _spawn_pose(ini, params)
     sim.spawn(*spawn[:2], spawn[3], spawn[2])
-    link = None
-    if params["driver_link"] == "udp":
-        from syncai_sim.driver.controller_link import ControllerLink, LinkConfig
-        link = ControllerLink(sim, sim.driver, LinkConfig(
-            command_ip=params["controller_command_ip"],
-            command_port=params["controller_command_port"],
-            telemetry_host=params["controller_telemetry_host"],
-            telemetry_port=params["controller_telemetry_port"],
-            telemetry_hz=params["controller_telemetry_hz"],
-            battery_soc=params["battery_soc"],
-            battery_drain_per_hour=params["battery_drain_per_hour"]))
     livox = _livox_link(ini, params)
     teleop, factory = _viewer(a, sim, spawn, params["web_view_port"], print)
     viewer = factory() if factory else None
     dt = sim.model.opt.timestep
     t_start = time.perf_counter()
     # A late loop catches up in short bursts and drops what one cannot repay
-    # (envs/pacing.py says why; the udp profile keeps a burst to 8 ms:
-    # locomotion/hardware_link.py says why).
+    # (envs/pacing.py says why; a burst is 8 ms: locomotion/hardware_link.py
+    # says why).
     pacer = Pacer(dt, cfg.max_catch_up_s, t_start)
     next_scan = 0.0
     next_view = 0.0
@@ -193,16 +170,12 @@ def run(ini, a) -> int:
             if viewer is not None and not viewer.is_running():
                 break
             steps = pacer.steps(now)
-            if link is not None:
-                link.poll()
             if livox is not None:
                 livox.poll()
             if teleop:
                 teleop.apply(sim)
             for _ in range(steps):
                 sim.step()
-            if link is not None:
-                link.tick(sim.sim_time)
             if livox is not None:
                 livox.tick(sim.sim_time, sim.lidar_imu)
             if sim.sim_time >= next_scan:
@@ -223,7 +196,7 @@ def run(ini, a) -> int:
                 next_print += 5.0
                 st = sim.status()
                 hw = (f"  link cmds={st['link']['commands']} states={st['link']['states']} "
-                      f"trips={st['link']['watchdog_trips']}" if "link" in st else "")
+                      f"trips={st['link']['watchdog_trips']}")
                 if livox is not None:
                     ls = livox.stats
                     hw += (f"  livox pts={ls['point_packets']} imu={ls['imu_packets']} "
@@ -231,7 +204,7 @@ def run(ini, a) -> int:
                            f"resyncs={pacer.resyncs}")
                 rt = sim.sim_time / (now - t_start)
                 print(f"[sim] t={sim.sim_time:6.1f}  x{rt:.2f}  scan {scan_ms:.1f} ms ({n} pts)  "
-                      f"{st['last_event']}  xy=({st['x']:.2f},{st['y']:.2f}) z={st['z_ground']:.2f} "
+                      f"xy=({st['x']:.2f},{st['y']:.2f}) z={st['z_ground']:.2f} "
                       f"pitch={math.degrees(st['pitch']):.1f}deg  coll={st['collisions']} "
                       f"falls={st['falls']}{hw}", flush=True)
             sleep = pacer.sleep_s(time.perf_counter())
@@ -242,8 +215,6 @@ def run(ini, a) -> int:
     finally:
         if viewer is not None:
             viewer.close()
-        if link is not None:
-            link.close()
         if livox is not None:
             livox.close()
         sim.close()

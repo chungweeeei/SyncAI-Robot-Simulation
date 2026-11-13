@@ -1,4 +1,3 @@
-"""Who decides the joint command: the ONNX policies (`policy.py`) under
-the controller's motion states (`legged.py`), or the kinematic statue's rules
-(`kinematics.py`). A backend hands the joints a target; the motors are
-`actuator/`."""
+"""The joints handed to a controller process: the hardware link
+(`hardware_link.py`). The sim decides no joint command of its own; the
+controller (RL or MPC) is the other end, and the motors are `actuator/`."""

@@ -7,9 +7,9 @@ Collision bitmasks (contype / conaffinity), so that exactly the pairs the sim
 wants touch:
 
     world plates   1 / 1      the few big boxes; stop props, never the trunk
-    trunk boxes    2 / 2      meet props only (the world is VoxelGrid's job)
-    props          2 / 3      meet plates (1 & 3) and the trunk (2 & 2)
-    terrain patch  0 / 4      articulated robot only: voxel boxes the legs (4 / 0)
+    trunk boxes    6 / 2      meet props and the terrain patch, never the plates
+    props          2 / 3      meet plates (1 & 3) and the trunk (6 & 2)
+    terrain patch  0 / 4      voxel boxes the legs (4 / 0)
                               and the trunk (6 / 2) stand on (terrain_patch.py)
     stairs         0 / 4      the same, the fitted flights as fixed boxes (stairs.py)
 
@@ -18,7 +18,7 @@ the world's own mesh (site_tiles.py), so the MJB holds the robot, the plates,
 the props and the terrain pool — a few MB that compile in a second, where
 the 2.5 M-triangle visual mesh made it 628 MB and 5 s (until 2026-10-26).
 Geom groups: 1 robot STL visuals (web_view.py sends them to the browser),
-2 props, 3 collision primitives and plates, 4 the mocap handle. The lidar
+2 props, 3 collision primitives and plates. The lidar
 never asks MuJoCo about any of them — rays go to VoxelGrid for the site and
 to `prop_rays.py` for the props (mj_multiRay scans every geom per ray; 18 k
 plates would cost hundreds of milliseconds a scan).
@@ -75,8 +75,6 @@ class PropSpec:
 @dataclass
 class SceneInfo:
     base_body: int
-    mocap_body: int  # -1 for the articulated robot (no mocap handle)
-    mocap_id: int  # index into data.mocap_pos; -1 likewise
     lidar_body: int
     imu_body: int
     trunk_geoms: list[int]
@@ -103,8 +101,7 @@ def build_scene(world: World, robot: RobotModel, props: list[PropSpec],
                 terrain_solref: tuple[float, float] = (0.02, 1.0)) -> tuple[mujoco.MjModel, SceneInfo]:
     """`stairs`: (K, 6) boxes, centre and half-sizes (stairs.StairBoxes.boxes);
     `integrator`: euler (MuJoCo's default) or implicitfast, which integrates
-    velocity-dependent forces — joint damping, a position actuator's kv —
-    implicitly (the pair for `actuator: position`, robot.py);
+    velocity-dependent forces (joint damping) implicitly;
     `terrain_solref`: the terrain and stair boxes' contact solref, the feet's
     (RobotConfig.foot_solref) so that the pair's mean is that value."""
     if integrator not in INTEGRATORS:
@@ -189,7 +186,6 @@ def scene_info(model: mujoco.MjModel, robot: RobotModel, props: list[PropSpec],
         return i
 
     base = bid(robot.cfg.base_link)
-    mocap = -1 if robot.cfg.articulated else bid(robot.cfg.mocap_name)
     trunk = [g for g in range(model.ngeom)
              if model.geom_bodyid[g] == base and model.geom_contype[g] != 0]
     terrain_bodies = [bid(f"terrain{i}") for i in range(terrain_capacity)]
@@ -202,8 +198,7 @@ def scene_info(model: mujoco.MjModel, robot: RobotModel, props: list[PropSpec],
                    if model.geom_type[g] == mujoco.mjtGeom.mjGEOM_SPHERE] if b >= 0 else []
         feet.append(int(spheres[0]) if spheres else -1)
     return SceneInfo(
-        base_body=base, mocap_body=mocap,
-        mocap_id=int(model.body_mocapid[mocap]) if mocap >= 0 else -1,
+        base_body=base,
         lidar_body=bid(robot.cfg.lidar_body), imu_body=bid(robot.cfg.imu_body),
         trunk_geoms=trunk, prop_bodies=prop_bodies, prop_mocap_ids=prop_mocap,
         storey_bounds=list(storey_bounds),
@@ -219,7 +214,7 @@ def scene_key(world: World, robot: RobotModel, props: list[PropSpec], timestep: 
               integrator: str = "euler", terrain_solref: tuple[float, float] = (0.02, 1.0)) -> str:
     """Everything the compiled scene depends on, as one string (cached_model).
     The robot's config is in it whole (asdict), so every RobotConfig knob —
-    motor model, inertial, contact, actuators — is a different scene."""
+    motor model, inertial, contact — is a different scene."""
     from syncai_sim.world.build import CACHE_FORMAT
 
     urdf = os.stat(robot.cfg.urdf_path)
@@ -278,10 +273,7 @@ def place_terrain(data: mujoco.MjData, info: SceneInfo, centres: np.ndarray) -> 
 
 def set_base_pose(model: mujoco.MjModel, data: mujoco.MjData, info: SceneInfo,
                   pos, quat_wxyz) -> None:
-    """Teleport: put both the mocap handle (if any) and the free base at a pose, at rest."""
-    if info.mocap_id >= 0:
-        data.mocap_pos[info.mocap_id] = pos
-        data.mocap_quat[info.mocap_id] = quat_wxyz
+    """Teleport: put the free base at a pose, at rest."""
     adr = model.jnt_qposadr[model.body_jntadr[info.base_body]]
     data.qpos[adr:adr + 3] = pos
     data.qpos[adr + 3:adr + 7] = quat_wxyz
