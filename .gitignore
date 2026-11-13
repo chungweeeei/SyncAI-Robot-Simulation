@@ -19,3 +19,7 @@ config/foxglove/layout-*.json
 
 # MuJoCo writes this next to the cwd on some errors.
 MUJOCO_LOG.TXT
+
+# The G23's trained weights, left from before 2026-11-13 when the sim ran
+# them in-process: never published from here.
+policy/
