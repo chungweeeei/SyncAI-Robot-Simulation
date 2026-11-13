@@ -3,8 +3,9 @@
 `__main__.py` drives it at wall-clock pace (and scripts/controller_bench.py
 as fast as it likes); everything the sim tells the outside goes over UDP.
 The sim is the robot's hardware and nothing more: the twelve joints are a
-controller process's, over the hardware link (locomotion/hardware_link.py),
-and the sim decides no joint command of its own. The controller's RL or MPC
+controller process's — over the hardware link (locomotion/hardware_link.py),
+or as J60 motors on four SocketCAN buses as on the robot (`joint_link: can`,
+locomotion/can_link.py) — and the sim decides no joint command of its own. The controller's RL or MPC
 turns cmd_vel into joint commands; the panel's keys and AXES go to the
 controller (driver/udp_driver.py), not to the body.
 
@@ -41,6 +42,7 @@ from syncai_sim.actuator.motors import Motors
 from syncai_sim.scene import scene as sc
 from syncai_sim.driver.udp_driver import UdpDriver
 from syncai_sim.envs.placement import BaseState, PlacementConfig, place
+from syncai_sim.locomotion.can_link import CanLink, CanLinkConfig
 from syncai_sim.locomotion.hardware_link import HardwareLink, HardwareLinkConfig
 from syncai_sim.sensor.lidar import LidarConfig, LidarModel, in_firing_frame, rays_along_motion
 from syncai_sim.sensor.proprioception import Sensors, sensor_adr
@@ -87,6 +89,15 @@ class SimConfig:
     link_state_host: str = "127.0.0.1"
     link_state_port: int = 30010
     link_watchdog_ms: float = 100.0
+    # Where the joint commands come from: udp = the hardware link's command
+    # datagram; can = J60 frames on four SocketCAN buses, one per leg
+    # (locomotion/can_link.py). The state datagram goes out either way: the
+    # IMU, the base's truth and the contacts are on no CAN bus.
+    joint_link: str = "udp"
+    can_interfaces: tuple[str, ...] = ("can1", "can2", "can3", "can4")
+    can_motor_ids: tuple[int, ...] = (2, 3, 4)
+    can_delay_ms: tuple[float, ...] = (0.0, 0.0, 0.0, 0.0)
+    can_drop_rate: tuple[float, ...] = (0.0, 0.0, 0.0, 0.0)
     controller_command_ip: str = "127.0.0.1"
     controller_command_port: int = 50051
     # A late loop catches up at most this much sim time in one burst, and
@@ -193,6 +204,14 @@ class Simulator:
         self.link = HardwareLink(HardwareLinkConfig(
             command_port=cfg.link_command_port, state_host=cfg.link_state_host,
             state_port=cfg.link_state_port, watchdog_s=cfg.link_watchdog_ms / 1000.0), log=log)
+        if cfg.joint_link not in ("udp", "can"):
+            raise ValueError(f"joint_link {cfg.joint_link!r}: udp | can")
+        self.can: CanLink | None = None
+        if cfg.joint_link == "can":
+            self.can = CanLink(CanLinkConfig(
+                interfaces=tuple(cfg.can_interfaces), motor_ids=tuple(cfg.can_motor_ids),
+                timeout_ms=cfg.link_watchdog_ms, delay_ms=tuple(cfg.can_delay_ms),
+                drop_rate=tuple(cfg.can_drop_rate)), log=log, seed=cfg.seed)
         self.grid = self.world.grid
         self.lidar = LidarModel(cfg.lidar, cfg.seed)
         # Where the lidar was at each physics step of the last scan window
@@ -252,9 +271,12 @@ class Simulator:
         pos = np.array([s.x, s.y, self._floor_under(s.x, s.y, s.z_ground) + self.robot.h_stand + 0.005])
         self.motors.reset()  # joints at the default pose, at rest, nothing queued
         self.link.reset()
+        if self.can is not None:
+            self.can.reset()
         sc.set_base_pose(self.model, self.data, self.info, pos, yaw_pitch_quat(s.yaw, 0.0))
         sc.place_terrain(self.data, self.info, self.patch.boxes_around(pos))
         mujoco.mj_forward(self.model, self.data)
+        self.sensors.read(self.link.time(self.sim_time))  # the joints a motor reports before the first step
         self._fallen = False
 
     def _floor_under(self, x: float, y: float, voxel_top: float) -> float:
@@ -295,8 +317,10 @@ class Simulator:
         self.driver.send_axes(vx, vy, wz)
 
     def close(self) -> None:
-        """The link's and the driver's sockets."""
+        """The links' and the driver's sockets."""
         self.link.close()
+        if self.can is not None:
+            self.can.close()
         self.driver.close()
 
     # -- one physics tick --------------------------------------------------------
@@ -305,7 +329,10 @@ class Simulator:
         base = self.data.xpos[self.info.base_body]
         if self.patch.due(base):
             sc.place_terrain(self.data, self.info, self.patch.boxes_around(base))
-        self.motors.apply(self.link.poll(self.sim_time))
+        if self.can is not None:
+            self.motors.apply(self.can.poll(self.sim_time, self.sensors))
+        else:
+            self.motors.apply(self.link.poll(self.sim_time))
         for m in self.movers:
             self._walk_mover(m, dt)
         mujoco.mj_step(self.model, self.data)
@@ -444,6 +471,7 @@ class Simulator:
             "falls": self.falls,
             "motion_state": self.driver.motion_state, "policy": self.driver.policy,
             "link": self.link.stats(),
+            **({"can": self.can.stats()} if self.can is not None else {}),
             "cmd_age": round(time.monotonic() - self.cmd_time, 2)
             if self.cmd_time > -math.inf else None,
         }

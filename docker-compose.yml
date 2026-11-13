@@ -46,6 +46,8 @@ services:
       # to controller_command_port (50051); from a bridge network to a program
       # on the host, set link_state_host to host.docker.internal.
       - "20001:20001/udp"   # the hardware link: a controller's joint commands
+      # joint_link can has no port to map: the CAN interfaces are the host's
+      # (scripts/vcan_up.sh), seen only with network_mode host.
     environment:
       HOME: /home/syncrobotic
       # numba's parallel ray caster on OpenMP (gcc's libgomp).

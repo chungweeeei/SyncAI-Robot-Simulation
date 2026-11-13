@@ -103,6 +103,24 @@ link_state_port: 30010
 # does not leave its last torque on the joints.
 link_watchdog_ms: 100.0
 
+# --- the joints on SocketCAN (syncai_sim/locomotion/can_link.py) ------------
+# udp: the joint commands are the hardware link's command datagram (above).
+# can: the twelve joints are J60 motors on four CAN buses, one per leg, as
+#   on the robot — its frames, its motor ids, its homed zero and directions —
+#   so a controller's SocketCAN hardware layer drives the sim as it drives
+#   the robot. The interfaces must exist where the sim runs: vcan ones of
+#   the robot's names (scripts/vcan_up.sh; the container on the host's
+#   network, SIM_NETWORK_MODE=host). The state datagram above is still sent
+#   (the IMU, the base's truth and the contacts are on no CAN bus); the
+#   command port is not read. link_watchdog_ms is then each motor's CAN
+#   timeout at power-up, until SET_CAN_TIMEOUT.
+joint_link: udp
+can_interfaces: [can1, can2, can3, can4]   # HR, FR, FL, HL (the G2.3's verified mapping)
+can_motor_ids: [2, 3, 4]                   # HipX, HipY, Knee on every bus
+# vcan delivers every frame at once; these put a bus's faults back, per bus.
+can_delay_ms: [0.0, 0.0, 0.0, 0.0]         # CONTROL commands held this long before the motor acts
+can_drop_rate: [0.0, 0.0, 0.0, 0.0]        # fraction of received frames lost (not applied, not answered)
+
 # --- the feet's floor -------------------------------------------------------
 # fitted: the flights surface_heights.py fitted are fixed boxes, one per
 # tread at the fitted depth (stairs.py); voxels: the patch's 0.1 m boxes

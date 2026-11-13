@@ -17,6 +17,9 @@ The sim is the robot's hardware and talks to the outside over UDP only:
                          (locomotion/hardware_link.py: the body's record out to
                          30010, joint commands in on 20001); without one the
                          watchdog holds them in damping and the robot lies down
+    joint_link can       the joints are J60 motors on four SocketCAN buses, one
+                         per leg, as on the robot (locomotion/can_link.py:
+                         can1..can4, vcan here); the record still goes out
     the panel's driving  motion keys, policy numbers and AXES to the
                          controller's command port, 50051 (driver/udp_driver.py)
     lidar_link livox     the sim is the robot's MID360 on the Livox protocol
@@ -197,6 +200,10 @@ def run(ini, a) -> int:
                 st = sim.status()
                 hw = (f"  link cmds={st['link']['commands']} states={st['link']['states']} "
                       f"trips={st['link']['watchdog_trips']}")
+                if "can" in st:
+                    cs = st["can"]
+                    hw += (f"  can cmds={cs['commands']} enabled={cs['enabled']} "
+                           f"timeouts={cs['timeouts']} dropped={sum(cs['dropped'])}")
                 if livox is not None:
                     ls = livox.stats
                     hw += (f"  livox pts={ls['point_packets']} imu={ls['imu_packets']} "

@@ -394,6 +394,10 @@ class WebView:
 
     def _push_status(self) -> None:
         st = self.sim.status()
+        if "can" in st:
+            joints = f"can cmds {sum(st['can']['commands'])}  timeouts {st['can']['timeouts']}"
+        else:
+            joints = f"link cmds {st['link']['commands']}  trips {st['link']['watchdog_trips']}"
         rt = ""
         if hasattr(self.sim, "realtime"):
             rt = f"realtime x{self.sim.realtime:.2f}  "
@@ -401,7 +405,7 @@ class WebView:
             f"**t** {st['sim_time']:.1f} s  {rt}  \n"
             f"xy ({st['x']:.2f}, {st['y']:.2f}) yaw {math.degrees(st['yaw']):.0f}° "
             f"ground z {st['z_ground']:.2f} pitch {math.degrees(st['pitch']):.1f}°  \n"
-            f"link cmds {st['link']['commands']}  trips {st['link']['watchdog_trips']}  "
+            f"{joints}  "
             f"falls {st['falls']}  collisions {st['collisions']}")
 
     def _recentre(self, event) -> None:

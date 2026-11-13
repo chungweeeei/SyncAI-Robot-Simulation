@@ -140,7 +140,13 @@ def main(argv=None) -> int:
     sim.spawn(pose[0], pose[1], pose[3], pose[2])
 
     ctrl = None
-    if a.fake_controller:
+    if a.fake_controller and cfg.joint_link == "can":
+        from syncai_sim.locomotion.can_link import StandInCanController
+        ctrl = StandInCanController(cfg.can_interfaces, cfg.can_motor_ids)
+        ctrl.start()
+        print(f"[bench] stand-in controller on {', '.join(cfg.can_interfaces)}: the motors "
+              f"enabled, a PD to the default pose at 1 kHz")
+    elif a.fake_controller:
         from syncai_sim.locomotion.hardware_link import StandInController
         ctrl = StandInController(cfg.link_state_port, cfg.link_command_port, host=cfg.link_state_host)
         ctrl.start()
@@ -212,7 +218,7 @@ def main(argv=None) -> int:
         "speed_driven": float(fwd_a[driven_a].mean()) if driven_a.any() else None,
         "climbed": round(float(sim.state.z_ground - z0), 3),
         "distance": round(float(math.hypot(sim.state.x - x0, sim.state.y - y0)), 3),
-        "link": st["link"],
+        "link": st["link"], "can": st.get("can"),
         "transitions": telemetry.transitions if telemetry is not None else None,
         "telemetry_lines": telemetry.lines if telemetry is not None else None,
         "last_command": None if last is None else {
@@ -231,7 +237,7 @@ def main(argv=None) -> int:
     print(f"[bench] {sim.sim_time:.1f} s sim in {wall:.1f} s wall (x{row['realtime']}): "
           f"falls {row['falls']}, pitch mean {row['pitch_mean']:.1f} "
           f"[{row['pitch_min']:.0f}..{row['pitch_max']:.0f}] deg, "
-          f"speed {row['speed_driven']}, link {row['link']}, "
+          f"speed {row['speed_driven']}, link {row['link']}, can {row['can']}, "
           f"state {STATE_NAMES.get(row['motion_state'], row['motion_state'])}")
     print(f"[bench] -> {out}")
     return 0

@@ -49,6 +49,11 @@ ONNX policies in-process or carry a rigid statue by rules).
                      command in — a controller PROCESS (SyncAI-Robot-Control
                      --backend sim) runs its RL or LMA against this
                │
+   locomotion/can_link.py   `joint_link: can`: the same joints as J60 motors on
+                     four SocketCAN buses, one per leg, as on the robot — the
+                     controller's REAL hardware layer runs against this; the
+                     record above still goes out (IMU, truth, contacts)
+               │
    driver/udp_driver.py   the panel's motion keys, policy number and AXES,
                      forwarded to the controller's command port as ASCII
                │
@@ -66,6 +71,9 @@ ONNX policies in-process or carry a rigid statue by rules).
 ```
 terrain patch moved if due
 -> JointCommand = link.poll(sim_time)       the controller's newest, or damping
+                or can.poll(sim_time, sensors)   joint_link can: the frames that came
+                                                 in are answered, each motor's command
+                                                 (or none, or damping) returned
 -> motors.apply(JointCommand)
 -> props walked -> mj_step -> sim_time += dt
 -> sensors.read(epoch + sim_time); link.send(sensors)
@@ -76,8 +84,9 @@ The 55-float record is built in place and sent as one datagram per step.
 cmd_vel never reaches the body: the panel's AXES go to the controller
 (driver/udp_driver.py), which turns them into joint commands.
 
-Everything the sim tells the outside goes over UDP (removed 2026-11-03: the
-ROS node, the nav session and the image's ROS base).
+Everything the sim tells the outside goes over UDP or, for the joints with
+`joint_link: can`, SocketCAN (removed 2026-11-03: the ROS node, the nav
+session and the image's ROS base).
 
 ## What a controller needs from the sim, and why
 

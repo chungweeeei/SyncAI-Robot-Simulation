@@ -100,6 +100,10 @@ def build_sim_config(ini: IniSettings, p: dict) -> SimConfig:
         cmd_delay_ms=p["cmd_delay_ms"], torque_bw_hz=p["torque_bw_hz"],
         link_command_port=int(p["link_command_port"]), link_state_host=p["link_state_host"],
         link_state_port=int(p["link_state_port"]), link_watchdog_ms=p["link_watchdog_ms"],
+        joint_link=p["joint_link"], can_interfaces=tuple(p["can_interfaces"]),
+        can_motor_ids=tuple(int(v) for v in p["can_motor_ids"]),
+        can_delay_ms=tuple(float(v) for v in p["can_delay_ms"]),
+        can_drop_rate=tuple(float(v) for v in p["can_drop_rate"]),
         controller_command_ip=p["controller_command_ip"],
         controller_command_port=int(p["controller_command_port"]),
         max_catch_up_s=p["max_catch_up_s"],
@@ -182,4 +186,8 @@ PARAM_DEFAULTS: dict = {
     # The hardware link (locomotion/hardware_link.py)
     "link_command_port": 20001, "link_state_host": "127.0.0.1", "link_state_port": 30010,
     "link_watchdog_ms": 100.0, "max_catch_up_s": 0.008,
+    # The joints on SocketCAN (locomotion/can_link.py)
+    "joint_link": "udp", "can_interfaces": ["can1", "can2", "can3", "can4"],
+    "can_motor_ids": [2, 3, 4], "can_delay_ms": [0.0, 0.0, 0.0, 0.0],
+    "can_drop_rate": [0.0, 0.0, 0.0, 0.0],
 }
