@@ -7,33 +7,33 @@ short list of what you must know to edit it correctly.
 ## What this is
 
 A MuJoCo simulation of the SyncAI G23 on a real mapped site, talking to the
-outside over **UDP only** (no ROS anywhere, removed 2026-11-03):
+outside over **UDP only** (no ROS anywhere, removed 2026-11-03). **The sim is
+the robot's hardware and nothing more** (2026-11-13): it sends out what the
+sensors measure and applies the joint commands it is sent. Turning cmd_vel
+into joint commands (RL or MPC) and the controller's state machine belong to
+the controller process, never here.
 
-* **the sim walks on its own policies** (`locomotion: policy`, the default):
-  the robot's ONNX policies in this process (`locomotion/policy.py`,
-  `locomotion/legged.py`) on a patch of the voxel grid
-  (`terrains/terrain_patch.py`). With `driver_link: udp` the sim also answers
-  as the gait controller on its ASCII UDP link (`driver/controller_link.py`:
-  AXES / MODE in on 50051, telemetry out to 50010).
+* **the sim is a controller's hardware**: the joints are handed to a
+  controller process over the binary hardware link
+  (`locomotion/hardware_link.py`: the body's record out to 30010, joint
+  commands in on 20001). The consumer is SyncAI-Robot-Control's
+  `--backend sim` (not written yet); with nothing on the link the motors are
+  in damping and the robot lies down. The viewer panel's keys and AXES go to
+  the controller's command port, 50051 (`driver/udp_driver.py`).
 * **the sim is the robot's lidar** (`lidar_link: livox`): a MID360 / MID360s
   on the Livox protocol (`sensor/livox_link.py`), read by the workspace's own
   livox_ros_driver2, so Point-LIO, the localizer and the planner run on it.
   Keep it byte-compatible with the vendored Livox-SDK2.
-* **the sim is a controller's hardware** (`locomotion: udp`): the joints are
-  handed to a controller process over the binary hardware link
-  (`locomotion/hardware_link.py`: the body's record out to 30010, joint
-  commands in on 20001). The consumer is SyncAI-Robot-Control's
-  `--backend sim`; this is where its MPC (LMA) is studied.
 
-`locomotion: kinematic` keeps the older rigid body carried by rules
-(`locomotion/kinematics.py`). The layers and one tick of each mode are drawn
-in `docs/architecture.md`. The ONNX files live in `policy/`, gitignored
-(`policy/README.md`); never commit them. Python throughout; one container
-(`docker-compose.yml`, plain Ubuntu 22.04), the sim and its browser viewer
-start with it (`scripts/sim_entry.sh`). The workspace
-(`chungweeeei/SyncAI-Robot-Workspace`, a sibling checkout) is mounted at
-`/home/syncrobotic/robot_ws` for its maps and the robot's URDF only; this
-repo at `/home/syncrobotic/sim`.
+Removed 2026-11-13, do not bring back: the in-process ONNX policies
+(`locomotion: policy`), the kinematic statue (`locomotion: kinematic`), the
+sim answering as the gait controller on the ASCII link (`driver_link: udp`).
+The layers and one tick are drawn in `docs/architecture.md`. Python
+throughout; one container (`docker-compose.yml`, plain Ubuntu 22.04), the
+sim and its browser viewer start with it (`scripts/sim_entry.sh`). The
+workspace (`chungweeeei/SyncAI-Robot-Workspace`, a sibling checkout) is
+mounted at `/home/syncrobotic/robot_ws` for its maps and the robot's URDF
+only; this repo at `/home/syncrobotic/sim`.
 
 ## Rules that shape edits
 
@@ -57,11 +57,11 @@ repo at `/home/syncrobotic/sim`.
    plus `tests/test_hardware_link.py` (228-byte state out, 240-byte command
    in, field order, frames, the watchdog): a change there is a change in
    SyncAI-Robot-Control's `--backend sim` too, said so in the commit message.
-   The ASCII link (`driver/controller_link.py`) is the robot's controller
-   protocol as driver_manager speaks it: keep it byte-compatible. Do not add
-   ROS, DDS or any other transport back.
-4. **Wall clock.** The sim paces fixed physics steps to real time (2 ms; 1 ms
-   in the udp profile) and catches up in short bursts (`max_catch_up_s`),
+   The panel's lines to the controller (`driver/udp_driver.py`) are the
+   robot's controller protocol as driver_manager speaks it: keep them
+   byte-compatible. Do not add ROS, DDS or any other transport back.
+4. **Wall clock.** The sim paces fixed physics steps to real time (1 ms) and
+   catches up in short bursts (`max_catch_up_s`, 8 ms),
    dropping what one burst cannot repay (`envs/pacing.py`: carrying it put
    the MID360's stamps in the future). The
    hardware link's `t` is `epoch + sim_time`, strictly increasing across
@@ -70,7 +70,7 @@ repo at `/home/syncrobotic/sim`.
 5. **Layers stay layers.** One subpackage per layer; every `__init__.py` is a
    docstring and re-exports nothing (import by full path). The picture
    (`visuals/`, `viewer/`) is never read by anything that senses or stands;
-   a backend returns a `JointCommand` and only `actuator/motors.py` writes
+   the link returns a `JointCommand` and only `actuator/motors.py` writes
    the joints; only `sensor/` reads the body for others.
 6. **Comments explain why**, and record measurements and rejected
    alternatives. A bare number without its reason is out of place.
@@ -87,18 +87,15 @@ Paths are under `syncai_sim/`; `docs/architecture.md` draws the layers.
 |---|---|
 | map -> voxel world (parse, mesh, plates, cache); ray cast / ground / blocked | `world/`: `build.py`, `btree.py`, `greedy_mesh.py`; `voxel_grid.py` (numba); `storeys.py` |
 | the feet's floor heights, flights fitted as staircases; the voxels -> boxes under the feet | `terrains/`: `surface_heights.py`, `stairs.py`, `terrain_patch.py` (numba, `tests/test_terrain_patch.py`); stairs the track never climbed: `config/stair_walks/<map>.yaml`; slopes across voxel layers: `config/ramps/<map>.yaml` |
-| URDF -> MJCF, mocap weld, standing pose, the joint order (`LEGS` x `JOINTS`) and default pose (`Q_DEFAULT`), the body's physics knobs (`motor_model`, `trunk_inertial`, contact, `actuator`) | `entity/robot.py` (`RobotConfig`; `DEFAULT_STANDING` was solved by FK, feet 0.372 m under the hips); their A/B `scripts/gait_bench.py` |
+| URDF -> MJCF, the joint order (`LEGS` x `JOINTS`) and default pose (`Q_DEFAULT`), the body's physics knobs (`motor_model`, `trunk_inertial`, contact) | `entity/robot.py` (`RobotConfig`; the defaults in `config/params/sim_params.yaml` are the vendor's) |
 | MjSpec assembly, bitmasks, groups, the MJB scene cache | `scene/scene.py` (`scene_info` reads a loaded model back by name; `scene_key` lists what the cache depends on; the site's picture is not in the model) |
 | the body's measurements (the body IMU, joints, the base's truth, foot contacts), posture, the trunk's contact | `sensor/proprioception.py` (`Sensors`, one float32 record per step; `tests/test_sensors.py`) |
 | the sim as the robot's MID360 on the Livox protocol (`lidar_link: livox`): discovery, commands, point and IMU packets, the device clock | `sensor/livox_link.py` (its docstring is the protocol's spec, with the vendored SDK's file for each rule; `tests/test_livox_link.py` pins the SDK's own bytes); the raw scan it sends is `Simulator.last_raw_scan`, the IMU `Simulator.lidar_imu` |
 | the lidar pattern, prop rays | `sensor/lidar.py`, `sensor/prop_rays.py`; the recorded MID360 bank `config/lidar/mid360_pattern.npz` (built by `scripts/lidar_pattern.py` through `sensor/livox_bag.py`, which reads a rosbag2 sqlite file directly) |
-| the motors: the PD closed every step, the motor clamp, the command delay and torque filter, `JointCommand` | `actuator/motors.py` (`tests/test_motors.py`) |
-| the policies (ported from the robot's controller) | `locomotion/policy.py` (`tests/test_policy.py`; names the source of every constant) |
-| the motion states (stand / lie / damping / the policy at 50 Hz), falls | `locomotion/legged.py`: each step returns a `JointCommand` for the motors; the `integrator` and delays are `SimConfig` in `envs/simulator.py` |
-| the step rule, gates, collisions (kinematic) | `locomotion/kinematics.py` (pure Python, `tests/test_kinematics.py`) |
-| the hardware link: the body's record out, a controller process's command in (`locomotion: udp`); the stand-in controller | `locomotion/hardware_link.py` (its docstring is the protocol's spec; `tests/test_hardware_link.py`); `config/params/controller_profile.yaml`; the bench `scripts/controller_bench.py` |
-| the sim as the gait controller on the ASCII UDP link (`driver_link: udp`); the stand-in state machine; the same surface forwarding to a controller process (`locomotion: udp`) | `driver/controller_link.py` (`tests/test_controller_link.py`); `driver/fake_driver.py`; `driver/udp_driver.py` |
-| one physics tick, scan, spawn, teleport | `envs/simulator.py` |
+| the motors: the PD closed every step (a generalized force, never a MuJoCo actuator), the motor clamp, the command delay and torque filter, `JointCommand` | `actuator/motors.py` (`tests/test_motors.py`) |
+| the hardware link: the body's record out, a controller process's command in, the watchdog; the stand-in controller | `locomotion/hardware_link.py` (its docstring is the protocol's spec; `tests/test_hardware_link.py`); the bench `scripts/controller_bench.py` |
+| the panel's motion keys, policy number and AXES forwarded to the controller | `driver/udp_driver.py` |
+| one physics tick, scan, spawn, teleport, falls counted; where the base is put down | `envs/simulator.py`; `envs/placement.py` |
 | the main loop, the links polled and ticked, the settings (defaults, `config/params/sim_params.yaml`, `--profile`, `-p`) | `__main__.py` (sets `OPENBLAS_NUM_THREADS=1` before numpy); `config.py` |
 | the viewer (viser: the site as GLB tiles once, poses at 20 Hz, drawn by the host's browser; nothing renders in the container), its panel's driving | `viewer/web_view.py`, `viewer/teleop.py` |
 | the viewer's look (tiles, intensity shading, the Poisson and TSDF surfaces, colours, the lidar map layer) | `visuals/`: `site_tiles.py` (10 m tiles as GLB, a texel per voxel face), `voxel_intensity.py`, `pcd_mesh.py`, `tsdf_mesh.py`, `visual.py`, `map_cloud.py` (picture only, never sensing); the site, storey and layer switches are the panel in `viewer/web_view.py` |
@@ -111,9 +108,9 @@ docker compose up -d                 # the sim + its viewer start: http://localh
 docker compose logs -f sim
 docker compose exec sim bash
 python3 -m pytest /home/syncrobotic/sim/tests
-python3 -m syncai_sim --headless --seconds 30 -p driver_link:=udp     # the sim as the gait controller on UDP
-# the sim as a controller's hardware (locomotion udp; docs/architecture.md):
-python3 /home/syncrobotic/sim/scripts/controller_bench.py --profile /home/syncrobotic/sim/config/params/controller_profile.yaml --fake-controller --seconds 5
+python3 -m syncai_sim --headless --seconds 30     # no controller on the link: the motors in damping
+# the link end to end with the stand-in controller (docs/architecture.md):
+python3 /home/syncrobotic/sim/scripts/controller_bench.py --fake-controller --seconds 5
 ```
 
 `docker compose up` already runs a sim on the viewer's port and the UDP
