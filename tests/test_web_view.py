@@ -62,7 +62,7 @@ class FakeSim:
         mujoco.mj_forward(self.model, self.data)
         m = self.model
         self.info = SceneInfo(
-            base_body=m.body("base_link").id, mocap_body=-1, mocap_id=-1,
+            base_body=m.body("base_link").id,
             lidar_body=m.body("base_link").id, imu_body=m.body("base_link").id,
             trunk_geoms=[], prop_bodies={"crate": m.body("prop_crate").id}, prop_mocap_ids={},
             storey_bounds=[], terrain_mocap_ids=np.array([0, 1]),
@@ -74,9 +74,9 @@ class FakeSim:
         self.data.mocap_pos[0] = (1.0, 1.0, -0.05)  # one terrain box in use
 
     def status(self):
-        return {"sim_time": 1.5, "last_event": "idle", "x": 1.0, "y": 1.0, "yaw": 0.3,
-                "z_ground": 0.0, "pitch": 0.0, "motion_state": 1, "policy": 0, "falls": 0,
-                "collisions": 0}
+        return {"sim_time": 1.5, "x": 1.0, "y": 1.0, "yaw": 0.3,
+                "z_ground": 0.0, "pitch": 0.0, "motion_state": 8, "policy": 0, "falls": 0,
+                "collisions": 0, "link": {"commands": 0, "states": 0, "watchdog_trips": 0}}
 
     def T_map_imu(self):
         T = np.eye(4)

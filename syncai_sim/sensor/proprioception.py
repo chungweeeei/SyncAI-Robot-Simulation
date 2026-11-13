@@ -29,10 +29,8 @@ lidar's own, in the model for whoever wants them. The lidar's sits ~0.4 m
 up, so its accelerometer sees the lever arm's omega x (omega x r) that a
 controller's filter must not.
 
-The RL backend does not call `read` (its runner reads MjData itself at
-50 Hz, locomotion/legged.py); the posture check and the trunk's contact
-test are separate queries so that the policy path pays for neither the
-record nor the packet.
+The posture check (`upset`, the controller's own fall test) and the trunk's
+contact are separate queries, read by the simulator for its status.
 """
 
 from __future__ import annotations

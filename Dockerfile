@@ -29,7 +29,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 COPY requirements.txt /tmp/sim-requirements.txt
 RUN pip3 install --no-cache-dir -r /tmp/sim-requirements.txt \
-    && python3 -c "import mujoco, numpy, numba, onnxruntime, viser, yaml; print('mujoco', mujoco.__version__, 'numpy', numpy.__version__, 'viser', viser.__version__)" \
+    && python3 -c "import mujoco, numpy, numba, viser, yaml; print('mujoco', mujoco.__version__, 'numpy', numpy.__version__, 'viser', viser.__version__)" \
     && rm /tmp/sim-requirements.txt
 
 # docker-compose.yml runs the container as the host's uid/gid (so cache/ and

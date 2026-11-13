@@ -1,32 +1,24 @@
 """The simulator proper: world + robot + physics + sensors, in one object.
 
-`__main__.py` drives it at wall-clock pace (and the benches in scripts/ as
-fast as they like); everything the sim tells the outside goes over UDP
-(driver/controller_link.py, locomotion/hardware_link.py). One `step()` is one physics tick (`physics_hz`, 500 by
-default, the params' value): the fake driver's pending switches are applied, the kinematic base
-is advanced (`kinematics.advance`), the mocap handle is placed, the prop movers
-are walked, MuJoCo steps, and a trunk pushed off its target by a prop is
-detected. `scan()` renders one lidar scan (`VoxelGrid.cast` for the site,
-`prop_rays` for the props).
+`__main__.py` drives it at wall-clock pace (and scripts/controller_bench.py
+as fast as it likes); everything the sim tells the outside goes over UDP.
+The sim is the robot's hardware and nothing more: the twelve joints are a
+controller process's, over the hardware link (locomotion/hardware_link.py),
+and the sim decides no joint command of its own. The controller's RL or MPC
+turns cmd_vel into joint commands; the panel's keys and AXES go to the
+controller (driver/udp_driver.py), not to the body.
 
-Three locomotions (`SimConfig.locomotion`):
+One `step()` is one physics tick (`physics_hz`, 1000 by default, the params'
+value): the terrain patch is moved under the feet, the controller's command
+that came in is applied by the motors, the prop movers are walked, MuJoCo
+steps, and the body's record goes out. A fall is counted, not acted on: the
+controller's own posture check locks it. `scan()` renders one lidar scan
+(`VoxelGrid.cast` for the site, `prop_rays` for the props).
 
-    kinematic   the body is placed: the step above, a rigid statue on a mocap
-                weld, the step rule and the gates of kinematics.py
-    policy      the body walks: the G23's own ONNX policies drive twelve PD
-                joints (locomotion/legged.py, policy.py) on a patch of the
-                voxel grid (terrains/terrain_patch.py); MuJoCo decides where
-                the body goes, and `state` is read back from it, so status
-                and the lidar are the same in both. No step rule:
-                whether a policy climbs a flight is now its own business,
-                which is the point.
-    udp         the same walking body, its joints handed to a controller
-                process over the hardware link (locomotion/hardware_link.py):
-                every step sends the body's measurements and applies the
-                command that came back. The controller's RL or MPC decides;
-                the sim is its hardware. The panel's keys and AXES go to the
-                controller (driver/udp_driver.py), and a fall is only counted
-                (the controller locks itself).
+Until 2026-11-13 the sim could also walk itself — the robot's ONNX policies
+in this process (`locomotion: policy`), or a rigid statue carried by rules
+(`kinematic`) — and answer as the gait controller on the ASCII link
+(`driver_link: udp`). Those were the controller's job and moved out with it.
 
 Poses handed out (4x4, metres; MuJoCo's world is the map frame):
 
@@ -47,23 +39,15 @@ import numpy as np
 
 from syncai_sim.actuator.motors import Motors
 from syncai_sim.scene import scene as sc
-from syncai_sim.driver.fake_driver import DAMPING, FakeDriver
 from syncai_sim.driver.udp_driver import UdpDriver
-from syncai_sim.locomotion.kinematics import BaseState, Event, KinematicsConfig, advance, place
+from syncai_sim.envs.placement import BaseState, PlacementConfig, place
 from syncai_sim.locomotion.hardware_link import HardwareLink, HardwareLinkConfig
-from syncai_sim.locomotion.legged import LeggedController
 from syncai_sim.sensor.lidar import LidarConfig, LidarModel, in_firing_frame, rays_along_motion
 from syncai_sim.sensor.proprioception import Sensors, sensor_adr
-from syncai_sim.locomotion.policy import load_policies
 from syncai_sim.sensor.prop_rays import ray_aabb, ray_vertical_cylinder
-from syncai_sim.entity.robot import JOINTS, LEGS, RobotConfig, RobotModel, load_robot
+from syncai_sim.entity.robot import RobotConfig, RobotModel, load_robot
 from syncai_sim.terrains.terrain_patch import TerrainPatch, TerrainPatchConfig
 from syncai_sim.world.build import World, WorldOptions, build_world
-
-# g2_deploy_rs src/ros_bridge.rs: what the controller accepts from cmd_vel
-# before the policy's own +-1 clip.
-CMD_LIMITS = ((-0.6, 0.8), (-0.4, 0.4), (-2.5, 2.5))
-
 
 @dataclass
 class SimConfig:
@@ -71,53 +55,45 @@ class SimConfig:
     cache_dir: str
     urdf_path: str
     world: WorldOptions = field(default_factory=WorldOptions)
-    kin: KinematicsConfig = field(default_factory=KinematicsConfig)
+    place: PlacementConfig = field(default_factory=PlacementConfig)
     lidar: LidarConfig = field(default_factory=LidarConfig)
     lidar_height: float = 0.481
-    physics_hz: float = 500.0  # config.PARAM_DEFAULTS has the same; 2 ms steps
-    switch_delay: float = 1.0
-    initial_motion_state: int = 1
-    initial_policy: int = 0
+    # Every physics step is one state datagram; at 1 kHz a controller's 1 ms
+    # loop sees a new timestamp each tick (500 works too: it reads each state
+    # twice). config.PARAM_DEFAULTS has the same.
+    physics_hz: float = 1000.0
     props: list[sc.PropSpec] = field(default_factory=list)
-    # A cmd_vel older than this stops the base. The real driver has no watchdog,
-    # but a sim that keeps walking after its controller died is a nuisance.
-    cmd_timeout: float = 1.0
     seed: int = 0
-    locomotion: str = "kinematic"  # kinematic | policy | udp
-    ppo_policy: str = ""
-    himloco_policy: str = ""
-    policy0_runner: str = "ppo"  # policy.RUNNERS: which runner policy 0 / 1 walk
-    policy1_runner: str = "himloco"
     terrain: TerrainPatchConfig = field(default_factory=TerrainPatchConfig)
     visual_mesh: str = "voxels"  # the browser's site: voxels | pointcloud | tsdf (site_tiles.py)
     visual_look: str = "ramp"  # its look: ramp | photo (visual.py; photo needs config/colour/<map>.npz)
-    # Walking only: fitted = the fitted flights as fixed boxes (stairs.py); voxels = the
+    # fitted = the fitted flights as fixed boxes (stairs.py); voxels = the
     # patch's boxes there too, risers on the 0.1 m column grid (the sim before 2026-10-25)
     stairs: str = "fitted"
-    # Walking only, the body's physics (robot.py RobotConfig and legged.py say
-    # what each is; the defaults are the sim before 2026-10-26, the A/B
-    # against the robot is scripts/gait_bench.py):
-    motor_model: str = "ideal"  # ideal | j60
-    trunk_inertial: str = "urdf"  # urdf | vendor
-    foot_solref: tuple[float, float] = (0.02, 1.0)
-    foot_friction: tuple[float, float, float] = (1.0, 0.005, 0.0001)
-    actuator: str = "qfrc"  # qfrc | position
+    # The body's physics (entity/robot.py RobotConfig says what each is). The
+    # defaults are the vendor's — the way a controller's own development
+    # simulation models the robot, so what it sees here is what it would see
+    # there (README, "The body's physics, as knobs").
+    motor_model: str = "j60"  # ideal | j60
+    trunk_inertial: str = "vendor"  # urdf | vendor
+    foot_solref: tuple[float, float] = (0.005, 1.0)
+    foot_friction: tuple[float, float, float] = (1.0, 0.01, 0.01)
     integrator: str = "euler"  # euler | implicitfast (scene.py)
     cmd_delay_ms: float = 0.0
     torque_bw_hz: float = 0.0
-    # The hardware link (`udp`; locomotion/hardware_link.py says the protocol),
-    # and where the panel's motion keys and AXES go in that mode.
+    # The hardware link (locomotion/hardware_link.py says the protocol), and
+    # where the panel's motion keys and AXES go: the controller's command port.
     link_command_port: int = 20001
     link_state_host: str = "127.0.0.1"
     link_state_port: int = 30010
     link_watchdog_ms: float = 100.0
+    controller_command_ip: str = "127.0.0.1"
     controller_command_port: int = 50051
     # A late loop catches up at most this much sim time in one burst, and
-    # drops a debt past it (envs/pacing.py, the main loop and controller_bench).
-    # The udp
-    # profile sets 8 ms so that a controller is never handed a burst of states
-    # while its command stays the same.
-    max_catch_up_s: float = 0.1
+    # drops a debt past it (envs/pacing.py, the main loop and controller_bench):
+    # 8 ms, so that a controller is never handed a quarter second of states in
+    # a few ms while its command stays the same.
+    max_catch_up_s: float = 0.008
 
 
 @dataclass
@@ -168,40 +144,30 @@ class Simulator:
         self.log = log
         t0 = time.perf_counter()
         self.world: World = build_world(cfg.map_dir, cfg.cache_dir, cfg.world, log=log)
-        if cfg.locomotion not in ("kinematic", "policy", "udp"):
-            raise ValueError(f"locomotion {cfg.locomotion!r}: kinematic | policy | udp")
-        self.legged = cfg.locomotion != "kinematic"
-        if cfg.locomotion == "udp" and cfg.actuator != "qfrc":
-            raise ValueError("locomotion udp needs actuator qfrc: a controller's command carries a "
-                             "velocity target and a feed-forward torque, which a MuJoCo position "
-                             "actuator cannot apply (actuator/motors.py)")
         cache_root = os.path.dirname(os.path.abspath(cfg.cache_dir))
         self.robot: RobotModel = load_robot(RobotConfig(
-            urdf_path=cfg.urdf_path, lidar_height=cfg.lidar_height, articulated=self.legged,
+            urdf_path=cfg.urdf_path, lidar_height=cfg.lidar_height,
             mesh_cache_dir=os.path.join(cache_root, "robot"),
             motor_model=cfg.motor_model, trunk_inertial=cfg.trunk_inertial,
             foot_solref=tuple(float(v) for v in cfg.foot_solref),
-            foot_friction=tuple(float(v) for v in cfg.foot_friction),
-            actuator=cfg.actuator), log=log)
+            foot_friction=tuple(float(v) for v in cfg.foot_friction)), log=log)
         if cfg.visual_mesh not in ("voxels", "pointcloud", "tsdf"):
             raise ValueError(f"visual_mesh {cfg.visual_mesh!r}: voxels | pointcloud | tsdf")
         if cfg.visual_look not in ("ramp", "photo"):
             raise ValueError(f"visual_look {cfg.visual_look!r}: ramp | photo")
-        capacity = cfg.terrain.capacity if self.legged else 0
+        capacity = cfg.terrain.capacity
         timestep = 1.0 / cfg.physics_hz
         if cfg.stairs not in ("fitted", "voxels"):
             raise ValueError(f"stairs {cfg.stairs!r}: fitted | voxels")
-        # Walking: the feet's surface, and the flights it fitted, before the
-        # scene, which builds those as fixed boxes (stairs.py).
-        self.surface = None
+        # The feet's surface, and the flights it fitted, before the scene,
+        # which builds those as fixed boxes (stairs.py).
+        from syncai_sim.terrains.surface_heights import load_or_build as load_surface
+        self.surface = load_surface(cfg.map_dir, cfg.cache_dir, self.world, log=log)
         stairs = None
-        if self.legged:
-            from syncai_sim.terrains.surface_heights import load_or_build as load_surface
-            self.surface = load_surface(cfg.map_dir, cfg.cache_dir, self.world, log=log)
-            if cfg.stairs == "fitted" and self.surface is not None and self.surface.flights:
-                from syncai_sim.terrains import stairs as st
-                g = self.world.grid
-                stairs = st.build(self.surface.flights, g.grid, g.origin_m, g.res, log=log)
+        if cfg.stairs == "fitted" and self.surface is not None and self.surface.flights:
+            from syncai_sim.terrains import stairs as st
+            g = self.world.grid
+            stairs = st.build(self.surface.flights, g.grid, g.origin_m, g.res, log=log)
         boxes = None if stairs is None else stairs.boxes
         solref = tuple(float(v) for v in cfg.foot_solref)
         key = sc.scene_key(self.world, self.robot, cfg.props, timestep, capacity, stairs=boxes,
@@ -214,33 +180,19 @@ class Simulator:
         self.info = sc.scene_info(self.model, self.robot, cfg.props, capacity,
                                   list(self.world.storey_bounds))
         self.data = mujoco.MjData(self.model)
-        self.motors: Motors | None = None
-        self.sensors: Sensors | None = None
-        self.legs: LeggedController | None = None  # policy: the in-process RL backend
-        self.link: HardwareLink | None = None  # udp: the controller at the other end
-        self.patch: TerrainPatch | None = None
         self.falls = 0
-        self._fallen_from: int | None = None
+        self._fallen = False
         self._last_world_hit = -math.inf
-        if self.legged:
-            self.motors = Motors(self.model, self.data, motor_model=cfg.motor_model,
-                                 actuator=cfg.actuator, cmd_delay_s=cfg.cmd_delay_ms / 1000.0,
-                                 torque_bw_hz=cfg.torque_bw_hz)
-            self.patch = TerrainPatch(self.world.grid, cfg.terrain, self.surface,
-                                      None if stairs is None else stairs.regions)
-            self.sensors = Sensors(self.model, self.data, self.info, self.motors)
-            self._imu_gyro = sensor_adr(self.model, "imu_gyro")
-            self._imu_acc = sensor_adr(self.model, "imu_acc")
-            if cfg.locomotion == "policy":
-                self.legs = LeggedController(self.model, self.data, self.info.base_body,
-                                             load_policies(cfg.ppo_policy, cfg.himloco_policy, log=log,
-                                                           policy0_runner=cfg.policy0_runner,
-                                                           policy1_runner=cfg.policy1_runner),
-                                             self.motors, log=log)
-            else:
-                self.link = HardwareLink(HardwareLinkConfig(
-                    command_port=cfg.link_command_port, state_host=cfg.link_state_host,
-                    state_port=cfg.link_state_port, watchdog_s=cfg.link_watchdog_ms / 1000.0), log=log)
+        self.motors = Motors(self.model, self.data, motor_model=cfg.motor_model,
+                             cmd_delay_s=cfg.cmd_delay_ms / 1000.0, torque_bw_hz=cfg.torque_bw_hz)
+        self.patch = TerrainPatch(self.world.grid, cfg.terrain, self.surface,
+                                  None if stairs is None else stairs.regions)
+        self.sensors = Sensors(self.model, self.data, self.info, self.motors)
+        self._imu_gyro = sensor_adr(self.model, "imu_gyro")
+        self._imu_acc = sensor_adr(self.model, "imu_acc")
+        self.link = HardwareLink(HardwareLinkConfig(
+            command_port=cfg.link_command_port, state_host=cfg.link_state_host,
+            state_port=cfg.link_state_port, watchdog_s=cfg.link_watchdog_ms / 1000.0), log=log)
         self.grid = self.world.grid
         self.lidar = LidarModel(cfg.lidar, cfg.seed)
         # Where the lidar was at each physics step of the last scan window
@@ -250,17 +202,12 @@ class Simulator:
         self._lidar_i = 0
         self.last_scan: np.ndarray | None = None  # the cloud `scan()` last returned
         self.last_raw_scan: RawScan | None = None  # the same scan as the lidar reports it
-        if self.link is not None:
-            self.driver = UdpDriver(command_port=cfg.controller_command_port, log=log)
-        else:
-            self.driver = FakeDriver(switch_delay=cfg.switch_delay,
-                                     motion_state=cfg.initial_motion_state, policy=cfg.initial_policy)
+        self.driver = UdpDriver(host=cfg.controller_command_ip,
+                                command_port=cfg.controller_command_port, log=log)
         self.state = BaseState()
         self.cmd = np.zeros(3)
         self.cmd_time = -math.inf
         self.sim_time = 0.0
-        self.prop_collisions = 0
-        self._last_prop_hit = -math.inf
         self.movers: list[Mover] = []
         self._free_props: dict[str, tuple[int, np.ndarray]] = {}
         for p in cfg.props:
@@ -273,13 +220,12 @@ class Simulator:
             else:
                 self._free_props[p.name] = (bid, np.asarray(p.pos, float))
         self.log(f"[sim] ready in {time.perf_counter() - t0:.1f} s: {self.model.ngeom} geoms, "
-                 f"{self.model.nbody} bodies, dt {self.model.opt.timestep * 1000:.1f} ms, "
-                 f"locomotion {cfg.locomotion}")
+                 f"{self.model.nbody} bodies, dt {self.model.opt.timestep * 1000:.1f} ms")
 
     # -- placement ---------------------------------------------------------------
     def spawn(self, x: float, y: float, yaw: float, z_hint: float | None = None) -> None:
         """Put the robot down at (x, y, yaw), on the floor nearest z_hint."""
-        self.state = place(self.state, self.grid, self.cfg.kin, x, y, yaw, z_hint)
+        self.state = place(self.state, self.grid, self.cfg.place, x, y, yaw, z_hint)
         self._put_body()
         for name, (bid, pos) in self._free_props.items():
             self._place_free_prop(bid, pos)
@@ -292,35 +238,24 @@ class Simulator:
 
     def teleport(self, x: float, y: float, yaw: float, z_hint: float | None = None) -> None:
         """Move the robot (a kidnap): the props stay where they are."""
-        self.state = place(self.state, self.grid, self.cfg.kin, x, y, yaw, z_hint)
+        self.state = place(self.state, self.grid, self.cfg.place, x, y, yaw, z_hint)
         self._put_body()
         self._lidar_poses[:] = self.T_map_lidar()  # a kidnap: no motion to smear over
         self.log(f"[sim] teleported to ({x:.2f}, {y:.2f}, yaw {yaw:.2f}), ground z "
                  f"{self.state.z_ground:.2f}")
 
     def _put_body(self) -> None:
-        """The body at `state`, at rest. Walking: level, standing on its feet in
-        the default pose, the terrain under it, the policy fresh — and a fall
-        is forgiven (the motion state it fell from comes back)."""
-        if not self.legged:
-            self._apply_target()
-            sc.set_base_pose(self.model, self.data, self.info,
-                             self.data.mocap_pos[self.info.mocap_id],
-                             self.data.mocap_quat[self.info.mocap_id])
-            return
+        """The body at `state`, at rest: level, standing on its feet in the
+        default pose, the terrain under it, and the controller's last command
+        dropped (it was for the old pose). A fall is forgiven."""
         s = self.state
         pos = np.array([s.x, s.y, self._floor_under(s.x, s.y, s.z_ground) + self.robot.h_stand + 0.005])
         self.motors.reset()  # joints at the default pose, at rest, nothing queued
-        if self.legs is not None:
-            self.legs.reset()
-        if self.link is not None:
-            self.link.reset()  # the controller's last command was for the old pose
+        self.link.reset()
         sc.set_base_pose(self.model, self.data, self.info, pos, yaw_pitch_quat(s.yaw, 0.0))
         sc.place_terrain(self.data, self.info, self.patch.boxes_around(pos))
         mujoco.mj_forward(self.model, self.data)
-        if self._fallen_from is not None:
-            self.driver.motion_state = self._fallen_from
-            self._fallen_from = None
+        self._fallen = False
 
     def _floor_under(self, x: float, y: float, voxel_top: float) -> float:
         """The measured floor in the voxel whose top is `voxel_top` (the feet
@@ -331,11 +266,6 @@ class Simulator:
         idx = np.floor((np.array([[x, y, voxel_top - 0.5 * g.res]]) - g.origin_m) / g.res)
         z = float(self.surface.lookup(idx.astype(np.int64))[0])
         return voxel_top if math.isnan(z) else z
-
-    def _apply_target(self) -> None:
-        s = self.state
-        self.data.mocap_pos[self.info.mocap_id] = (s.x, s.y, s.z_ground + self.robot.h_stand)
-        self.data.mocap_quat[self.info.mocap_id] = yaw_pitch_quat(s.yaw, s.pitch)
 
     def _place_free_prop(self, bid: int, pos: np.ndarray) -> None:
         g = self.grid.ground_under(pos[0], pos[1], pos[2], 1.0, 6.0)
@@ -359,117 +289,65 @@ class Simulator:
 
     # -- commands ----------------------------------------------------------------
     def set_cmd(self, vx: float, vy: float, wz: float, now: float | None = None) -> None:
+        """cmd_vel from the panel: AXES to the controller, which walks."""
         self.cmd[:] = (vx, vy, wz)
         self.cmd_time = time.monotonic() if now is None else now
-        if self.link is not None:  # the controller walks, not the sim: AXES to it
-            self.driver.send_axes(vx, vy, wz)
+        self.driver.send_axes(vx, vy, wz)
 
     def close(self) -> None:
-        """The sockets of the udp locomotion (none otherwise)."""
-        if self.link is not None:
-            self.link.close()
-            self.driver.close()
+        """The link's and the driver's sockets."""
+        self.link.close()
+        self.driver.close()
 
     # -- one physics tick --------------------------------------------------------
     def step(self) -> None:
-        if self.legged:
-            self._step_legged()
-            return
         dt = self.model.opt.timestep
-        self.driver.update()
-        vx, vy, wz = (self.cmd if time.monotonic() - self.cmd_time < self.cfg.cmd_timeout
-                      else (0.0, 0.0, 0.0))
-        self.state = advance(self.state, float(vx), float(vy), float(wz), dt, self.grid,
-                             self.cfg.kin, self.driver.policy, self.driver.motion_state)
-        self._apply_target()
+        base = self.data.xpos[self.info.base_body]
+        if self.patch.due(base):
+            sc.place_terrain(self.data, self.info, self.patch.boxes_around(base))
+        self.motors.apply(self.link.poll(self.sim_time))
         for m in self.movers:
             self._walk_mover(m, dt)
         mujoco.mj_step(self.model, self.data)
         self.sim_time += dt
+        # The state this step produced, to the controller.
+        self.sensors.read(self.link.time(self.sim_time))
+        self.link.send(self.sensors)
         self._record_lidar_pose()
-
-        # A prop in the way holds the trunk back from its target; after a few cm
-        # of lag give in — snap the kinematic state to where the body really is,
-        # so the robot stands against the prop instead of the weld winding up.
-        actual = self.data.xpos[self.info.base_body]
-        lag = math.hypot(actual[0] - self.state.x, actual[1] - self.state.y)
-        if lag > 0.08:
-            self.state.x, self.state.y = float(actual[0]), float(actual[1])
-            if self.sim_time - self._last_prop_hit > 0.5:
-                self.prop_collisions += 1
-                self._last_prop_hit = self.sim_time
+        self._read_state()
         for name, (bid, pos) in self._free_props.items():
             if self.data.xpos[bid][2] < pos[2] - 3.0:  # fell through a floor hole
                 self._place_free_prop(bid, pos)
 
-    def _step_legged(self) -> None:
-        dt = self.model.opt.timestep
-        self.driver.update()
-        cmd = (self.cmd if time.monotonic() - self.cmd_time < self.cfg.cmd_timeout
-               else np.zeros(3))
-        cmd = np.array([min(max(c, lo), hi) for c, (lo, hi) in zip(cmd, CMD_LIMITS)])
-        base = self.data.xpos[self.info.base_body]
-        if self.patch.due(base):
-            sc.place_terrain(self.data, self.info, self.patch.boxes_around(base))
-        if self.legs is not None:
-            joints = self.legs.step(cmd, self.driver.policy, self.driver.motion_state)
-        else:
-            joints = self.link.poll(self.sim_time)
-        self.motors.apply(joints)
-        for m in self.movers:
-            self._walk_mover(m, dt)
-        mujoco.mj_step(self.model, self.data)
-        self.sim_time += dt
-        if self.link is not None:  # the state this step produced, to the controller
-            self.sensors.read(self.link.time(self.sim_time))
-            self.link.send(self.sensors)
-        self._record_lidar_pose()
-        self._read_state(cmd)
-        for name, (bid, pos) in self._free_props.items():
-            if self.data.xpos[bid][2] < pos[2] - 3.0:
-                self._place_free_prop(bid, pos)
+    def _read_state(self) -> None:
+        """`state` from the body, for status, the logs and the viewer.
 
-    def _read_state(self, cmd: np.ndarray) -> None:
-        """`state` from the walking body, so status and the logs read the same.
-
-        A collision is the trunk touching the site — what a blocked move is in
-        the kinematic mode — counted once per half second like a prop hit. Not
-        the legs: HimLoco brushes tread nosings with a thigh on every flight of
-        dp (5 contacts on the first one, 2026-10-23), which is climbing, not
-        hitting. A fall is the controller's posture check, and puts the driver
-        in Damping as the real controller locks itself."""
+        A collision is the trunk touching the site, counted once per half
+        second. Not the legs: a stair climber brushes tread nosings with a
+        thigh on every flight of dp (5 contacts on the first one, 2026-10-23),
+        which is climbing, not hitting. A fall is the controller's posture
+        check (Sensors.upset): counted and logged once, nothing more — the
+        controller locks itself, as on the robot."""
         s = self.state
         p = self.data.xpos[self.info.base_body]
         R = self.data.xmat[self.info.base_body].reshape(3, 3)
         s.x, s.y = float(p[0]), float(p[1])
         s.yaw = math.atan2(R[1, 0], R[0, 0])
         s.pitch = math.asin(max(-1.0, min(1.0, -R[2, 0])))
-        g = self.grid.ground_under(s.x, s.y, s.z_ground, self.cfg.kin.ground_search_up,
-                                   self.cfg.kin.ground_search_down)
+        g = self.grid.ground_under(s.x, s.y, s.z_ground, self.cfg.place.ground_search_up,
+                                   self.cfg.place.ground_search_down)
         if not math.isnan(g):
             s.z_ground = g
-        if not self.driver.motion_allowed():
-            s.last_event = Event.GATED
-        elif np.any(np.abs(cmd) > 1e-6):
-            s.last_event = Event.MOVED
-        else:
-            s.last_event = Event.IDLE
         if self.sensors.trunk_hit() and self.sim_time - self._last_world_hit > 0.5:
             s.collisions += 1
             self._last_world_hit = self.sim_time
-        if self._fallen_from is None and self.sensors.upset():
+        if not self._fallen and self.sensors.upset():
             self.falls += 1
-            self._fallen_from = self.driver.motion_state
+            self._fallen = True
             roll, pitch = self.sensors.roll_pitch()
-            if self.link is not None:  # the controller's own posture check locks it
-                self.log(f"[sim] FELL at ({s.x:.2f}, {s.y:.2f}) roll {math.degrees(roll):.0f} "
-                         f"pitch {math.degrees(pitch):.0f} deg (the controller locks itself; "
-                         f"teleport, then RESET_SAFETY and MODE Z to stand it up again)")
-            else:
-                self.driver.motion_state = DAMPING
-                self.log(f"[sim] FELL at ({s.x:.2f}, {s.y:.2f}) roll {math.degrees(roll):.0f} "
-                         f"pitch {math.degrees(pitch):.0f} deg; driver -> Damping "
-                         f"(teleport / initialpose to stand it up again)")
+            self.log(f"[sim] FELL at ({s.x:.2f}, {s.y:.2f}) roll {math.degrees(roll):.0f} "
+                     f"pitch {math.degrees(pitch):.0f} deg (the controller locks itself; "
+                     f"teleport, then RESET_SAFETY and MODE Z to stand it up again)")
 
     def _walk_mover(self, m: Mover, dt: float) -> None:
         if m.waypoints.shape[0] < 2:
@@ -487,38 +365,6 @@ class Simulator:
         else:
             m.pos = m.pos + d / dist * step
         self._place_mover(m, m.pos)
-
-    def joint_states(self) -> tuple[list[str], np.ndarray]:
-        """The twelve leg joints by URDF name: the walking body's, or the
-        statue's baked standing angles (robot.py)."""
-        names = [f"{leg}_{j}_joint" for leg in LEGS for j in JOINTS]
-        if self.legged:
-            return names, self.motors.q()
-        standing = self.robot.cfg.standing
-        return names, np.array([standing[j] for _ in LEGS for j in JOINTS])
-
-    def controller_telemetry(self) -> dict:
-        """What the gait controller reports (driver/controller_link.py), in its
-        body frame = base_link: rpy, the body IMU's specific force (m/s^2; the
-        statue has no IMU and reports gravity alone — nothing in the stack
-        reads the driver's `imu`), angular rate, and the twelve joints in the
-        driver's order (FL/FR/HL/HR x HipX/HipY/Knee, the same as
-        joint_states). Kinematic: the baked standing pose, at rest."""
-        if self.legged:
-            sn = self.sensors
-            sn.read(self.sim_time)
-            return {"rpy": tuple(float(v) for v in sn.rpy), "acc": sn.acc.astype(float),
-                    "omega": sn.gyro.astype(float), "JOINT_POS": sn.q.astype(float),
-                    "JOINT_VEL": sn.dq.astype(float), "JOINT_TAU": sn.tau.astype(float)}
-        R = self.data.xmat[self.info.base_body].reshape(3, 3)
-        rpy = (math.atan2(R[2, 1], R[2, 2]), math.asin(max(-1.0, min(1.0, -R[2, 0]))),
-               math.atan2(R[1, 0], R[0, 0]))
-        acc = R.T @ np.array([0.0, 0.0, 9.81])
-        _, q = self.joint_states()
-        moving = self.state.last_event is Event.MOVED
-        omega = R.T @ np.array([0.0, 0.0, self.cmd[2] if moving else 0.0])
-        return {"rpy": rpy, "acc": acc, "omega": omega,
-                "JOINT_POS": q, "JOINT_VEL": np.zeros(12), "JOINT_TAU": np.zeros(12)}
 
     # -- poses -------------------------------------------------------------------
     def T_map_base(self) -> np.ndarray:
@@ -567,18 +413,11 @@ class Simulator:
 
     def lidar_imu(self) -> tuple[np.ndarray, np.ndarray]:
         """The MID360's built-in IMU, on lidar_top_imu: (angular rate rad/s,
-        specific force m/s^2), both in that frame, +9.81 up at rest. The
-        walking body reads its MuJoCo gyro and accelerometer; the statue has
-        none and reports gravity and the commanded turn, as controller_telemetry
-        does for it."""
-        if self.legged:
-            d = self.data
-            return (d.sensordata[self._imu_gyro:self._imu_gyro + 3].copy(),
-                    d.sensordata[self._imu_acc:self._imu_acc + 3].copy())
-        R = self.T_map_imu()[:3, :3]
-        moving = self.state.last_event is Event.MOVED
-        omega = R.T @ np.array([0.0, 0.0, self.cmd[2] if moving else 0.0])
-        return omega, R.T @ np.array([0.0, 0.0, 9.81])
+        specific force m/s^2), both in that frame, +9.81 up at rest: MuJoCo's
+        gyro and accelerometer there."""
+        d = self.data
+        return (d.sensordata[self._imu_gyro:self._imu_gyro + 3].copy(),
+                d.sensordata[self._imu_acc:self._imu_acc + 3].copy())
 
     def _prop_distances(self, origins: np.ndarray, dirs_w: np.ndarray):
         m, d = self.model, self.data
@@ -601,14 +440,10 @@ class Simulator:
             "sim_time": round(self.sim_time, 3),
             "x": round(s.x, 3), "y": round(s.y, 3), "yaw": round(s.yaw, 3),
             "z_ground": round(s.z_ground, 3), "pitch": round(s.pitch, 3),
-            "on_stairs": s.on_stairs, "last_event": s.last_event.value,
-            "next_ground": None if math.isnan(s.next_ground) else round(s.next_ground, 3),
-            "last_dz": round(s.last_dz, 3),
-            "collisions": s.collisions, "refused": s.refused,
-            "prop_collisions": self.prop_collisions,
-            "locomotion": self.cfg.locomotion, "falls": self.falls,
+            "collisions": s.collisions,
+            "falls": self.falls,
             "motion_state": self.driver.motion_state, "policy": self.driver.policy,
-            **({"link": self.link.stats()} if self.link is not None else {}),
+            "link": self.link.stats(),
             "cmd_age": round(time.monotonic() - self.cmd_time, 2)
             if self.cmd_time > -math.inf else None,
         }

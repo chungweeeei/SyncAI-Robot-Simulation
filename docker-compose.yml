@@ -41,12 +41,11 @@ services:
     network_mode: "${SIM_NETWORK_MODE:-bridge}"
     ports:
       - "${SIM_WEB_VIEW_PORT:-8080}:8080"   # the browser viewer (viewer/web_view.py)
-      # The sim's UDP inputs. Its outputs go where the params say:
-      # link_state_host:link_state_port (30010), controller_telemetry_port
-      # (50010); from a bridge network to a program on the host, set
-      # link_state_host to host.docker.internal.
-      - "20001:20001/udp"   # locomotion udp: a controller's joint commands
-      - "50051:50051/udp"   # driver_link udp: AXES / MODE for the sim as the gait controller
+      # The sim's UDP input. Its outputs go where the params say:
+      # link_state_host:link_state_port (30010) and the panel's keys and AXES
+      # to controller_command_port (50051); from a bridge network to a program
+      # on the host, set link_state_host to host.docker.internal.
+      - "20001:20001/udp"   # the hardware link: a controller's joint commands
     environment:
       HOME: /home/syncrobotic
       # numba's parallel ray caster on OpenMP (gcc's libgomp).

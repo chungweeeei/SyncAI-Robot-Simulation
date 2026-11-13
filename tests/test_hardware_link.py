@@ -165,7 +165,7 @@ def test_udp_driver_speaks_the_controllers_lines():
     lines = [rx.recvfrom(256)[0].decode() for _ in range(6)]
     assert lines == ["MODE Z\n", "MODE M\n", "ESTOP\n", "MODE 1\n", "AXES 0.500000 0.000000 -0.250000\n",
                      "RESET_SAFETY\n"]
-    assert drv.update() is False and drv.mode_array() == [0, 8] and drv.motion_allowed()
+    assert drv.motion_state == 8 and drv.sent == 6  # UNKNOWN: nothing here reads the telemetry
     drv.close()
     rx.close()
 

@@ -16,7 +16,7 @@ from tests.test_motors import body_xml
 
 
 def make(xml_tweak=lambda s: s):
-    model = mujoco.MjModel.from_xml_string(xml_tweak(body_xml(False, feet=True)))
+    model = mujoco.MjModel.from_xml_string(xml_tweak(body_xml(feet=True)))
     data = mujoco.MjData(model)
     mujoco.mj_forward(model, data)
     base = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_BODY, "base_link")
@@ -26,7 +26,7 @@ def make(xml_tweak=lambda s: s):
     for leg in LEGS:
         b = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_BODY, f"{leg}_FOOT")
         feet.append(int(model.body_geomadr[b]))
-    info = SceneInfo(base_body=base, mocap_body=-1, mocap_id=-1, lidar_body=base, imu_body=base,
+    info = SceneInfo(base_body=base, lidar_body=base, imu_body=base,
                      trunk_geoms=[trunk], prop_bodies={}, prop_mocap_ids={},
                      terrain_geoms=np.array([floor]), foot_geoms=feet)
     motors = Motors(model, data)

@@ -1,6 +1,6 @@
 """The hardware link: the twelve joints handed to a controller process over UDP.
 
-With `locomotion: udp` the sim is the robot's hardware as a controller sees
+The sim is the robot's hardware as a controller sees
 it — motors that close a PD on the command they are sent, an IMU, joint
 encoders, and (what hardware does not have) the base's ground truth and
 foot contacts. The controller is another process: SyncAI-Robot-Control's
@@ -48,10 +48,10 @@ controller's own JointDamping state) and the trip is logged once.
 
 Timing. The controller paces itself on its own wall clock (1 kHz); the sim
 paces its physics to the wall clock too and sends a state per step, so a
-controller sees timestamps 1 ms apart at `physics_hz` 1000 (the profile's
-value; at 500 it sees 2 ms, fine, its loop just reads each state twice). The
+controller sees timestamps 1 ms apart at `physics_hz` 1000 (the
+default; at 500 it sees 2 ms, fine, its loop just reads each state twice). The
 sim catches up on a late loop in bursts; `SimConfig.max_catch_up_s` keeps a
-burst short in this mode (8 ms) so that a controller is never handed a
+burst short (8 ms) so that a controller is never handed a
 quarter second of states in a few milliseconds while its command stays the
 same.
 

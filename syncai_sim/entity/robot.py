@@ -1,4 +1,4 @@
-"""The G23 in MuJoCo: the workspace's URDF, rigid, with a mocap handle.
+"""The G23 in MuJoCo: the workspace's URDF, its twelve joints driven by motors.
 
 The URDF (`src/syncai_bringup/description/G23.urdf` in the workspace) is the
 single description of the robot — the real robot's TF tree comes from it —
@@ -11,58 +11,45 @@ or the STL meshes are dropped and only the collision primitives remain), with
 Then the model is saved back as MJCF and edited (ElementTree) into what the
 sim needs:
 
-* `base_link` gets a **free joint**; a **mocap body** `base_mocap` is welded to
-  it (`<equality><weld>`), and `kinematics.py` moves the mocap. The weld is soft
-  (`solref`) so a contact with a prop pushes back instead of being overpowered.
-* The twelve leg joints are **removed** and each child body rotated to a fixed
-  standing angle: there is no gait policy, the robot is a statue that is
-  carried, so the legs are decoration. The angles are visual, chosen so the
-  feet stand on the ground when the body is at the standing height.
-* Leg and foot collision primitives become **non-colliding** (a carried statue
-  must not catch its feet on a riser), hidden in group 3 behind the STL
-  visuals (group 1). The trunk's two boxes keep collision, in the **prop**
-  bitmask (contype/conaffinity 2) so the trunk meets props but never the
-  world plates — the world is handled by `VoxelGrid.disc_blocked`.
+* `base_link` gets a **free joint**: the base is carried by its legs.
+* The twelve leg joints stay, with the motor model's armature (and, `j60`,
+  its friction and damping; the constants below). Their torque is applied by
+  `actuator/motors.py` as a generalized force — the whole command a
+  controller sends (a target velocity and a feed-forward torque included).
+* Every leg and foot primitive collides with the terrain patch
+  (terrain_patch.py), the trunk's two boxes with the patch and the props.
+  The legs never collide with each other or the trunk (the URDF's hip
+  cylinders overlap its trunk boxes), and not with props (a leg in a prop
+  would need a contact model the props were never tuned for).
+* Two IMUs: a gyro and an accelerometer on `lidar_top_imu` (the MID360's
+  own) and on base_link (the body's, sensor/proprioception.py).
 * `lidar_top` and `lidar_top_imu` stay as bodies (fixed children of
   base_link); their world poses come straight from MjData, so the sensor
-  extrinsics are the URDF's, read, not copied. The lidar's cloud is in the
-  `lidar_top_imu` frame, and the planner's `lidar_height` 0.481 is that
-  frame's height over the ground when standing, which fixes the body height.
+  extrinsics are the URDF's, read, not copied.
 
-With `articulated` (the `policy` locomotion, legged.py) the model is the robot
-instead of a statue: the twelve joints stay, with the motor model's armature
-(and, `j60`, its friction and damping; the constants below); there is
-no mocap or weld, the free base is carried by its legs; every leg and foot
-primitive collides with the terrain patch (terrain_patch.py) and the trunk
-with the patch and the props; a gyro and an accelerometer sit on
-`lidar_top_imu`. The legs never collide with each other or the trunk (the
-URDF's hip cylinders overlap its trunk boxes), and not with props (a leg in a
-prop would need a contact model the props were never tuned for). What else
-the walking body can be given — the vendor's trunk inertial, the vendor's
-contact parameters, MuJoCo position actuators — is `RobotConfig`, each a
-knob for the A/B against the robot (scripts/gait_bench.py) with the sim of
-before as its default.
+What else the body can be given — the vendor's trunk inertial, the vendor's
+contact parameters — is `RobotConfig`, each a knob with the sim of before as
+its default (config/params/sim_params.yaml sets the vendor's).
+
+Until 2026-11-13 there was also a rigid statue on a mocap weld, its legs
+baked at a standing angle, carried by rules (the `kinematic` locomotion);
+removed with the in-process policies when the sim became the controller's
+hardware only.
 """
 
 from __future__ import annotations
 
-import math
 import os
 import re
 import tempfile
 import xml.etree.ElementTree as ET
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 import mujoco
 import numpy as np
 
-# Visual standing angles (rad), by joint-name suffix. Found by forward
-# kinematics: with these the feet sit ~0.37 m under the hips, which is where the
-# ground is when lidar_top_imu stands 0.481 m over it (see RobotModel.h_stand).
-DEFAULT_STANDING = {"HipX": 0.0, "HipY": -0.447, "Knee": 0.867}
-
 # Collision bitmasks. World plates are 1/1 (scene.py); props are 2/3; the
-# terrain patch is 0/4 (articulated only).
+# terrain patch is 0/4.
 TRUNK_CONTYPE = 2
 TRUNK_CONAFFINITY = 2
 TERRAIN_BIT = 4
@@ -76,7 +63,7 @@ JOINT_ARMATURE = 0.01
 # (interface/robot/simulation/mujoco_simulation_G23.py, its J60_* constants
 # and j60_torque_limits, 2026-10), per [HipX, HipY, Knee]: a DC motor's
 # torque-speed envelope — driving, at most peak * (1 - |dq| / wmax); braking,
-# the full peak (legged.py applies it every step) — and, on the joint, the
+# the full peak (actuator/motors.py applies it every step) — and, on the joint, the
 # rotor's inertia through the gear (1.1e-4 kg m^2 * 6^2 / 6^2 / 9^2), dry
 # friction and viscous damping fitted so that the loss at top speed is
 # 0.81 / 0.81 / 0.92 Nm. `ideal` (the default) is the sim before 2026-10-26:
@@ -92,11 +79,11 @@ JOINT_KINDS = ("HipX", "HipY", "Knee")  # the suffix each joint name carries
 # HL, HR) x (HipX, HipY, Knee), which is its (LF, RF, LR, RR) x (hip, thigh,
 # calf) with the same signs (on flat ground PPO walks the URDF as is and falls
 # within a second with the hip signs flipped, 2026-10-23). Every layer above —
-# the policies, the motors, the hardware link, joint_states — uses this order.
+# the motors, the body's record, the hardware link — uses this order.
 LEGS = ("FL", "FR", "HL", "HR")
 JOINTS = ("HipX", "HipY", "Knee")
-# The controller's default joint pose (its dof_pos_default): the stand state's
-# goal and the zero every policy's observation and action are taken from.
+# The controller's default joint pose (its dof_pos_default): what a spawn puts
+# the joints at, and the stand-in controller's goal (hardware_link.py).
 Q_DEFAULT = np.array([0.0, -0.65, 1.3] * 4, dtype=np.float32)
 
 # Trunk inertial `vendor` (RobotConfig.trunk_inertial): the TORSO of
@@ -118,13 +105,9 @@ class RobotConfig:
     lidar_body: str = "lidar_top"
     imu_body: str = "lidar_top_imu"
     lidar_height: float = 0.481  # the planner's / controllers' value: imu frame over ground
-    standing: dict[str, float] = field(default_factory=lambda: dict(DEFAULT_STANDING))
-    weld_solref: tuple[float, float] = (0.02, 1.0)
-    mocap_name: str = "base_mocap"
-    articulated: bool = False
     imu_site: str = "imu_site"  # the lidar's IMU, on imu_body
-    base_imu_site: str = "base_imu"  # the body's IMU, on base_link (walking only)
-    # The walking body (articulated only; the constants above say what each is):
+    base_imu_site: str = "base_imu"  # the body's IMU, on base_link
+    # The body's physics (the constants above say what each is):
     motor_model: str = "ideal"  # ideal | j60
     trunk_inertial: str = "urdf"  # urdf | vendor
     # The legs' and feet's contact with the terrain boxes (scene.py gives the
@@ -133,12 +116,6 @@ class RobotConfig:
     # has solref (0.005, 1) and friction (1, 0.01, 0.01).
     foot_solref: tuple[float, float] = (0.02, 1.0)
     foot_friction: tuple[float, float, float] = (1.0, 0.005, 0.0001)
-    # qfrc: the PD torque computed in legged.py every step and applied as a
-    # generalized force (the sim before 2026-10-26). position: a MuJoCo
-    # position actuator per joint, gains written by legged.py, meant for the
-    # implicitfast integrator (scene.py) which integrates the -kd dq term
-    # implicitly instead of relying on armature to keep it from ringing.
-    actuator: str = "qfrc"  # qfrc | position
     # Visual STLs decimated (open3d quadric) into this directory, each to
     # `mesh_decimation` of its triangles, never under `mesh_min_triangles`.
     # The URDF's meshes are 274 k triangles (body 100 k, each shank 27 k):
@@ -163,19 +140,6 @@ class RobotModel:
     def lidar_in_imu(self) -> np.ndarray:
         """Translation of lidar_top in the lidar_top_imu frame (r_il is identity)."""
         return (np.linalg.inv(self.base_to_imu) @ self.base_to_lidar)[:3, 3]
-
-
-def _axis_angle_quat(axis, angle) -> np.ndarray:
-    a = np.asarray(axis, dtype=float)
-    a /= np.linalg.norm(a)
-    s = math.sin(angle / 2.0)
-    return np.array([math.cos(angle / 2.0), a[0] * s, a[1] * s, a[2] * s])
-
-
-def _quat_mul(q, r) -> np.ndarray:
-    out = np.empty(4)
-    mujoco.mju_mulQuat(out, np.asarray(q, float), np.asarray(r, float))
-    return out
 
 
 def _fmt(v) -> str:
@@ -221,52 +185,7 @@ def load_robot(cfg: RobotConfig, log=print) -> RobotModel:
     worldbody = root.find("worldbody")
     base = next(b for b in worldbody.iter("body") if b.get("name") == cfg.base_link)
     ET.SubElement(base, "freejoint", name="base_free")
-    if cfg.articulated:
-        return _articulated(root, base, cfg, base_to_lidar, base_to_imu)
-
-    # Legs: remove joints, bake the standing angle into the child body's quat.
-    for body in list(root.iter("body")):
-        joint = body.find("joint")
-        if joint is None or body is base:
-            continue
-        name = joint.get("name", "")
-        angle = next((a for suffix, a in cfg.standing.items() if suffix in name), 0.0)
-        axis = [float(x) for x in joint.get("axis", "0 0 1").split()]
-        q_joint = _axis_angle_quat(axis, angle)
-        q_body = [float(x) for x in body.get("quat", "1 0 0 0").split()]
-        body.set("quat", _fmt(_quat_mul(q_body, q_joint)))
-        body.remove(joint)
-
-    # Geoms: STL visuals stay in group 1; primitives lose collision except the
-    # trunk's two boxes, which get the prop bitmask.
-    for body in root.iter("body"):
-        for geom in body.findall("geom"):
-            if geom.get("type") == "mesh":
-                geom.set("group", "1")
-                continue
-            if body is base and geom.get("type") == "box":
-                geom.set("contype", str(TRUNK_CONTYPE))
-                geom.set("conaffinity", str(TRUNK_CONAFFINITY))
-                geom.set("group", "3")
-                geom.set("rgba", "0.2 0.5 0.9 0.35")
-            else:
-                geom.set("contype", "0")
-                geom.set("conaffinity", "0")
-                geom.set("group", "3")
-
-    # Mocap handle + weld.
-    mocap = ET.SubElement(worldbody, "body", name=cfg.mocap_name, mocap="true")
-    ET.SubElement(mocap, "geom", type="box", size="0.04 0.04 0.04", contype="0",
-                  conaffinity="0", group="4", rgba="1 0.2 0.2 0.5")
-    eq = root.find("equality")
-    if eq is None:
-        eq = ET.SubElement(root, "equality")
-    ET.SubElement(eq, "weld", name="base_weld", body1=cfg.mocap_name, body2=cfg.base_link,
-                  solref=_fmt(cfg.weld_solref))
-
-    h_stand = cfg.lidar_height - float(base_to_imu[2, 3])
-    return RobotModel(mjcf=ET.tostring(root, encoding="unicode"), cfg=cfg,
-                      base_to_lidar=base_to_lidar, base_to_imu=base_to_imu, h_stand=h_stand)
+    return _articulated(root, base, cfg, base_to_lidar, base_to_imu)
 
 
 def joint_kind(name: str) -> int:
@@ -283,8 +202,6 @@ def _articulated(root: ET.Element, base: ET.Element, cfg: RobotConfig,
         raise ValueError(f"motor_model {cfg.motor_model!r}: ideal | j60")
     if cfg.trunk_inertial not in ("urdf", "vendor"):
         raise ValueError(f"trunk_inertial {cfg.trunk_inertial!r}: urdf | vendor")
-    if cfg.actuator not in ("qfrc", "position"):
-        raise ValueError(f"actuator {cfg.actuator!r}: qfrc | position")
     hinges = [j for j in root.iter("joint") if j.get("type", "hinge") == "hinge"]
     for joint in hinges:
         if cfg.motor_model == "j60":
@@ -302,17 +219,6 @@ def _articulated(root: ET.Element, base: ET.Element, cfg: RobotConfig,
             inertial.attrib.pop(attr, None)
         for attr, value in VENDOR_TRUNK_INERTIAL.items():
             inertial.set(attr, value)
-    if cfg.actuator == "position":
-        # Gains 0 until legged.py writes the state's kp / kd into gainprm and
-        # biasprm; the force range is written every step too (the j60
-        # envelope), so the compiled range only has to exist.
-        act = root.find("actuator")
-        if act is None:
-            act = ET.SubElement(root, "actuator")
-        for joint in hinges:
-            name = joint.get("name", "")
-            ET.SubElement(act, "position", name=f"act_{name}", joint=name, kp="0", kv="0",
-                          forcerange="-100 100")
     for body in root.iter("body"):
         for geom in body.findall("geom"):
             if geom.get("type") == "mesh":
@@ -346,8 +252,8 @@ def _articulated(root: ET.Element, base: ET.Element, cfg: RobotConfig,
     ET.SubElement(sensor, "accelerometer", name="base_acc", site=cfg.base_imu_site)
     mjcf = ET.tostring(root, encoding="unicode")
 
-    # Standing height: the base over the ground with the legs at the policy's
-    # default pose and the lowest foot sphere touching it.
+    # Standing height: the base over the ground with the legs at the
+    # controller's default pose and the lowest foot sphere touching it.
     model = mujoco.MjModel.from_xml_string(mjcf)
     data = mujoco.MjData(model)
     for leg in LEGS:

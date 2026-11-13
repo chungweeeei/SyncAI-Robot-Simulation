@@ -1,15 +1,16 @@
-"""The driver's surface when a real controller holds the joints (`locomotion: udp`).
+"""The panel's driving, forwarded to the controller process.
 
-FakeDriver stands in for the controller's state machine when the sim walks
-its own policies. With the joints handed to a controller process over the
-hardware link (locomotion/hardware_link.py), the state machine is that
-process's: the motion keys and policy numbers the viewer's panel or a bench
-asks for go to it as the ASCII lines the nav stack's driver_manager sends —
-`MODE Z/C/X/R/M`, `MODE <n>`, `ESTOP`, `AXES vx vy wz`, on its command port
-(50051) — and what it is in is whatever its telemetry says, which nothing
-here listens to by default (`motion_state` stays UNKNOWN until a bench that
-reads the telemetry writes it). The surface is FakeDriver's so that every
-caller — the panel's teleop, gait_bench, status() — is unchanged.
+The joints are a controller's (locomotion/hardware_link.py), and so is its
+state machine: the motion keys and policy numbers the viewer's panel or a
+bench asks for go to it as the ASCII lines the nav stack's driver_manager
+sends — `MODE Z/C/X/R/M`, `MODE <n>`, `ESTOP`, `AXES vx vy wz`, on its command
+port (50051) — and what it is in is whatever its telemetry says, which
+nothing here listens to by default (`motion_state` stays UNKNOWN until a
+bench that reads the telemetry writes it).
+
+Until 2026-11-13 a stand-in state machine (fake_driver.py) had this surface
+for the sim's own policies, and the sim could answer as the controller on
+the same ASCII link (controller_link.py); both went with the policies.
 """
 
 from __future__ import annotations
@@ -17,18 +18,19 @@ from __future__ import annotations
 import socket
 from dataclasses import dataclass, field
 
-from syncai_sim.driver.controller_link import MODE_CHARS
-from syncai_sim.driver.fake_driver import LOCOMOTION, MOTION_KEYS, MPC, UNKNOWN
-
-# driver_manager's protocol.rs motion_key_command: the motion key -> the MODE character.
-KEY_CHARS = {key: char for char, key in MODE_CHARS.items()}
+# syncai_common/msg/RobotLowLevelMode.msg, data[1]: the state the controller reports
+STAND, LOCOMOTION, LIE_DOWN, DAMPING, ESTOP, MPC, UNKNOWN = 0, 1, 2, 3, 4, 5, 8
+# driver_manager's protocol.rs motion_key_command: key -> that state
+MOTION_KEYS: dict[str, int] = {"0": STAND, "1": LOCOMOTION, "2": LIE_DOWN, "3": DAMPING,
+                               "4": ESTOP, "5": MPC}
+# protocol.rs motion_key_command: the motion key -> the MODE character ("4" is ESTOP).
+KEY_CHARS = {"0": "Z", "1": "C", "2": "X", "3": "R", "5": "M"}
 
 
 @dataclass
 class UdpDriver:
     host: str = "127.0.0.1"
     command_port: int = 50051  # the controller's command port
-    switch_delay: float = 0.0  # FakeDriver's knob; the controller takes the time it takes
     motion_state: int = UNKNOWN
     policy: int = 0
     log: callable = field(default=print, repr=False)
@@ -47,6 +49,9 @@ class UdpDriver:
         return True, "Emergency stop sent" if key == "4" else "Motion key sent"
 
     def set_policy_mode(self, mode: int) -> tuple[bool, str]:
+        """`policy` becomes the number sent: nothing reads the controller's
+        telemetry by default, and the panel's toggle flips what it last asked for."""
+        self.policy = int(mode)
         self.send(f"MODE {int(mode)}")
         return True, "Policy updated"
 
@@ -61,17 +66,6 @@ class UdpDriver:
         except OSError as err:
             if not isinstance(err, ConnectionRefusedError):
                 self.log(f"[driver] command send failed: {err}")
-
-    # -- FakeDriver's surface ------------------------------------------------------------
-    def update(self) -> bool:
-        return False
-
-    def mode_array(self) -> list[int]:
-        return [int(self.policy), int(self.motion_state)]
-
-    def motion_allowed(self) -> bool:
-        """Unknown counts as allowed: the controller decides, not the sim."""
-        return self.motion_state in (LOCOMOTION, MPC, UNKNOWN)
 
     def close(self) -> None:
         if self._sock is not None:
