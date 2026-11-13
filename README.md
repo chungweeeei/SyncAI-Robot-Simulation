@@ -2,8 +2,8 @@
 
 A MuJoCo simulation of the SyncAI robot (the G23 quadruped) on a **real,
 mapped site**, built for the robot's controllers: the sim is the body, the
-site and the sensors, and it talks to the outside over **UDP and SocketCAN
-only** — no ROS
+site and the sensors, and it talks to the outside over **UDP, SocketCAN and
+a serial port only** — no ROS
 in the container, the image or the code (removed 2026-11-03).
 
 What the simulator is, in one paragraph: the site's `octomap.bt` (written by
@@ -44,6 +44,11 @@ The UDP links, the only ways in and out:
   the robot — `can1..can4`, motor ids 2 / 3 / 4, the J60's frames, each
   motor's own direction and homed zero — so a controller's real hardware
   layer drives the sim as it drives the robot (section "The joints on CAN").
+* **The IMU on a serial port, the BMS on CAN** (`imu_link: serial`,
+  `sensor/imu_serial.py`; `bms_link: can`, `sensor/bms_link.py`): the rest
+  of what that hardware layer reads on the robot — the body IMU as its
+  Yesense unit streaming on a serial port, the battery's BMS answering on
+  `can0` (section "The IMU and the BMS").
 * **The panel's driving** (`driver/udp_driver.py`): the viewer's motion keys,
   policy toggle and sliders go to the controller's command port (50051) as
   the ASCII lines driver_manager sends (`MODE`, `ESTOP`, `AXES`). The nav
@@ -80,6 +85,8 @@ syncai_sim/                        the Python package (python3 -m syncai_sim): o
     lidar.py, prop_rays.py             the MID360: its recorded pattern fired frame by frame, rays from where it was when each fired; analytic rays for props
     livox_bag.py                       CustomMsg frames straight out of a rosbag2 sqlite file -> the pattern bank
     proprioception.py                  the body IMU, joints q/dq/tau, the base's truth, foot contacts: one record per step
+    imu_serial.py                      imu_link serial: the body IMU as the robot's Yesense on a pseudo-terminal (the frame; the spec)
+    bms_link.py                        bms_link can: the pack's Foxlink BMS on can0 (the items, the cycle; the spec) and the small battery behind it
   actuator/motors.py                 the motors: JointCommand (q_des, dq_des, kp, kd, tau_ff), the PD closed every step, the motor clamp, delays
   locomotion/hardware_link.py        the body's record out and the controller's command in, one UDP datagram each per step (the protocol's spec); the stand-in controller
   locomotion/can_link.py             joint_link can: the joints as J60 motors on four SocketCAN buses (the frames, the robot's wiring; the spec); its stand-in controller
@@ -95,7 +102,7 @@ syncai_sim/                        the Python package (python3 -m syncai_sim): o
     voxel_colour.py                    the mapping run's bag -> the colour the camera saw at each voxel (config/colour/<map>.npz, scripts/colour_map.py)
     bag_camera.py                      the bag's images, camera_info and /tf_static, read from its sqlite file
     map_cloud.py                       map.pcd thinned per storey: the viewer's lidar map layer
-scripts/vcan_up.sh                 the four vcan interfaces of joint_link can, made on the host (a privileged container on a Mac)
+scripts/vcan_up.sh                 the vcan interfaces of joint_link can and bms_link can (can0..can4), made on the host (a privileged container on a Mac)
 scripts/controller_bench.py        the sim as a controller's hardware, headless: MODE / AXES to the controller, its MODE_STATE back, the link's counters
 docs/architecture.md               the layers, one physics tick, what a controller needs from the sim and why
 config/lidar/mid360_pattern.npz    the MID360's recorded pattern bank, from the workspace's record/dp (config/lidar/README.md)
@@ -207,7 +214,8 @@ same hardware layer that drives the robot drives the sim, with what that
 brings — the protocol's quantisation (a position command resolves 1.2 mrad;
 a zero velocity command decodes to −2.4 mrad/s), feedback only when
 commanded, motors that give no torque until they are enabled, a CAN timeout
-per motor, and a leg that is lost alone when its bus is.
+per motor that disables it until its fault is cleared, and a leg that is
+lost alone when its bus is.
 
 | bus | leg | joints | motor ids |
 |---|---|---|---|
@@ -220,15 +228,15 @@ A motor's position is its own: zero at the homed pose (the leg folded
 against its stops) and positive the way it is mounted, so `motor = sign x
 (joint − home)`; the table of signs and homes is in the module, and
 `StandInCanController` there is the whole mapping in one place. The IMU is
-not on a CAN bus (a serial port on the robot), nor are the base's truth or
-the foot contacts: the hardware link's state datagram (30010) is still sent
-every step and carries them.
+not on a CAN bus (a serial port on the robot: the next section), nor are
+the base's truth or the foot contacts: the hardware link's state datagram
+(30010) is still sent every step and carries them.
 
 The interfaces are virtual (vcan) and must exist on the host the sim and
 the controller share, both on the host's network:
 
 ```bash
-scripts/vcan_up.sh                         # on the host: can1..can4 (a privileged container on a Mac); again after a VM restart
+scripts/vcan_up.sh                         # on the host: can0..can4 (a privileged container on a Mac); again after a VM restart
 SIM_NETWORK_MODE=host SIM_ARGS="--teleop -p joint_link:=can" docker compose up -d
 python3 /home/syncrobotic/sim/scripts/controller_bench.py -p joint_link:=can --fake-controller --seconds 5   # in the container: the stand-in on the buses
 scripts/vcan_up.sh down
@@ -239,17 +247,64 @@ hence the host network): the stand-in stands the robot on dp through the
 four buses, 0 falls in 5 s, ~2100 CONTROL frames a second per bus (the
 in-process stand-in reaches ~700 Hz a motor of its 1 kHz), each
 answered. `ip link set can2 down` on the host is a leg lost: the FR motors
-time out and damp, the robot falls onto that leg, and they take commands
-again when the bus is back.
+time out and disable themselves, the robot falls onto that leg, and they
+stay limp when the bus is back until the controller clears the fault and
+enables them again (ERROR_RESET, ENABLE — the pair the robot's controller
+always sends).
 
 vcan has no bitrate, arbitration or error frames — every frame arrives, at
 once. `can_delay_ms` and `can_drop_rate` (one value per bus) put a bus's
 latency and losses back. Not modelled: the order of the frames inside one
 1 ms step, bus load, the motor's bandwidth setting and its temperature.
-Three things are assumptions rather than the J60's documented behaviour (a
-timed-out motor damps and recovers on the next command; a timeout of 0 is
-none; what the plain acknowledgements carry): the module's docstring lists
-them.
+The frames, their replies and the timeout are the J60 manual's (V1.0.7, in
+g2_deploy_rs `docs/datasheets`): the first version here guessed that a
+timed-out motor damps and takes the next command, and the manual says it is
+disabled. Four things remain assumptions (the timeout also counts from
+ENABLE; a timeout of 0 is none; ENABLE fails while a fault is latched;
+SET_HOME's reply, a command the manual does not list): the module's
+docstring lists them.
+
+### The IMU and the BMS
+
+The robot's controller reads two more devices beside its motors, neither on
+the legs' buses, and the sim can be both:
+
+* **`-p imu_link:=serial`** — the body IMU is a Yesense unit on a UART
+  (`/dev/ttyTHS1`, 115200 baud) that streams 49-byte frames of acceleration,
+  angular rate and Euler angles. The sim opens a pseudo-terminal, links
+  `imu_serial_port` (`/tmp/syncai_imu`) to it and writes the same frames
+  from the body's record, 200 a second (`sensor/imu_serial.py` is the
+  specification, byte-compatible with the controller's reader). The
+  pseudo-terminal is in the sim's container, so the reader runs there
+  (`docker compose exec sim ...`, with `G2_IMU_PORT=/tmp/syncai_imu` for the
+  robot's controller); a real serial device named by `imu_serial_port` is
+  written instead. A port nobody reads keeps no backlog: more than 50 ms of
+  unread frames is dropped, as a UART would have lost them.
+* **`-p bms_link:=can`** — the battery's BMS (Foxlink Jeff-8S3P) is alone on
+  `can0`, extended frames, and silent until asked: a frame with an item's
+  id is answered with that item, `0x87` starts the cycle of all of them
+  (cell voltages, temperatures, pack voltage, current, state, SOC / SOH)
+  and `0x86` stops it (`sensor/bms_link.py`, from the vendor's protocol
+  document). Behind the numbers is a small battery: the charge falls with
+  the power the robot draws — an idle 40 W plus each joint's mechanical
+  power and winding heat, the latter from the J60 manual's resistance and
+  torque constants — so standing on dp reads about 4 A at 31.7 V.
+
+```bash
+scripts/vcan_up.sh                         # can0 too
+SIM_NETWORK_MODE=host SIM_ARGS="--teleop -p joint_link:=can -p imu_link:=serial -p bms_link:=can" docker compose up -d
+```
+
+Checked on OrbStack (2026-11-13) with a second process in the container
+reading as the controller does while the stand-in stood the robot through
+the buses: 208 IMU frames in a second, gravity on z and the trunk level;
+the BMS's 27 items every 100 ms after `0x87`, 31.68 V, −3.6 A, 80.0 %.
+Assumed, because nothing at hand says: the IMU's rate (200 Hz; 115200 baud
+carries at most 235 of this frame), the BMS cycle's period (100 ms), the
+pack's capacity (15 Ah) and the idle draw. No noise or bias on the IMU, no
+voltage sag, no thermal model, and the BMS never trips. Neither has been
+read by the robot's controller itself yet, only by its reader ported into
+the tests.
 
 ### The sim as the robot's lidar
 
@@ -529,7 +584,9 @@ food for the planner's dynamic overlay and TerrainLayer's `obstacle_memory`.
   controller's real hardware layer be what is tested — its packing, its
   mapping, its timeouts — instead of a second path that only the sim
   exercises. So CAN was let in, as the robot's protocol and nothing else;
-  ROS and DDS stay out.
+  ROS and DDS stay out. The serial port followed the same day for the same
+  reason: the robot's IMU is on one, and its controller's hardware layer
+  does not start without it.
 * **UDP only, no ROS (2026-11-03).** Until then the sim was a ROS 2 node in
   the workspace's ROS image, publishing what the Livox driver, Point-LIO,
   the localizer and driver_manager publish so the nav stack could run end to
@@ -593,7 +650,10 @@ food for the planner's dynamic overlay and TerrainLayer's `obstacle_memory`.
   day: UDP is the only way out. The in-process policies, the kinematic
   statue and the ASCII controller link removed (2026-11-13): the sim is the
   hardware only. The joints as J60 motors on four SocketCAN buses
-  (2026-11-13, `joint_link: can`), checked with a stand-in on vcan.
+  (2026-11-13, `joint_link: can`), checked with a stand-in on vcan; the
+  body IMU on a serial port and the BMS on `can0` (`imu_link: serial`,
+  `bms_link: can`), checked with the controller's readers ported into the
+  tests, not yet with the controller.
 * **Next.** The controller process on the link: SyncAI-Robot-Control's
   `--backend sim` against `locomotion/hardware_link.py`, in a container
   beside the sim's, then `scripts/controller_bench.py --send "MODE Z" --send

@@ -44,6 +44,8 @@ from syncai_sim.driver.udp_driver import UdpDriver
 from syncai_sim.envs.placement import BaseState, PlacementConfig, place
 from syncai_sim.locomotion.can_link import CanLink, CanLinkConfig
 from syncai_sim.locomotion.hardware_link import HardwareLink, HardwareLinkConfig
+from syncai_sim.sensor.bms_link import Bms, BmsConfig
+from syncai_sim.sensor.imu_serial import ImuSerial, ImuSerialConfig
 from syncai_sim.sensor.lidar import LidarConfig, LidarModel, in_firing_frame, rays_along_motion
 from syncai_sim.sensor.proprioception import Sensors, sensor_adr
 from syncai_sim.sensor.prop_rays import ray_aabb, ray_vertical_cylinder
@@ -98,6 +100,18 @@ class SimConfig:
     can_motor_ids: tuple[int, ...] = (2, 3, 4)
     can_delay_ms: tuple[float, ...] = (0.0, 0.0, 0.0, 0.0)
     can_drop_rate: tuple[float, ...] = (0.0, 0.0, 0.0, 0.0)
+    # The body IMU as the robot's Yesense on a serial port (sensor/imu_serial.py)
+    # and the pack's BMS on its own CAN bus (sensor/bms_link.py): what a
+    # controller's real hardware layer reads beside the motors.
+    imu_link: str = "none"
+    imu_serial_port: str = "/tmp/syncai_imu"
+    imu_serial_hz: float = 200.0
+    bms_link: str = "none"
+    bms_interface: str = "can0"
+    bms_period_ms: float = 100.0
+    bms_soc: float = 0.8
+    bms_capacity_ah: float = 15.0
+    bms_idle_w: float = 40.0
     controller_command_ip: str = "127.0.0.1"
     controller_command_port: int = 50051
     # A late loop catches up at most this much sim time in one burst, and
@@ -212,6 +226,19 @@ class Simulator:
                 interfaces=tuple(cfg.can_interfaces), motor_ids=tuple(cfg.can_motor_ids),
                 timeout_ms=cfg.link_watchdog_ms, delay_ms=tuple(cfg.can_delay_ms),
                 drop_rate=tuple(cfg.can_drop_rate)), log=log, seed=cfg.seed)
+        if cfg.imu_link not in ("none", "serial"):
+            raise ValueError(f"imu_link {cfg.imu_link!r}: none | serial")
+        self.imu_serial: ImuSerial | None = None
+        if cfg.imu_link == "serial":
+            self.imu_serial = ImuSerial(ImuSerialConfig(
+                port=cfg.imu_serial_port, rate_hz=cfg.imu_serial_hz), log=log)
+        if cfg.bms_link not in ("none", "can"):
+            raise ValueError(f"bms_link {cfg.bms_link!r}: none | can")
+        self.bms: Bms | None = None
+        if cfg.bms_link == "can":
+            self.bms = Bms(BmsConfig(
+                interface=cfg.bms_interface, period_ms=cfg.bms_period_ms, soc=cfg.bms_soc,
+                capacity_ah=cfg.bms_capacity_ah, idle_w=cfg.bms_idle_w), log=log)
         self.grid = self.world.grid
         self.lidar = LidarModel(cfg.lidar, cfg.seed)
         # Where the lidar was at each physics step of the last scan window
@@ -321,6 +348,10 @@ class Simulator:
         self.link.close()
         if self.can is not None:
             self.can.close()
+        if self.imu_serial is not None:
+            self.imu_serial.close()
+        if self.bms is not None:
+            self.bms.close()
         self.driver.close()
 
     # -- one physics tick --------------------------------------------------------
@@ -340,6 +371,10 @@ class Simulator:
         # The state this step produced, to the controller.
         self.sensors.read(self.link.time(self.sim_time))
         self.link.send(self.sensors)
+        if self.imu_serial is not None:
+            self.imu_serial.tick(self.sim_time, self.sensors)
+        if self.bms is not None:
+            self.bms.tick(self.sim_time, self.sensors)
         self._record_lidar_pose()
         self._read_state()
         for name, (bid, pos) in self._free_props.items():
@@ -472,6 +507,8 @@ class Simulator:
             "motion_state": self.driver.motion_state, "policy": self.driver.policy,
             "link": self.link.stats(),
             **({"can": self.can.stats()} if self.can is not None else {}),
+            **({"imu": self.imu_serial.stats()} if self.imu_serial is not None else {}),
+            **({"bms": self.bms.stats()} if self.bms is not None else {}),
             "cmd_age": round(time.monotonic() - self.cmd_time, 2)
             if self.cmd_time > -math.inf else None,
         }

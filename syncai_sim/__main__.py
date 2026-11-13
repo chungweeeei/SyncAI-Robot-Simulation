@@ -11,7 +11,8 @@ flags. The INI
 (config/system.ini relative to the cwd, i.e. the workspace root, or
 $SYNCAI_SYSTEM_INI) gives the map and the spawn pose.
 
-The sim is the robot's hardware and talks to the outside over UDP only:
+The sim is the robot's hardware and talks to the outside over UDP, SocketCAN
+and a serial port only:
 
     the hardware link    the joints are a controller process's
                          (locomotion/hardware_link.py: the body's record out to
@@ -20,6 +21,10 @@ The sim is the robot's hardware and talks to the outside over UDP only:
     joint_link can       the joints are J60 motors on four SocketCAN buses, one
                          per leg, as on the robot (locomotion/can_link.py:
                          can1..can4, vcan here); the record still goes out
+    imu_link serial      the body IMU is the robot's Yesense on a serial port
+                         (sensor/imu_serial.py: a pseudo-terminal at
+                         imu_serial_port)
+    bms_link can         the pack's BMS answers on can0 (sensor/bms_link.py)
     the panel's driving  motion keys, policy numbers and AXES to the
                          controller's command port, 50051 (driver/udp_driver.py)
     lidar_link livox     the sim is the robot's MID360 on the Livox protocol
@@ -204,6 +209,11 @@ def run(ini, a) -> int:
                     cs = st["can"]
                     hw += (f"  can cmds={cs['commands']} enabled={cs['enabled']} "
                            f"timeouts={cs['timeouts']} dropped={sum(cs['dropped'])}")
+                if "imu" in st:
+                    hw += f"  imu frames={st['imu']['frames']} cleared={st['imu']['cleared']}"
+                if "bms" in st:
+                    bs = st["bms"]
+                    hw += f"  bms {bs['soc']:.1f}% {bs['voltage']:.1f}V {bs['current']:.1f}A sent={bs['sent']}"
                 if livox is not None:
                     ls = livox.stats
                     hw += (f"  livox pts={ls['point_packets']} imu={ls['imu_packets']} "

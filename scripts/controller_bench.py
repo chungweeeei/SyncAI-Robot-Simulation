@@ -218,7 +218,7 @@ def main(argv=None) -> int:
         "speed_driven": float(fwd_a[driven_a].mean()) if driven_a.any() else None,
         "climbed": round(float(sim.state.z_ground - z0), 3),
         "distance": round(float(math.hypot(sim.state.x - x0, sim.state.y - y0)), 3),
-        "link": st["link"], "can": st.get("can"),
+        "link": st["link"], "can": st.get("can"), "imu": st.get("imu"), "bms": st.get("bms"),
         "transitions": telemetry.transitions if telemetry is not None else None,
         "telemetry_lines": telemetry.lines if telemetry is not None else None,
         "last_command": None if last is None else {
@@ -238,6 +238,7 @@ def main(argv=None) -> int:
           f"falls {row['falls']}, pitch mean {row['pitch_mean']:.1f} "
           f"[{row['pitch_min']:.0f}..{row['pitch_max']:.0f}] deg, "
           f"speed {row['speed_driven']}, link {row['link']}, can {row['can']}, "
+          f"imu {row['imu']}, bms {row['bms']}, "
           f"state {STATE_NAMES.get(row['motion_state'], row['motion_state'])}")
     print(f"[bench] -> {out}")
     return 0

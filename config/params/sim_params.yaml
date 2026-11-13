@@ -121,6 +121,30 @@ can_motor_ids: [2, 3, 4]                   # HipX, HipY, Knee on every bus
 can_delay_ms: [0.0, 0.0, 0.0, 0.0]         # CONTROL commands held this long before the motor acts
 can_drop_rate: [0.0, 0.0, 0.0, 0.0]        # fraction of received frames lost (not applied, not answered)
 
+# --- the body IMU on a serial port (syncai_sim/sensor/imu_serial.py) --------
+# none: the body IMU is only in the state datagram above.
+# serial: the sim is also the robot's Yesense IMU, streaming its frames
+#   (acceleration, angular rate, Euler angles) on a pseudo-terminal that
+#   imu_serial_port links to, as the unit does on /dev/ttyTHS1: the
+#   controller's own serial reader parses it. The pseudo-terminal is in the
+#   sim's container; a real serial device named here is written instead.
+imu_link: none
+imu_serial_port: /tmp/syncai_imu
+imu_serial_hz: 200.0         # not known for the robot's unit; 115200 baud carries at most 235 of this frame
+
+# --- the BMS on CAN (syncai_sim/sensor/bms_link.py) -------------------------
+# none: no battery.
+# can: the sim is the pack's BMS (Foxlink Jeff-8S3P) on the robot's fifth
+#   bus, extended frames: silent until asked, 0x87 starts the cycle of
+#   voltages, current, temperatures, state and SOC. A vcan interface, as
+#   for the joints (scripts/vcan_up.sh makes can0 too).
+bms_link: none
+bms_interface: can0
+bms_period_ms: 100.0         # the whole table once started; not in the protocol document
+bms_soc: 0.8                 # at start, 0..1
+bms_capacity_ah: 15.0        # 8S3P of 5 Ah cells, assumed
+bms_idle_w: 40.0             # drawn with the motors at rest (computer, lidar, drivers), assumed
+
 # --- the feet's floor -------------------------------------------------------
 # fitted: the flights surface_heights.py fitted are fixed boxes, one per
 # tread at the fitted depth (stairs.py); voxels: the patch's 0.1 m boxes

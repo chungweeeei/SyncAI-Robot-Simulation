@@ -104,6 +104,11 @@ def build_sim_config(ini: IniSettings, p: dict) -> SimConfig:
         can_motor_ids=tuple(int(v) for v in p["can_motor_ids"]),
         can_delay_ms=tuple(float(v) for v in p["can_delay_ms"]),
         can_drop_rate=tuple(float(v) for v in p["can_drop_rate"]),
+        imu_link=p["imu_link"], imu_serial_port=p["imu_serial_port"],
+        imu_serial_hz=float(p["imu_serial_hz"]),
+        bms_link=p["bms_link"], bms_interface=p["bms_interface"],
+        bms_period_ms=float(p["bms_period_ms"]), bms_soc=float(p["bms_soc"]),
+        bms_capacity_ah=float(p["bms_capacity_ah"]), bms_idle_w=float(p["bms_idle_w"]),
         controller_command_ip=p["controller_command_ip"],
         controller_command_port=int(p["controller_command_port"]),
         max_catch_up_s=p["max_catch_up_s"],
@@ -190,4 +195,9 @@ PARAM_DEFAULTS: dict = {
     "joint_link": "udp", "can_interfaces": ["can1", "can2", "can3", "can4"],
     "can_motor_ids": [2, 3, 4], "can_delay_ms": [0.0, 0.0, 0.0, 0.0],
     "can_drop_rate": [0.0, 0.0, 0.0, 0.0],
+    # The body IMU on a serial port (sensor/imu_serial.py), the BMS on CAN
+    # (sensor/bms_link.py)
+    "imu_link": "none", "imu_serial_port": "/tmp/syncai_imu", "imu_serial_hz": 200.0,
+    "bms_link": "none", "bms_interface": "can0", "bms_period_ms": 100.0, "bms_soc": 0.8,
+    "bms_capacity_ah": 15.0, "bms_idle_w": 40.0,
 }

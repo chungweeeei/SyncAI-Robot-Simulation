@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
-# The CAN interfaces of `joint_link: can` (syncai_sim/locomotion/can_link.py):
-# four virtual ones with the robot's names, on the host the sim and the
-# controller share.
+# The CAN interfaces of `joint_link: can` (syncai_sim/locomotion/can_link.py)
+# and `bms_link: can` (syncai_sim/sensor/bms_link.py): five virtual ones with
+# the robot's names — can0 the BMS, can1..can4 a leg each — on the host the
+# sim and the controller share.
 #
-#   scripts/vcan_up.sh                 # can1 can2 can3 can4, up
+#   scripts/vcan_up.sh                 # can0 can1 can2 can3 can4, up
 #   scripts/vcan_up.sh down            # remove them
 #   VCAN_IFS="vcan0 vcan1 vcan2 vcan3" scripts/vcan_up.sh
 #
@@ -20,7 +21,7 @@
 # bus's faults back). `ip link set can2 down` takes one leg's bus away.
 set -euo pipefail
 
-IFS_LIST="${VCAN_IFS:-can1 can2 can3 can4}"
+IFS_LIST="${VCAN_IFS:-can0 can1 can2 can3 can4}"
 ACTION="${1:-up}"
 
 if [ "$ACTION" = "down" ]; then
