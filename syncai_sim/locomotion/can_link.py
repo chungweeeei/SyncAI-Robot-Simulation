@@ -40,10 +40,13 @@ truncated, little-endian:
     CONTROL reply, motor -> controller, 8 bytes
         position 20 bit +-40 rad | velocity 20 bit +-40 rad/s | torque 16 bit
         +-40 Nm | temperature flag 1 bit | temperature 7 bit -20..200 C
-    DISABLE (1), ENABLE (2), SET_HOME (6), ERROR_RESET (17): no data
-    SET_CAN_TIMEOUT (9): 1 byte, ms.  SET_BANDWIDTH (10): u16
-    GET_STATUS_WORD (23): reply 2 bytes, the error word (0 here, always)
-    GET_CONFIG (24): reply 8 bytes, [3] the CAN timeout ms, [4:6] the bandwidth
+    DISABLE (1), ENABLE (2), SET_HOME (6), ERROR_RESET (17): no data;
+        the reply is 1 byte, 0 = done, 1 = failed
+    SET_CAN_TIMEOUT (9): 1 byte, ms.  SET_BANDWIDTH (10): u16.  Reply as above
+    GET_STATUS_WORD (23): reply 2 bytes, the error word; bit 5 = CAN timeout
+        is the only fault this module raises
+    GET_CONFIG (24): reply 8 bytes, [2] the motor id, [3] the CAN timeout ms,
+        [4:6] the bandwidth, [6:8] the current limit over 0..40 A
 
 A motor only reports when it is commanded: every CONTROL frame is answered
 with one reply, so the controller's feedback rate is its command rate. The
@@ -56,24 +59,31 @@ What the motor does with it (actuator/motors.py closes the loop):
 
     disabled (as at power-up)      no torque
     enabled, commanded             tau = kp (p_des - p) + kd (v_des - v) + tq
-    enabled, no CONTROL for the    damping (kp 0, kd 2) until the next one
-      CAN timeout
+    enabled, no CONTROL for the    the motor disables itself (no torque) and
+      CAN timeout                  latches bit 5 of its status word, until
+                                   ERROR_RESET and then ENABLE
 
-Three things here are this module's assumptions, not read from a J60:
-that a timed-out motor damps (the hardware link's watchdog does the same)
-and recovers on the next command; that a timeout of 0 ms means none; and
-what the acknowledgements of the commands without a documented reply carry
-(one zero byte, as ERROR_RESET's "success"). The bandwidth is stored and
-reported, not modelled (`torque_bw_hz` is the sim's torque filter). No
-thermal model: the temperature is `TEMPERATURE_C`.
+That is the J60's manual (V1.0.7, g2_deploy_rs docs/datasheets/J60.pdf: 5 the
+frames and their replies, 4.14.3 "on a CAN timeout the motor is disabled",
+5.8 a fault must be cleared before the motor is used again), and why the
+robot's controller sends ERROR_RESET with every ENABLE. Before 2026-11-13
+this module guessed that a timed-out motor damps and takes the next command:
+it does not, a leg whose bus was lost stays limp until it is enabled again.
+Four things remain this module's assumptions, not in the manual: that the
+timeout counts from ENABLE as well as from the last CONTROL; that a timeout
+of 0 ms means none (the manual has the debug tool set 0 to talk at its own
+pace); that ENABLE fails (reply 1) while a fault is latched; and SET_HOME's
+reply, a command the manual does not list (one zero byte, as the others').
+The bandwidth is stored and reported, not modelled (`torque_bw_hz` is the
+sim's torque filter). No thermal model: the temperature is `TEMPERATURE_C`.
 
 vcan has no bitrate, arbitration or errors: a frame arrives at once, always.
 Two knobs put a bus's faults back, per bus, off by default: `delay_ms` holds
 every CONTROL command that long before the motor acts on it (the reply is
 not delayed), `drop_rate` loses that fraction of the frames the sim receives
 (the command is not applied and nothing is answered). A bus taken down
-(`ip link set can2 down`) is a leg lost: its three motors time out and damp
-while the others go on.
+(`ip link set can2 down`) is a leg lost: its three motors time out and go
+limp while the others go on.
 
 `StandInCanController` is the other end for tests and the bench: it enables
 the motors and commands a PD to the default pose at 1 kHz, which stands the
@@ -92,7 +102,7 @@ from dataclasses import dataclass
 
 import numpy as np
 
-from syncai_sim.actuator.motors import DAMPING_KD, JointCommand
+from syncai_sim.actuator.motors import JointCommand
 from syncai_sim.entity.robot import Q_DEFAULT
 from syncai_sim.sensor.proprioception import Sensors
 
@@ -116,6 +126,9 @@ KP_RANGE = (0.0, 1023.0)
 KD_RANGE = (0.0, 51.0)
 TEMPERATURE_RANGE = (-20.0, 200.0)  # C
 TEMPERATURE_C = 30.0  # reported for every motor: there is no thermal model
+STATUS_CAN_TIMEOUT = 1 << 5  # the status word's bit this module raises
+CURRENT_RANGE = (0.0, 40.0)  # A, GET_CONFIG's current limit
+CURRENT_LIMIT_A = 28.0  # the J60's default (manual 3.2)
 
 N_BUSES, PER_BUS = 4, 3
 # The bus (index into the interfaces, can1..can4) and the slot on it of each
@@ -258,7 +271,8 @@ class CanLink:
         self.bandwidth = np.zeros(12, dtype=int)
         self._has_cmd = np.zeros(12, dtype=bool)
         self._cmd_time = np.full(12, -np.inf)
-        self._timed_out = np.zeros(12, dtype=bool)
+        self._rearm = False  # after a reset: the timeouts count from the next poll
+        self.status = np.zeros(12, dtype=int)  # each motor's status word (faults, latched)
         # The command each motor holds, joint frame (JointCommand's arrays).
         self._q_des, self._dq_des = np.zeros(12), np.zeros(12)
         self._kp, self._kd, self._tau_ff = np.zeros(12), np.zeros(12), np.zeros(12)
@@ -320,8 +334,12 @@ class CanLink:
             reply = pack_feedback(s * (float(sensors.q[i]) - self.zero[i]),
                                   s * float(sensors.dq[i]), s * float(sensors.tau[i]))
         elif cmd == ENABLE_MOTOR:
-            self.enabled[i] = True
-            reply = b"\0"
+            if self.status[i]:
+                reply = b"\1"  # a latched fault: ERROR_RESET first
+            else:
+                self.enabled[i] = True
+                self._cmd_time[i] = t  # the timeout counts from here
+                reply = b"\0"
         elif cmd == DISABLE_MOTOR:
             self.enabled[i] = False
             self._has_cmd[i] = False
@@ -331,7 +349,8 @@ class CanLink:
             self._has_cmd[i] = False  # its target was in the old frame
             reply = b"\0"
         elif cmd == ERROR_RESET:
-            reply = b"\0"  # success: there is no error to clear
+            self.status[i] = 0
+            reply = b"\0"
         elif cmd == SET_CAN_TIMEOUT:
             if data:
                 self.timeout_s[i] = data[0] / 1000.0
@@ -341,17 +360,22 @@ class CanLink:
                 self.bandwidth[i] = data[0] | (data[1] << 8)
             reply = b"\0"
         elif cmd == GET_STATUS_WORD:
-            reply = b"\0\0"
+            reply = int(self.status[i]).to_bytes(2, "little")
         elif cmd == GET_CONFIG:
             bw = int(self.bandwidth[i])
-            reply = bytes([0, 0, 0, min(255, int(round(self.timeout_s[i] * 1000.0))),
-                           bw & 0xFF, bw >> 8, 0, 0])
+            limit = float_to_uint(CURRENT_LIMIT_A, *CURRENT_RANGE, 16)
+            reply = bytes([0, 0, mid, min(255, int(round(self.timeout_s[i] * 1000.0))),
+                           bw & 0xFF, bw >> 8, limit & 0xFF, limit >> 8])
         else:
             return
         self._send(b, pack_frame(can_id(cmd, mid, reply=True), reply))
 
     def _take(self, b: int, i: int, cmd: tuple, t: float) -> None:
-        """A CONTROL command reaches motor i: into the joint's frame."""
+        """A CONTROL command reaches motor i: into the joint's frame. A
+        disabled motor answers (the caller has) and keeps nothing: what it
+        was sent while off is not what it does when enabled."""
+        if not self.enabled[i]:
+            return
         p, v, kp, kd, tq = cmd
         s = JOINT_SIGN[i]
         self._q_des[i] = s * p + self.zero[i]
@@ -363,21 +387,21 @@ class CanLink:
         self.commands[b] += 1
 
     def _command(self, t: float) -> JointCommand:
-        live = self.enabled & self._has_cmd
-        late = live & (self.timeout_s > 0) & (t - self._cmd_time > self.timeout_s)
-        new = late & ~self._timed_out
-        if new.any():
-            self.timeouts += int(new.sum())
-            self.log(f"[can] no command for the CAN timeout on joints {np.flatnonzero(new).tolist()}: "
-                     f"damping")
-        back = self._timed_out & ~late
-        if back.any():
-            self.log(f"[can] joints {np.flatnonzero(back).tolist()} commanded again")
-        self._timed_out = late
-        on = live & ~late
+        if self._rearm:
+            self._rearm = False
+            self._cmd_time[self.enabled] = t
+        late = self.enabled & (self.timeout_s > 0) & (t - self._cmd_time > self.timeout_s)
+        if late.any():
+            self.timeouts += int(late.sum())
+            self.enabled[late] = False
+            self._has_cmd[late] = False
+            self.status[late] |= STATUS_CAN_TIMEOUT
+            self.log(f"[can] no command for the CAN timeout on joints "
+                     f"{np.flatnonzero(late).tolist()}: disabled until ERROR_RESET and ENABLE")
+        on = self.enabled & self._has_cmd
         return JointCommand(
             q_des=np.where(on, self._q_des, 0.0), dq_des=np.where(on, self._dq_des, 0.0),
-            kp=np.where(on, self._kp, 0.0), kd=np.where(on, self._kd, np.where(late, DAMPING_KD, 0.0)),
+            kp=np.where(on, self._kp, 0.0), kd=np.where(on, self._kd, 0.0),
             tau_ff=np.where(on, self._tau_ff, 0.0))
 
     def _send(self, b: int, frame: bytes) -> None:
@@ -394,9 +418,9 @@ class CanLink:
     def reset(self) -> None:
         """After a spawn / teleport: what the controller commanded was for the
         old pose. The motors stay enabled and homed where they were (a
-        teleport is not a power cycle)."""
+        teleport is not a power cycle), their timeouts counting from now."""
         self._has_cmd[:] = False
-        self._timed_out[:] = False
+        self._rearm = True
         for held in self._held:
             held.clear()
 

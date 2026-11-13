@@ -14,10 +14,9 @@ import mujoco
 import numpy as np
 import pytest
 
-from syncai_sim.actuator.motors import DAMPING_KD
 from syncai_sim.entity.robot import Q_DEFAULT
 from syncai_sim.locomotion.can_link import (BUS_JOINT, CONTROL_MOTOR, DISABLE_MOTOR, ENABLE_MOTOR,
-                                            FRAME_SIZE, GET_CONFIG, GET_STATUS_WORD, JOINT_HOME,
+                                            ERROR_RESET, FRAME_SIZE, GET_CONFIG, GET_STATUS_WORD, JOINT_HOME,
                                             JOINT_SIGN, SET_CAN_TIMEOUT, SET_HOME, CanLink,
                                             CanLinkConfig, StandInCanController, can_id,
                                             float_to_uint, open_bus, pack_control, pack_feedback,
@@ -182,7 +181,7 @@ def test_a_motor_gives_no_torque_until_it_is_enabled():
     assert cmd.kp[2] == 0 and cmd.kd[2] == 0 and np.all(cmd.kp[np.arange(12) != 2] == 70.0)
 
 
-def test_a_silent_bus_damps_its_leg_and_the_others_go_on():
+def test_a_silent_bus_disables_its_leg_and_the_others_go_on():
     lk, ctrl = make(timeout_ms=100.0)
     enable_all(ctrl)
     command_all(ctrl)
@@ -195,18 +194,47 @@ def test_a_silent_bus_damps_its_leg_and_the_others_go_on():
         if step == 100:
             assert np.all(cmd.kp == 70.0)  # not yet: exactly the timeout
     fr = np.isin(np.arange(12), BUS_JOINT[1])
-    assert np.all(cmd.kp[fr] == 0) and np.all(cmd.kd[fr] == DAMPING_KD) and np.all(cmd.q_des[fr] == 0)
-    assert np.all(cmd.kp[~fr] == 70.0) and lk.stats()["timeouts"] == 3
+    # The manual's 4.14.3: disabled, no torque at all (not damping).
+    assert np.all(cmd.kp[fr] == 0) and np.all(cmd.kd[fr] == 0) and np.all(cmd.q_des[fr] == 0)
+    assert np.all(cmd.kp[~fr] == 70.0) and lk.stats()["timeouts"] == 3 and lk.stats()["enabled"] == 9
+    for s in ctrl:
+        drain(s)
+    # Commanding it again is not enough, nor is ENABLE alone: the fault is latched.
     command_all(ctrl)
-    assert np.all(lk.poll(0.201, body()).kp == 70.0)  # commanded again
+    for mid in IDS:
+        ctrl[1].send(pack_frame(can_id(GET_STATUS_WORD, mid)))
+        ctrl[1].send(pack_frame(can_id(ENABLE_MOTOR, mid)))
+    cmd = lk.poll(0.201, body())
+    assert np.all(cmd.kp[fr] == 0) and lk.stats()["enabled"] == 9
+    replies = [r for r in drain(ctrl[1]) if (r[0] >> 5) != CONTROL_MOTOR]
+    assert replies[0] == (can_id(GET_STATUS_WORD, 2, reply=True), b"\x20\x00")  # bit 5: CAN timeout
+    assert replies[1] == (can_id(ENABLE_MOTOR, 2, reply=True), b"\x01")  # failed
+    # The robot's controller's pair: ERROR_RESET, ENABLE; then the command.
+    for mid in IDS:
+        ctrl[1].send(pack_frame(can_id(ERROR_RESET, mid)))
+        ctrl[1].send(pack_frame(can_id(ENABLE_MOTOR, mid)))
+    command_all(ctrl)
+    assert np.all(lk.poll(0.202, body()).kp == 70.0) and lk.stats()["enabled"] == 12
+    assert [d for _, d in drain(ctrl[1])][:2] == [b"\0", b"\0"]
+
+
+def test_an_enabled_motor_that_is_never_commanded_times_out_too():
+    lk, ctrl = make(timeout_ms=100.0)
+    enable_all(ctrl)
+    lk.poll(0.0, body())
+    assert lk.stats()["enabled"] == 12
+    lk.poll(0.100, body())
+    assert lk.stats()["enabled"] == 12
+    lk.poll(0.101, body())
+    assert lk.stats()["enabled"] == 0 and lk.stats()["timeouts"] == 12
 
 
 def test_set_can_timeout_and_get_config():
     lk, ctrl = make(timeout_ms=100.0)
-    enable_all(ctrl)
     for sock in ctrl:
         for mid in IDS:
             sock.send(pack_frame(can_id(SET_CAN_TIMEOUT, mid), bytes([200])))
+    enable_all(ctrl)
     command_all(ctrl)
     lk.poll(0.0, body())
     assert np.all(lk.poll(0.150, body()).kp == 70.0)  # past 100 ms, inside 200
@@ -217,8 +245,10 @@ def test_set_can_timeout_and_get_config():
     ctrl[3].send(pack_frame(can_id(GET_STATUS_WORD, 2)))
     lk.poll(0.251, body())
     (cid, cfg), (sid, status) = drain(ctrl[3])
-    assert cid == can_id(GET_CONFIG, 2, reply=True) and len(cfg) == 8 and cfg[3] == 200
-    assert sid == can_id(GET_STATUS_WORD, 2, reply=True) and status == b"\0\0"
+    assert cid == can_id(GET_CONFIG, 2, reply=True) and len(cfg) == 8
+    assert cfg[2] == 2 and cfg[3] == 200  # its id, its timeout
+    assert (cfg[6] | cfg[7] << 8) == int(28.0 / 40.0 * 65535)  # the 28 A default over 0..40 A
+    assert sid == can_id(GET_STATUS_WORD, 2, reply=True) and status == b"\x20\x00"
 
 
 def test_set_home_moves_the_motors_zero():
