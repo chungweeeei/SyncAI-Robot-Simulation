@@ -32,7 +32,8 @@ that assumes the homed pose reads that joint wrong, as it would there.
 Frames (classic CAN, 11-bit id, src/hardware/robot_can_control.rs there):
 the id is `command << 5 | motor id`; the motor answers with the same id and
 bit 4 set (`| 0x10`). Fields are unsigned integers over a fixed range,
-truncated, little-endian:
+truncated, little-endian — but for the two the robot's controller reads
+big-endian, the status word and the current limit (below):
 
     CONTROL (4), controller -> motor, 8 bytes
         position 16 bit +-40 rad | velocity 14 bit +-40 rad/s | kp 10 bit 0..1023
@@ -43,10 +44,19 @@ truncated, little-endian:
     DISABLE (1), ENABLE (2), SET_HOME (6), ERROR_RESET (17): no data;
         the reply is 1 byte, 0 = done, 1 = failed
     SET_CAN_TIMEOUT (9): 1 byte, ms.  SET_BANDWIDTH (10): u16.  Reply as above
-    GET_STATUS_WORD (23): reply 2 bytes, the error word; bit 5 = CAN timeout
-        is the only fault this module raises
+    GET_STATUS_WORD (23): reply 2 bytes, the error word, big-endian; bit 5 =
+        CAN timeout (00 20) is the only fault this module raises
     GET_CONFIG (24): reply 8 bytes, [2] the motor id, [3] the CAN timeout ms,
-        [4:6] the bandwidth, [6:8] the current limit over 0..40 A
+        [4:6] the bandwidth, [6:8] the current limit over 0..40 A, big-endian
+
+The manual gives neither two-byte field an order. The current limit's is the
+motor's own bytes: the controller's test pins B3 32 for the 28 A default
+(g2_deploy_rs tests/unit/hardware/robot_can_control.rs), where the bandwidth
+beside it is little-endian. The status word's is the controller's reading of
+it (`d[0] << 8 | d[1]`, compared with 0x0020 for a timeout and anything else
+a hardware fault that disables every motor), with no recorded bytes behind
+it. Until 2026-11-14 both went out little-endian: the controller printed a
+7.9 A limit, and would have read a timeout as fault 0x2000 had it asked.
 
 A motor only reports when it is commanded: every CONTROL frame is answered
 with one reply, so the controller's feedback rate is its command rate. The
@@ -58,9 +68,10 @@ truncates).
 What the motor does with it (actuator/motors.py closes the loop):
 
     disabled (as at power-up)      no torque
+    enabled, not yet commanded     no torque, and no timeout running
     enabled, commanded             tau = kp (p_des - p) + kd (v_des - v) + tq
-    enabled, no CONTROL for the    the motor disables itself (no torque) and
-      CAN timeout                  latches bit 5 of its status word, until
+    commanded, then no CONTROL     the motor disables itself (no torque) and
+      for the CAN timeout          latches bit 5 of its status word, until
                                    ERROR_RESET and then ENABLE
 
 That is the J60's manual (V1.0.7, g2_deploy_rs docs/datasheets/J60.pdf: 5 the
@@ -70,10 +81,22 @@ robot's controller sends ERROR_RESET with every ENABLE. Before 2026-11-13
 this module guessed that a timed-out motor damps and takes the next command:
 it does not, a leg whose bus was lost stays limp until it is enabled again.
 Four things remain this module's assumptions, not in the manual: that the
-timeout counts from ENABLE as well as from the last CONTROL; that a timeout
-of 0 ms means none (the manual has the debug tool set 0 to talk at its own
-pace); that ENABLE fails (reply 1) while a fault is latched; and SET_HOME's
-reply, a command the manual does not list (one zero byte, as the others').
+timeout runs between CONTROL commands only, from the first one after ENABLE
+(below); that a timeout of 0 ms means none (the manual has the debug tool
+set 0 to talk at its own pace); that ENABLE fails (reply 1) while a fault is
+latched; and SET_HOME's reply, a command the manual does not list (one zero
+byte, as the others').
+
+Until 2026-11-14 the timeout counted from ENABLE too. The robot's controller
+enables its twelve motors one after another, three ERROR_RESET + ENABLE 5 ms
+apart each, and commands none of them until the last is done: by its sleeps
+165 ms for the first, against the 200 ms it sets, and 216 ms where a 5 ms
+sleep takes 6 (measured on OrbStack's VM). There can1's id 2 timed out
+before its first command, and the controller, which never asks for the
+status word, commanded a limp hind right hip from then on and refused to
+stand on it. The manual does not say when the count starts, and nothing
+measured on the robot does either: this is the reading its controller's
+start-up does not depend on a 35 ms margin for.
 The bandwidth is stored and reported, not modelled (`torque_bw_hz` is the
 sim's torque filter). No thermal model: the temperature is `TEMPERATURE_C`.
 
@@ -338,7 +361,7 @@ class CanLink:
                 reply = b"\1"  # a latched fault: ERROR_RESET first
             else:
                 self.enabled[i] = True
-                self._cmd_time[i] = t  # the timeout counts from here
+                self._cmd_time[i] = np.inf  # no timeout until it is commanded
                 reply = b"\0"
         elif cmd == DISABLE_MOTOR:
             self.enabled[i] = False
@@ -360,12 +383,12 @@ class CanLink:
                 self.bandwidth[i] = data[0] | (data[1] << 8)
             reply = b"\0"
         elif cmd == GET_STATUS_WORD:
-            reply = int(self.status[i]).to_bytes(2, "little")
+            reply = int(self.status[i]).to_bytes(2, "big")
         elif cmd == GET_CONFIG:
             bw = int(self.bandwidth[i])
             limit = float_to_uint(CURRENT_LIMIT_A, *CURRENT_RANGE, 16)
             reply = bytes([0, 0, mid, min(255, int(round(self.timeout_s[i] * 1000.0))),
-                           bw & 0xFF, bw >> 8, limit & 0xFF, limit >> 8])
+                           bw & 0xFF, bw >> 8, limit >> 8, limit & 0xFF])
         else:
             return
         self._send(b, pack_frame(can_id(cmd, mid, reply=True), reply))
@@ -389,7 +412,7 @@ class CanLink:
     def _command(self, t: float) -> JointCommand:
         if self._rearm:
             self._rearm = False
-            self._cmd_time[self.enabled] = t
+            self._cmd_time[self.enabled & np.isfinite(self._cmd_time)] = t
         late = self.enabled & (self.timeout_s > 0) & (t - self._cmd_time > self.timeout_s)
         if late.any():
             self.timeouts += int(late.sum())
@@ -418,7 +441,8 @@ class CanLink:
     def reset(self) -> None:
         """After a spawn / teleport: what the controller commanded was for the
         old pose. The motors stay enabled and homed where they were (a
-        teleport is not a power cycle), their timeouts counting from now."""
+        teleport is not a power cycle), the timeouts that were running
+        counting from now."""
         self._has_cmd[:] = False
         self._rearm = True
         for held in self._held:

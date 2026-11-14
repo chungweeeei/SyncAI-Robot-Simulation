@@ -207,7 +207,7 @@ def test_a_silent_bus_disables_its_leg_and_the_others_go_on():
     cmd = lk.poll(0.201, body())
     assert np.all(cmd.kp[fr] == 0) and lk.stats()["enabled"] == 9
     replies = [r for r in drain(ctrl[1]) if (r[0] >> 5) != CONTROL_MOTOR]
-    assert replies[0] == (can_id(GET_STATUS_WORD, 2, reply=True), b"\x20\x00")  # bit 5: CAN timeout
+    assert replies[0] == (can_id(GET_STATUS_WORD, 2, reply=True), b"\x00\x20")  # bit 5: CAN timeout
     assert replies[1] == (can_id(ENABLE_MOTOR, 2, reply=True), b"\x01")  # failed
     # The robot's controller's pair: ERROR_RESET, ENABLE; then the command.
     for mid in IDS:
@@ -218,14 +218,19 @@ def test_a_silent_bus_disables_its_leg_and_the_others_go_on():
     assert [d for _, d in drain(ctrl[1])][:2] == [b"\0", b"\0"]
 
 
-def test_an_enabled_motor_that_is_never_commanded_times_out_too():
+def test_the_timeout_runs_from_the_first_command_not_from_enable():
+    # The robot's controller enables its twelve motors one after another and
+    # commands none until the last is done: past its own 200 ms for the first.
     lk, ctrl = make(timeout_ms=100.0)
     enable_all(ctrl)
     lk.poll(0.0, body())
+    lk.poll(0.300, body())
+    assert lk.stats()["enabled"] == 12 and lk.stats()["timeouts"] == 0
+    command_all(ctrl)
+    assert np.all(lk.poll(0.301, body()).kp == 70.0)
+    lk.poll(0.400, body())
     assert lk.stats()["enabled"] == 12
-    lk.poll(0.100, body())
-    assert lk.stats()["enabled"] == 12
-    lk.poll(0.101, body())
+    lk.poll(0.402, body())
     assert lk.stats()["enabled"] == 0 and lk.stats()["timeouts"] == 12
 
 
@@ -247,8 +252,10 @@ def test_set_can_timeout_and_get_config():
     (cid, cfg), (sid, status) = drain(ctrl[3])
     assert cid == can_id(GET_CONFIG, 2, reply=True) and len(cfg) == 8
     assert cfg[2] == 2 and cfg[3] == 200  # its id, its timeout
-    assert (cfg[6] | cfg[7] << 8) == int(28.0 / 40.0 * 65535)  # the 28 A default over 0..40 A
-    assert sid == can_id(GET_STATUS_WORD, 2, reply=True) and status == b"\x20\x00"
+    # The 28 A default over 0..40 A, big-endian: the bytes the robot's
+    # controller's test has from the motor.
+    assert cfg[6:8] == b"\xb3\x32"
+    assert sid == can_id(GET_STATUS_WORD, 2, reply=True) and status == b"\x00\x20"
 
 
 def test_set_home_moves_the_motors_zero():
@@ -298,6 +305,16 @@ def test_a_teleport_drops_the_commands_and_keeps_the_motors_enabled():
     assert not np.any(cmd.kp) and not np.any(cmd.kd) and lk.stats()["enabled"] == 12
     command_all(ctrl)
     assert np.all(lk.poll(0.002, body()).kp == 70.0)
+
+
+def test_a_teleport_does_not_start_the_timeout_of_a_motor_never_commanded():
+    lk, ctrl = make(timeout_ms=100.0)
+    enable_all(ctrl)
+    lk.poll(0.0, body())
+    lk.reset()
+    lk.poll(0.001, body())
+    lk.poll(0.300, body())
+    assert lk.stats()["enabled"] == 12 and lk.stats()["timeouts"] == 0
 
 
 def test_frames_that_are_not_a_motors_are_ignored():

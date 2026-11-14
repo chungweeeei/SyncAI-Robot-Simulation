@@ -259,10 +259,13 @@ latency and losses back. Not modelled: the order of the frames inside one
 The frames, their replies and the timeout are the J60 manual's (V1.0.7, in
 g2_deploy_rs `docs/datasheets`): the first version here guessed that a
 timed-out motor damps and takes the next command, and the manual says it is
-disabled. Four things remain assumptions (the timeout also counts from
-ENABLE; a timeout of 0 is none; ENABLE fails while a fault is latched;
-SET_HOME's reply, a command the manual does not list): the module's
-docstring lists them.
+disabled. Four things remain assumptions (the timeout runs from the first
+CONTROL after ENABLE, not from ENABLE: the controller's own start-up takes
+longer than its timeout to reach the first motor's first command; a timeout
+of 0 is none; ENABLE fails while a fault is latched; SET_HOME's reply, a
+command the manual does not list): the module's docstring lists them. The
+status word and the current limit go out big-endian, as the robot's
+controller reads them; every other field is little-endian.
 
 ### The IMU and the BMS
 
