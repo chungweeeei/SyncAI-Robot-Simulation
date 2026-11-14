@@ -49,6 +49,16 @@ ONNX policies in-process or carry a rigid statue by rules).
                      command in — a controller PROCESS (SyncAI-Robot-Control
                      --backend sim) runs its RL or LMA against this
                │
+   locomotion/can_link.py   `joint_link: can`: the same joints as J60 motors on
+                     four SocketCAN buses, one per leg, as on the robot — the
+                     controller's REAL hardware layer runs against this; the
+                     record above still goes out (IMU, truth, contacts)
+               │
+   sensor/imu_serial.py   `imu_link: serial`: the body IMU as the robot's
+                     Yesense, frames streamed on a pseudo-terminal
+   sensor/bms_link.py     `bms_link: can`: the pack's BMS on can0, asked and
+                     answering; the charge falls with what the joints draw
+               │
    driver/udp_driver.py   the panel's motion keys, policy number and AXES,
                      forwarded to the controller's command port as ASCII
                │
@@ -66,9 +76,14 @@ ONNX policies in-process or carry a rigid statue by rules).
 ```
 terrain patch moved if due
 -> JointCommand = link.poll(sim_time)       the controller's newest, or damping
+                or can.poll(sim_time, sensors)   joint_link can: the frames that came
+                                                 in are answered, each motor's command
+                                                 (or none: disabled, timed out) returned
 -> motors.apply(JointCommand)
 -> props walked -> mj_step -> sim_time += dt
 -> sensors.read(epoch + sim_time); link.send(sensors)
+-> imu_serial.tick, bms.tick                imu_link serial / bms_link can: a frame
+                                            when one is due, the BMS's requests answered
 -> the lidar pose recorded -> state read back (posture, collisions, falls)
 ```
 
@@ -76,8 +91,10 @@ The 55-float record is built in place and sent as one datagram per step.
 cmd_vel never reaches the body: the panel's AXES go to the controller
 (driver/udp_driver.py), which turns them into joint commands.
 
-Everything the sim tells the outside goes over UDP (removed 2026-11-03: the
-ROS node, the nav session and the image's ROS base).
+Everything the sim tells the outside goes over UDP or, as the robot's own
+devices, SocketCAN (`joint_link: can`, `bms_link: can`) and a serial port
+(`imu_link: serial`) (removed 2026-11-03: the ROS node, the nav
+session and the image's ROS base).
 
 ## What a controller needs from the sim, and why
 

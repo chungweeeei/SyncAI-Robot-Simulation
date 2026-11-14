@@ -1,8 +1,9 @@
 # =============================================================================
 # The simulation container: Ubuntu 22.04 + Python + MuJoCo. No ROS.
 #
-# The sim talks to the outside over UDP only (the gait controller's ASCII link,
-# the hardware link to a controller process), so nothing here needs ROS: the
+# The sim talks to the outside over UDP, SocketCAN and a pseudo-terminal (the
+# hardware link to a controller process, the robot's motors, BMS and IMU), all
+# of them the kernel's and Python's own, so nothing here needs ROS: the
 # image is the Python packages in requirements.txt on the distribution the
 # robot runs (22.04, Python 3.10 — ruff.toml's py310). Until 2026-11-03 it was
 # FROM the workspace's ROS image, for the nav session it ran; that is gone.

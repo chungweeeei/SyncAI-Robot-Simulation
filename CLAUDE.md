@@ -7,7 +7,7 @@ short list of what you must know to edit it correctly.
 ## What this is
 
 A MuJoCo simulation of the SyncAI G23 on a real mapped site, talking to the
-outside over **UDP only** (no ROS anywhere, removed 2026-11-03). **The sim is
+outside over **UDP, SocketCAN and a serial port only** (no ROS anywhere, removed 2026-11-03). **The sim is
 the robot's hardware and nothing more** (2026-11-13): it sends out what the
 sensors measure and applies the joint commands it is sent. Turning cmd_vel
 into joint commands (RL or MPC) and the controller's state machine belong to
@@ -20,6 +20,17 @@ the controller process, never here.
   `--backend sim` (not written yet); with nothing on the link the motors are
   in damping and the robot lies down. The viewer panel's keys and AXES go to
   the controller's command port, 50051 (`driver/udp_driver.py`).
+* **the sim is the robot's motors on CAN** (`joint_link: can`): the twelve
+  joints as J60 motors on four SocketCAN buses, one per leg, with the
+  robot's frames, ids, signs and homed zero (`locomotion/can_link.py`), so a
+  controller's real SocketCAN hardware layer drives the sim. vcan interfaces
+  (`scripts/vcan_up.sh`), host network only. The state datagram still goes
+  out: the IMU, the truth and the contacts are on no CAN bus.
+* **the sim is the robot's IMU and BMS** (`imu_link: serial`, `bms_link:
+  can`): the body IMU as the robot's Yesense streaming on a serial port (a
+  pseudo-terminal, `sensor/imu_serial.py`) and the pack's Foxlink BMS
+  answering on `can0` (`sensor/bms_link.py`), the two devices the
+  controller's hardware layer reads beside its motors.
 * **the sim is the robot's lidar** (`lidar_link: livox`): a MID360 / MID360s
   on the Livox protocol (`sensor/livox_link.py`), read by the workspace's own
   livox_ros_driver2, so Point-LIO, the localizer and the planner run on it.
@@ -52,14 +63,23 @@ only; this repo at `/home/syncrobotic/sim`.
    put the site's mesh back in the MJCF: the first scans every geom per ray,
    the second cost 628 MB of MJB for BVHs nothing used. The measurements that
    decided this are in README ("Decisions worth knowing").
-3. **UDP is the only way out, and each link is a protocol with a consumer.**
+3. **UDP, SocketCAN and the IMU's serial port are the only ways out, and
+   each link is a protocol with a consumer.**
    The hardware link's spec is the docstring of `locomotion/hardware_link.py`
    plus `tests/test_hardware_link.py` (228-byte state out, 240-byte command
    in, field order, frames, the watchdog): a change there is a change in
    SyncAI-Robot-Control's `--backend sim` too, said so in the commit message.
    The panel's lines to the controller (`driver/udp_driver.py`) are the
    robot's controller protocol as driver_manager speaks it: keep them
-   byte-compatible. Do not add ROS, DDS or any other transport back.
+   byte-compatible. The CAN link (`locomotion/can_link.py`, 2026-11-13) is
+   the J60's protocol and the robot's wiring as its controller speaks them:
+   keep it byte-compatible with the robot, never with the sim's convenience
+   (`tests/test_can_link.py` pins the bytes and the mapping); where the
+   J60's manual (g2_deploy_rs `docs/datasheets/J60.pdf`) and a guess differ,
+   the manual wins. The same holds for the IMU's Yesense frames
+   (`sensor/imu_serial.py`, read by the controller's `hardware/imu.rs`) and
+   the BMS's items (`sensor/bms_link.py`, the vendor's protocol document
+   beside the J60's). Do not add ROS, DDS or any other transport back.
 4. **Wall clock.** The sim paces fixed physics steps to real time (1 ms) and
    catches up in short bursts (`max_catch_up_s`, 8 ms),
    dropping what one burst cannot repay (`envs/pacing.py`: carrying it put
@@ -94,6 +114,9 @@ Paths are under `syncai_sim/`; `docs/architecture.md` draws the layers.
 | the lidar pattern, prop rays | `sensor/lidar.py`, `sensor/prop_rays.py`; the recorded MID360 bank `config/lidar/mid360_pattern.npz` (built by `scripts/lidar_pattern.py` through `sensor/livox_bag.py`, which reads a rosbag2 sqlite file directly) |
 | the motors: the PD closed every step (a generalized force, never a MuJoCo actuator), the motor clamp, the command delay and torque filter, `JointCommand` | `actuator/motors.py` (`tests/test_motors.py`) |
 | the hardware link: the body's record out, a controller process's command in, the watchdog; the stand-in controller | `locomotion/hardware_link.py` (its docstring is the protocol's spec; `tests/test_hardware_link.py`); the bench `scripts/controller_bench.py` |
+| the joints as J60 motors on four SocketCAN buses (`joint_link: can`): the frames, the wiring (bus, id, sign, homed zero per joint), enable / timeout (the motor disables itself, fault latched) / set-home, per-bus delay and drop; the stand-in | `locomotion/can_link.py` (its docstring is the spec, and names its four assumptions; `tests/test_can_link.py`); the interfaces `scripts/vcan_up.sh` |
+| the body IMU as the robot's Yesense on a serial port (`imu_link: serial`): the frame, the rate, the pseudo-terminal and its backlog | `sensor/imu_serial.py` (its docstring is the spec; `tests/test_imu_serial.py` ports the controller's reader) |
+| the pack's BMS on `can0` (`bms_link: can`): the items, request / cycle, the battery model (charge against the joints' power) | `sensor/bms_link.py` (its docstring is the spec; `tests/test_bms_link.py`) |
 | the panel's motion keys, policy number and AXES forwarded to the controller | `driver/udp_driver.py` |
 | one physics tick, scan, spawn, teleport, falls counted; where the base is put down | `envs/simulator.py`; `envs/placement.py` |
 | the main loop, the links polled and ticked, the settings (defaults, `config/params/sim_params.yaml`, `--profile`, `-p`) | `__main__.py` (sets `OPENBLAS_NUM_THREADS=1` before numpy); `config.py` |
@@ -111,6 +134,14 @@ python3 -m pytest /home/syncrobotic/sim/tests
 python3 -m syncai_sim --headless --seconds 30     # no controller on the link: the motors in damping
 # the link end to end with the stand-in controller (docs/architecture.md):
 python3 /home/syncrobotic/sim/scripts/controller_bench.py --fake-controller --seconds 5
+# the same over four CAN buses (on the host first: scripts/vcan_up.sh; SIM_NETWORK_MODE=host):
+python3 /home/syncrobotic/sim/scripts/controller_bench.py -p joint_link:=can --fake-controller --seconds 5
+# the robot's controller in its own container (README, "The robot's controller in its own container"):
+#   docker compose -f docker-compose.yml -f docker-compose.can.yml up -d
+#   docker compose -f ../g2-device-control/docker-compose.yml -f docker-compose.controller.yml up -d
+# (its compose file unchanged: what the sim makes different is docker-compose.controller.yml's, here)
+# with the IMU on /tmp/syncai_imu and the BMS on can0 as well:
+python3 /home/syncrobotic/sim/scripts/controller_bench.py -p joint_link:=can -p imu_link:=serial -p bms_link:=can --fake-controller --seconds 5
 ```
 
 `docker compose up` already runs a sim on the viewer's port and the UDP

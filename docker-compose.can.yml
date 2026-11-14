@@ -1,0 +1,31 @@
+# =============================================================================
+# Over docker-compose.yml: the sim as the robot's hardware for a controller in
+# ANOTHER container — the twelve motors on can1..can4, the BMS on can0, the
+# body IMU on a serial port (README, "The joints on CAN", "The IMU and the
+# BMS", "The robot's controller in its own container").
+#
+#   scripts/vcan_up.sh                    # on the host: can0..can4; again after a VM restart
+#   docker compose -f docker-compose.yml -f docker-compose.can.yml up -d
+#   # or once, in .env:  COMPOSE_FILE=docker-compose.yml:docker-compose.can.yml
+#
+# The controller is then started from its own, unchanged compose file with
+# docker-compose.controller.yml of this repository over it.
+# =============================================================================
+
+services:
+  sim:
+    # The CAN interfaces are the host's: both ends on its network.
+    network_mode: host
+    environment:
+      # A SIM_ARGS of your own (.env, the shell) replaces this whole line:
+      # keep the three links and the port in it.
+      SIM_ARGS: "${SIM_ARGS:---teleop -p joint_link:=can -p imu_link:=serial -p bms_link:=can -p imu_serial_port:=/home/syncrobotic/sim/run/syncai_imu}"
+    volumes:
+      # The IMU's pseudo-terminal has to be one the controller's container can
+      # open. A container has its own devpts, whose /dev/pts/N exist nowhere
+      # else, so both mount the host's: the sim's pseudo-terminal is then
+      # /dev/pts/N in both. The link to it is written in run/ of this
+      # checkout (already mounted, and the sim's user can write there), which
+      # the controller's container mounts as well. Checked on OrbStack
+      # 2026-11-14: a second container read the frames through it.
+      - /dev/pts:/dev/pts

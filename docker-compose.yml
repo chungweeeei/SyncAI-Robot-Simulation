@@ -46,6 +46,12 @@ services:
       # to controller_command_port (50051); from a bridge network to a program
       # on the host, set link_state_host to host.docker.internal.
       - "20001:20001/udp"   # the hardware link: a controller's joint commands
+      # joint_link can and bms_link can have no port to map: the CAN
+      # interfaces are the host's (scripts/vcan_up.sh), seen only with
+      # network_mode host. imu_link serial is a pseudo-terminal inside this
+      # container (/tmp/syncai_imu): its reader runs here, unless the
+      # container has the host's /dev/pts. docker-compose.can.yml sets all
+      # of that up for a controller in a container of its own.
     environment:
       HOME: /home/syncrobotic
       # numba's parallel ray caster on OpenMP (gcc's libgomp).
