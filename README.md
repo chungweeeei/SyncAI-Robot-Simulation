@@ -242,6 +242,13 @@ python3 /home/syncrobotic/sim/scripts/controller_bench.py -p joint_link:=can --f
 scripts/vcan_up.sh down
 ```
 
+**The robot's controller on these buses always runs with
+`G2_SKIP_HOMING=1`.** The sim's motors power up homed; the controller's
+start-up homing drives each joint to its stop and sets the zero there, and
+the model's stops are the URDF's limits, not the folded leg's: with the
+homing run every HipY read 0.82 rad off (2026-11-14; `can_link.py` has the
+numbers).
+
 Checked on OrbStack (2026-11-13, kernel 7.2.12: vcan built in, no vxcan,
 hence the host network): the stand-in stands the robot on dp through the
 four buses, 0 falls in 5 s, ~2100 CONTROL frames a second per bus (the

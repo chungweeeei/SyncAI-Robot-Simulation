@@ -29,6 +29,15 @@ and the controller's mapping back is the inverse. `SET_HOME` moves a motor's
 zero to where the joint is now, as on the robot — after which a controller
 that assumes the homed pose reads that joint wrong, as it would there.
 
+So the robot's controller is always run with `G2_SKIP_HOMING=1` on the sim
+(decided 2026-11-14): the motors power up homed, and its start-up homing
+cannot find the homed pose here. It drives each joint to its stop and sends
+SET_HOME there; the model's stops are the URDF's limits (HipY -2.671, Knee
+2.792), not the folded leg's (-3.495, 2.745), so with the homing run every
+HipY read 0.82 rad off and the controller stood the robot on that (measured
+2026-11-14, g2-device-control `real ros`). The alternative, widening the
+model's joint ranges to the mechanical stops, was not taken.
+
 Frames (classic CAN, 11-bit id, src/hardware/robot_can_control.rs there):
 the id is `command << 5 | motor id`; the motor answers with the same id and
 bit 4 set (`| 0x10`). Fields are unsigned integers over a fixed range,
