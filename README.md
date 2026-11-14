@@ -102,6 +102,7 @@ syncai_sim/                        the Python package (python3 -m syncai_sim): o
     voxel_colour.py                    the mapping run's bag -> the colour the camera saw at each voxel (config/colour/<map>.npz, scripts/colour_map.py)
     bag_camera.py                      the bag's images, camera_info and /tf_static, read from its sqlite file
     map_cloud.py                       map.pcd thinned per storey: the viewer's lidar map layer
+scripts/spin_sleep.sh, .c          OrbStack only: the LD_PRELOAD shim that makes the controller's sleeps end on time (its 1 kHz)
 scripts/vcan_up.sh                 the vcan interfaces of joint_link can and bms_link can (can0..can4), made on the host (a privileged container on a Mac)
 scripts/controller_bench.py        the sim as a controller's hardware, headless: MODE / AXES to the controller, its MODE_STATE back, the link's counters
 docs/architecture.md               the layers, one physics tick, what a controller needs from the sim and why
@@ -287,7 +288,8 @@ the legs' buses, and the sim can be both:
   specification, byte-compatible with the controller's reader). The
   pseudo-terminal is in the sim's container, so the reader runs there
   (`docker compose exec sim ...`, with `G2_IMU_PORT=/tmp/syncai_imu` for the
-  robot's controller); a real serial device named by `imu_serial_port` is
+  robot's controller) or in a container that shares the host's `/dev/pts`
+  with the sim's (below); a real serial device named by `imu_serial_port` is
   written instead. A port nobody reads keeps no backlog: more than 50 ms of
   unread frames is dropped, as a UART would have lost them.
 * **`-p bms_link:=can`** — the battery's BMS (Foxlink Jeff-8S3P) is alone on
@@ -315,6 +317,63 @@ pack's capacity (15 Ah) and the idle draw. No noise or bias on the IMU, no
 voltage sag, no thermal model, and the BMS never trips. Neither has been
 read by the robot's controller itself yet, only by its reader ported into
 the tests.
+
+### The robot's controller in its own container
+
+The robot's controller (g2-device-control) has one mode, the robot's: it
+does not know a simulator from the robot, and its repository says nothing
+about this one. It runs from its own, unchanged compose file against the
+sim's three links; what the sim makes different is in two files here,
+`docker-compose.can.yml` over this repository's compose file and
+`docker-compose.controller.yml` over the controller's.
+
+```bash
+scripts/vcan_up.sh                                                         # on the host
+docker compose -f docker-compose.yml -f docker-compose.can.yml up -d       # the sim, the three links
+docker compose -f ../g2-device-control/docker-compose.yml -f docker-compose.controller.yml up -d   # from this directory, after the sim is up
+```
+
+What the two files settle:
+
+* **The IMU's pseudo-terminal across containers.** A container has its own
+  devpts, so the sim's `/dev/pts/N` exists in no other. Both containers
+  mount the host's `/dev/pts`, and the link is written in `run/` of this
+  checkout (`imu_serial_port`), which the controller's container mounts at
+  `/run/syncai` (`G2_IMU_PORT=/run/syncai/syncai_imu`). Docker's `devices:`,
+  which the controller's file uses for the robot's UART, cannot pass a
+  pseudo-terminal through (its node outside a devpts does not open), so it
+  is reset.
+* **No homing** (`G2_SKIP_HOMING=1`, above).
+* **The nav stack's addresses.** driver_manager sends its commands to
+  192.168.1.120:50051 and binds 192.168.1.103:50010 for the telemetry
+  (driver_manager_params.yaml), so the controller binds 0.0.0.0:50051 —
+  the panel's 127.0.0.1:50051 arrives too — and sends its telemetry and the
+  BMS's to 192.168.1.103:50010. Both addresses must exist on the host, as
+  the lidar's must (below: on a Mac, on the VM's loopback).
+* **The controller's 1 kHz on OrbStack.** Its VM wakes a sleeper on a 3 ms
+  tick, so the controller's loop ran at 334 Hz and, since it counts time in
+  ticks, its policy at a third of its rate: 0.5 m in 8 s. Nothing set from
+  outside changes the tick (timer slack, `select`, SCHED_FIFO, busy cores:
+  measured); spinning does. `scripts/spin_sleep.sh` builds an `LD_PRELOAD`
+  shim into `run/` that spins the last 3.5 ms of every sleep, and
+  `G2_SPIN_SLEEP=/run/syncai/spin_sleep.so` before the controller's
+  `docker compose` loads it: 997-999 Hz, for about 1.3 cores. Not needed,
+  and not measured, on a Linux host.
+
+Start the sim first: the controller configures and enables the motors once,
+at its start. By its code a sim restarted under a running controller has
+motors nobody enables again (it never asks for the status word); restart
+the controller with the sim. Not tried.
+
+Checked on OrbStack (2026-11-14) with a program placed as driver_manager is
+(telemetry on 192.168.1.103:50010, commands to 192.168.1.120:50051) and the
+shim loaded: `MODE Z` to standing in RL in 2.0 s, 2.77 m in 8 s of
+`AXES 0.4 0 0`, lie down, 0 falls, no CAN timeout, `BMS_V2` ten times a
+second. The controller's IMU against the body's record over those 8 s
+(1615 samples, 202 a second): roll / pitch / yaw 0.0002 rad apart on
+average, the gyro 0.011 rad/s, the accelerometer 0.22 m/s^2 (footfalls,
+where 1 ms of lag is that much), best fit at 1 ms of lag. driver_manager
+itself was not run, nor the controller's MPC (`MODE M`).
 
 ### The sim as the robot's lidar
 

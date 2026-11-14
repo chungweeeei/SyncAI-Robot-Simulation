@@ -1,0 +1,42 @@
+# =============================================================================
+# Over the robot's controller's OWN compose file (g2-device-control's
+# docker-compose.yml, unchanged): what differs when its hardware is this sim.
+# The controller has one mode, the robot's; everything that is the sim's
+# doing is said here, in the sim's repository, and nothing there.
+#
+#   scripts/vcan_up.sh
+#   docker compose -f docker-compose.yml -f docker-compose.can.yml up -d      # the sim
+#   docker compose -f ../g2-device-control/docker-compose.yml -f docker-compose.controller.yml up -d
+#   docker compose -f ../g2-device-control/docker-compose.yml -f docker-compose.controller.yml logs -f controller
+#
+# Run from this directory (${PWD} below is this checkout), the sim first: the
+# controller configures and enables its motors once, at its start.
+# =============================================================================
+
+services:
+  controller:
+    # The IMU here is a pseudo-terminal, which `devices:` cannot pass through
+    # (its node does not open outside a devpts): it is reached through the
+    # host's /dev/pts and this checkout's run/ (docker-compose.can.yml).
+    devices: !reset []
+    environment:
+      G2_IMU_PORT: /run/syncai/syncai_imu
+      # Always on the sim (README, "The joints on CAN"): its motors power up
+      # homed, and homing against the model's joint limits sets a wrong zero.
+      G2_SKIP_HOMING: "1"
+      # Where the nav stack's driver_manager is (driver_manager_params.yaml:
+      # commands to 192.168.1.120:50051, telemetry bound on
+      # 192.168.1.103:50010). Every address is bound so that the viewer
+      # panel's 127.0.0.1:50051 arrives too. Both 192.168.1.x addresses must
+      # exist on the host (on a Mac: on the Docker VM's loopback).
+      G2_ROS_CMD_BIND: "${G2_ROS_CMD_BIND:-0.0.0.0:50051}"
+      G2_ROS_TELEMETRY_TARGET: "${G2_ROS_TELEMETRY_TARGET:-192.168.1.103:50010}"
+      # OrbStack only: its VM's timer has a 3 ms tick, so the controller's
+      # 1 kHz loop ran at 334 Hz and, counting time in ticks, its policy at a
+      # third of its rate (0.5 m in 8 s where it walks 2.7). Build the shim
+      # (scripts/spin_sleep.sh) and set G2_SPIN_SLEEP=/run/syncai/spin_sleep.so:
+      # sleeps then end on time, for about 1.3 cores. Empty: nothing loaded.
+      LD_PRELOAD: "${G2_SPIN_SLEEP:-}"
+    volumes:
+      - /dev/pts:/dev/pts
+      - ${PWD}/run:/run/syncai

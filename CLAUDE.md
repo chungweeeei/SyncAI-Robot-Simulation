@@ -136,6 +136,10 @@ python3 -m syncai_sim --headless --seconds 30     # no controller on the link: t
 python3 /home/syncrobotic/sim/scripts/controller_bench.py --fake-controller --seconds 5
 # the same over four CAN buses (on the host first: scripts/vcan_up.sh; SIM_NETWORK_MODE=host):
 python3 /home/syncrobotic/sim/scripts/controller_bench.py -p joint_link:=can --fake-controller --seconds 5
+# the robot's controller in its own container (README, "The robot's controller in its own container"):
+#   docker compose -f docker-compose.yml -f docker-compose.can.yml up -d
+#   docker compose -f ../g2-device-control/docker-compose.yml -f docker-compose.controller.yml up -d
+# (its compose file unchanged: what the sim makes different is docker-compose.controller.yml's, here)
 # with the IMU on /tmp/syncai_imu and the BMS on can0 as well:
 python3 /home/syncrobotic/sim/scripts/controller_bench.py -p joint_link:=can -p imu_link:=serial -p bms_link:=can --fake-controller --seconds 5
 ```

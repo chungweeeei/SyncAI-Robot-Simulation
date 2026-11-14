@@ -49,7 +49,9 @@ services:
       # joint_link can and bms_link can have no port to map: the CAN
       # interfaces are the host's (scripts/vcan_up.sh), seen only with
       # network_mode host. imu_link serial is a pseudo-terminal inside this
-      # container (/tmp/syncai_imu): its reader runs here.
+      # container (/tmp/syncai_imu): its reader runs here, unless the
+      # container has the host's /dev/pts. docker-compose.can.yml sets all
+      # of that up for a controller in a container of its own.
     environment:
       HOME: /home/syncrobotic
       # numba's parallel ray caster on OpenMP (gcc's libgomp).

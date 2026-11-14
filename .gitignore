@@ -5,6 +5,10 @@ cache/
 # Session logs written by scripts/run_session.sh (log/stack/<robot_id>/...).
 log/
 
+# The link to the IMU's pseudo-terminal (docker-compose.can.yml), shared with
+# the controller's container.
+run/
+
 # Compose interpolation (ROBOT_WS and friends) — copy .env.example and edit.
 .env
 
