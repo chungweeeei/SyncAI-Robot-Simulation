@@ -1,0 +1,42 @@
+# SyncAI-Robot-Control's config when its hardware is this sim
+# (docker-compose.syncai-control.yml mounts it and points SYNCAI_CONFIG at it).
+# The controller's own config/controller.toml describes the robot; only what the sim
+# makes different is said here. Keys and ranges: that file, in the controller's repository.
+
+[debug]
+# Bring-up: what the controller reads from the sim's IMU, motors and BMS, once a second.
+print_joints = true
+print_joints_interval_ms = 1000
+print_timing = true
+
+[hardware.imu]
+# The sim's pseudo-terminal (imu_serial_port), through this checkout's run/ at /run/syncai.
+port = "/run/syncai/syncai_imu"
+baud = 115200
+
+[hardware.motors]
+interfaces = ["can1", "can2", "can3", "can4"]   # scripts/vcan_up.sh
+ids = [2, 3, 4]
+can_timeout_ms = 200
+bandwidth_hz = 25600
+# The sim's motors power up homed (README, "The joints on CAN").
+startup_homing = false
+
+[hardware.bms]
+interface = "can0"
+
+# The LMA (MPC + WBC), entered from standing with `syncai_ctl lma`, and the Kalman filter
+# that gives it the base's position and velocity. Paths are relative to the controller
+# image's config/ folder, where this file is mounted.
+[robot_model]
+urdf = "../robot/g23/urdf/g2_3.urdf"
+ocs2_config_dir = "legged_mpc_amp/g2_3"
+
+[estimator]
+contact_source = "planned"
+force_confirm = false
+
+[controllers.lma]
+base_state = "kf"
+# The controller's cppad-cache volume: the generated model code survives a new container.
+cppad_cache_root = "../.cache"

@@ -1,0 +1,35 @@
+# =============================================================================
+# Over SyncAI-Robot-Control's OWN compose file (its docker-compose.yml,
+# unchanged): what differs when its hardware is this sim. The counterpart of
+# docker-compose.controller.yml, which does the same for g2-device-control.
+#
+#   scripts/vcan_up.sh
+#   docker compose up -d                                                      # the sim
+#   docker compose -f ../SyncAI-Robot-Control/docker-compose.yml -f docker-compose.syncai-control.yml up --build -d
+#   docker compose -f ../SyncAI-Robot-Control/docker-compose.yml -f docker-compose.syncai-control.yml logs -f controller
+#
+# Run from this directory (${PWD} below is this checkout), the sim first: the
+# controller configures and enables its motors once, at its start.
+#
+# That controller takes no arguments and no settings from the environment:
+# everything is in one TOML file, so what the sim makes different is a file
+# too (config/controller/syncai_control.toml), mounted beside the image's own.
+# =============================================================================
+
+services:
+  controller:
+    # The IMU here is a pseudo-terminal, which `devices:` cannot pass through
+    # (its node does not open outside a devpts): it is reached through the
+    # host's /dev/pts and this checkout's run/ (docker-compose.yml).
+    devices: !reset []
+    environment:
+      # Beside the image's config/controller.toml, so that relative paths in it
+      # resolve against the same folder.
+      SYNCAI_CONFIG: /opt/syncai/config/controller.sim.toml
+      # OrbStack only (scripts/spin_sleep.sh): its VM's timer has a 3 ms tick.
+      # Empty: nothing loaded.
+      LD_PRELOAD: "${SYNCAI_SPIN_SLEEP:-}"
+    volumes:
+      - /dev/pts:/dev/pts
+      - ${PWD}/run:/run/syncai
+      - ${PWD}/config/controller/syncai_control.toml:/opt/syncai/config/controller.sim.toml:ro
