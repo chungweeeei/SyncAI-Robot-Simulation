@@ -1,0 +1,17 @@
+# Written by scripts/make_scenes.py from its constants; edit there and rerun.
+# The friction scene's lanes (syncai_sim/terrains/friction.py says what a zone does):
+# box is x0, x1, y0, y1; elsewhere the floor is the feet's own friction.
+
+zones:
+  - name: friction 0.6 lane
+    box: [3, 9, 2, 4]
+    friction: 0.6
+  - name: friction 0.4 lane
+    box: [3, 9, 0, 2]
+    friction: 0.4
+  - name: friction 0.2 lane
+    box: [3, 9, -2, 0]
+    friction: 0.2
+  - name: friction 0.1 lane
+    box: [3, 9, -4, -2]
+    friction: 0.1

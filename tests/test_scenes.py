@@ -48,3 +48,49 @@ def test_a_surface_on_a_voxel_boundary_is_in_the_voxel_under_it():
     pts = ms.points(s)
     near = pts[(np.abs(pts[:, 0]) < 1.0) & (np.abs(pts[:, 1]) < 1.0)]
     assert (np.floor(near[:, 2] / ms.RES) == -1).all()
+
+
+def test_the_friction_lanes_fill_the_floor_between_the_walls_side_by_side():
+    lanes = ms.friction_lanes()
+    assert [mu for mu, _, _ in lanes] == list(ms.FRICTION_VALUES)
+    assert all(np.isclose(yl - yr, ms.FRICTION_LANE_W) for _, yl, yr in lanes)
+    assert all(a[2] == b[1] for a, b in zip(lanes[:-1], lanes[1:]))
+    s = ms.friction()
+    assert np.isclose(lanes[0][1], s.y1 - ms.WALL_T) and np.isclose(lanes[-1][2], s.y0 + ms.WALL_T)
+    # The spawn faces a strip, a metre or more of plain floor before it.
+    x, y, _, yaw = s.spawn
+    assert yaw == 0.0 and x + 1.0 <= ms.FRICTION_X[0]
+    assert any(yr < y < yl for _, yl, yr in lanes)
+    # Level everywhere inside the walls.
+    xs, ys = np.meshgrid(np.arange(-3.0, 15.0, 0.5), np.arange(-3.5, 3.6, 0.5))
+    assert (s.height(xs.ravel(), ys.ravel()) == 0.0).all()
+
+
+def test_the_courses_sections_follow_one_another_with_plain_floor_between():
+    strips = ms.COURSE_STRIPS
+    assert all(a[2] <= b[1] for a, b in zip(strips[:-1], strips[1:]))
+    hills = [ms.hill_x(start, up, down) for _, start, up, down, _ in ms.COURSE_HILLS]
+    assert strips[-1][2] + 1.0 <= hills[0][0]
+    assert all(a[3] + 1.0 <= b[0] for a, b in zip(hills[:-1], hills[1:]))
+    s = ms.course()
+    assert hills[-1][3] + 2.0 <= s.x1 - ms.WALL_T
+    # The strips are level; each hill climbs and descends at its angles.
+    for _, x0, x1, _ in strips:
+        assert (s.height(np.linspace(x0, x1, 20), np.zeros(20)) == 0.0).all()
+    for (_, start, up, down, _), (x0, top0, top1, x1) in zip(ms.COURSE_HILLS, hills):
+        for x, angle in ((x0 + 0.2, up), (x1 - 0.3, -down)):
+            h = s.height(np.array([x, x + 0.1]), np.zeros(2))
+            assert np.isclose(np.degrees(np.arctan2(h[1] - h[0], 0.1)), angle, atol=0.01)
+        assert np.isclose(s.height(np.array([(top0 + top1) / 2]), np.zeros(1)), ms.RAMP_RISE)
+
+
+def test_a_hill_with_a_friction_of_its_own_has_it_on_the_way_up_only():
+    zones = {name: (box, mu) for name, box, mu in ms.course_zones()}
+    for name, start, up, down, mu in ms.COURSE_HILLS:
+        key = f"course {name}, the way up"
+        if mu is None:
+            assert key not in zones
+            continue
+        box, value = zones[key]
+        x0, top0, _, _ = ms.hill_x(start, up, down)
+        assert value == mu and box[0] == x0 and np.isclose(box[1], top0, atol=0.01)

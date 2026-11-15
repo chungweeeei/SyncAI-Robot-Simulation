@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
-"""Test sites made rather than mapped: level ground, ramps, a 15 cm stair.
+"""Test sites made rather than mapped: level ground, ramps, a 15 cm stair,
+floors of different grip, and a course of several of these in a row.
 
-    python3 scripts/make_scenes.py              # all three into scenes/<name>/
+    python3 scripts/make_scenes.py              # all of them into scenes/<name>/
     python3 scripts/make_scenes.py stairs15     # one
     python3 -m syncai_sim --profile /home/syncrobotic/sim/config/params/scenes/stairs15.yaml
 
@@ -10,8 +11,9 @@ Each is written as a mapped site is, so the sim reads it the same way
 viewer), `map.pcd` (the surface's true heights, which surface_heights.py
 puts under the feet) and `poses.txt` (a mapping track on the level floor).
 What a mapped site keeps in this repository is written here too, from the
-same numbers: the ramps' boxes (`config/ramps/slope.yaml`), and the stair's
-walk and tape measure (`config/stair_walks/stairs15.yaml`,
+same numbers: the ramps' boxes (`config/ramps/<name>.yaml`), the floors'
+friction (`config/friction/<name>.yaml`, terrains/friction.py), and the
+stair's walk and tape measure (`config/stair_walks/stairs15.yaml`,
 `config/stair_shapes/stairs15.yaml`), so its flights are fitted to
 0.15 m risers and built as boxes (terrains/stairs.py). The spawn is in
 `config/params/scenes/<name>.yaml`.
@@ -28,6 +30,11 @@ there for the lidar too: on an open plane Point-LIO has nothing to hold to.
               platform and down again, walls between them
     stairs15  six 0.15 m risers on 0.30 m treads up to a 0.9 m platform and
               six down, 1.6 m wide between walls
+    friction  level floor, four lanes side by side with a 6 m strip each of
+              sliding friction 0.6 / 0.4 / 0.2 / 0.1
+    course    one corridor along x with, in turn: a strip of friction 0.4, one
+              of 0.2, a hill (10 deg up, 15 deg down), and a second hill
+              (10 deg both ways) whose way up has friction 0.4
 
 The feet stand on 0.1 m boxes whatever the site (terrains/terrain_patch.py),
 so a ramp is a stair of 0.1 m treads with risers of 0.1 tan(angle): 0.9 cm
@@ -70,6 +77,18 @@ RAMP_START = 2.0
 RAMP_TOP = 2.0  # m of platform
 LANE_EDGES = (4.7, 2.6, 2.2, 0.2, -0.2, -2.2, -2.6, -4.7)  # y, (left, right) per lane
 DIVIDER_H = 1.5  # m, the walls between lanes (4 columns thick: a ramp's mean never reads the next lane)
+
+# friction: a strip per lane, from +y to -y. The controller's MPC and WBC plan
+# for 0.6 (its task.info, frictionCone): at it, and three steps under it.
+FRICTION_VALUES = (0.6, 0.4, 0.2, 0.1)
+FRICTION_LANE_W = 2.0
+FRICTION_X = (3.0, 9.0)  # the strips' start and end
+
+# course: sections along x in one corridor, each after a stretch of plain floor.
+COURSE_HALF_W = 2.0
+COURSE_STRIPS = (("wet floor", 2.0, 5.0, 0.4), ("ice", 5.0, 8.0, 0.2))  # name, x0, x1, friction
+COURSE_HILLS = (("hill", 9.5, 10.0, 15.0, None),  # name, start, deg up, deg down, friction up
+                ("slippery hill", 17.5, 10.0, 10.0, 0.4))
 
 # stairs15: up along x from STAIR_START, the platform, down.
 RISER = 0.15
@@ -172,6 +191,91 @@ def ramp_boxes():
     return out
 
 
+# --- friction --------------------------------------------------------------
+def friction_lanes():
+    """(friction, y_left, y_right) per lane, from +y to -y."""
+    top = FRICTION_LANE_W * len(FRICTION_VALUES) / 2
+    return [(mu, top - i * FRICTION_LANE_W, top - (i + 1) * FRICTION_LANE_W)
+            for i, mu in enumerate(FRICTION_VALUES)]
+
+
+def friction() -> Scene:
+    lanes = friction_lanes()
+    half = lanes[0][1]
+    s = Scene("friction", -4.0, 16.0, -half - WALL_T, half + WALL_T, None, _line(-3.0, 15.0, 0.0),
+              (0.0, 1.0, 0.0, 0.0),
+              f"level floor, lanes {FRICTION_LANE_W:g} m wide with a strip of sliding friction "
+              + " / ".join(f"{mu:g}" for mu in FRICTION_VALUES)
+              + f" from x {FRICTION_X[0]:g} to {FRICTION_X[1]:g}")
+    s.height = lambda x, y: _walls(x, y, s, np.zeros_like(x))
+    return s
+
+
+def friction_zones():
+    """(name, box, friction) per lane for config/friction/friction.yaml."""
+    return [(f"friction {mu:g} lane", [FRICTION_X[0], FRICTION_X[1], yr, yl], mu)
+            for mu, yl, yr in friction_lanes()]
+
+
+# --- course ----------------------------------------------------------------
+def hill_x(start: float, up_deg: float, down_deg: float):
+    """x of a hill's foot, of its platform's start and end, and of its far foot."""
+    top0 = start + ramp_length(up_deg)
+    top1 = top0 + RAMP_TOP
+    return start, top0, top1, top1 + ramp_length(down_deg)
+
+
+def hill_profile(x, start: float, up_deg: float, down_deg: float):
+    x0, top0, top1, x1 = hill_x(start, up_deg, down_deg)
+    up = np.clip((x - x0) / (top0 - x0), 0.0, 1.0)
+    down = np.clip((x1 - x) / (x1 - top1), 0.0, 1.0)
+    return RAMP_RISE * np.minimum(up, down)
+
+
+def _course_end() -> float:
+    return max(hill_x(start, up, down)[3] for _, start, up, down, _ in COURSE_HILLS)
+
+
+def course() -> Scene:
+    s = Scene("course", -4.0, float(math.ceil(_course_end() + 3.0)), -COURSE_HALF_W - WALL_T,
+              COURSE_HALF_W + WALL_T, None, _line(-3.0, 1.0, 0.0), (0.0, 0.0, 0.0, 0.0),
+              "one corridor along x: "
+              + ", ".join(f"friction {mu:g} from x {x0:g} to {x1:g}" for _, x0, x1, mu in COURSE_STRIPS)
+              + "".join(f", a {RAMP_RISE} m hill at x {start:g} ({up:g} deg up, {down:g} down"
+                        + (f", friction {mu:g} on the way up)" if mu else ")")
+                        for _, start, up, down, mu in COURSE_HILLS))
+
+    def height(x, y):
+        h = np.zeros_like(x)
+        for _, start, up, down, _ in COURSE_HILLS:
+            h = np.maximum(h, hill_profile(x, start, up, down))
+        return _walls(x, y, s, h)
+
+    s.height = height
+    return s
+
+
+def course_ramp_boxes():
+    """(name, box, band) per hill for config/ramps/course.yaml."""
+    return [(f"course {name}", [round(hill_x(start, up, down)[0] - 0.3, 2),
+                                round(hill_x(start, up, down)[3] + 0.3, 2),
+                                -COURSE_HALF_W, COURSE_HALF_W], [-0.1, RAMP_RISE + 0.1])
+            for name, start, up, down, _ in COURSE_HILLS]
+
+
+def course_zones():
+    """(name, box, friction) for config/friction/course.yaml: the strips, and
+    the way up of every hill that has a friction of its own."""
+    zones = [(f"course {name}", [x0, x1, -COURSE_HALF_W, COURSE_HALF_W], mu)
+             for name, x0, x1, mu in COURSE_STRIPS]
+    for name, start, up, down, mu in COURSE_HILLS:
+        if mu is not None:
+            x0, top0, _, _ = hill_x(start, up, down)
+            zones.append((f"course {name}, the way up", [x0, round(top0, 2), -COURSE_HALF_W,
+                                                         COURSE_HALF_W], mu))
+    return zones
+
+
 # --- stairs15 --------------------------------------------------------------
 def stair_x():
     """x of the first riser up, of the platform's start, of the first riser
@@ -215,7 +319,8 @@ def stair_walk():
             [down0 - 0.15, 0.0, top], [end + 0.15, 0.0, 0.0], [end + 2.0, 0.0, 0.0]]
 
 
-SCENES = {"flat": flat, "slope": slope, "stairs15": stairs15}
+SCENES = {"flat": flat, "slope": slope, "stairs15": stairs15, "friction": friction,
+          "course": course}
 
 
 # --- writing ---------------------------------------------------------------
@@ -267,11 +372,23 @@ def _num(v) -> str:
 def config_files() -> dict[str, str]:
     """Repository-relative path -> content of the committed config files."""
     head = "# Written by scripts/make_scenes.py from its constants; edit there and rerun.\n"
-    ramps = head + ("# The slope scene's lanes (config/ramps/dp.yaml says what a ramp box does):\n"
-                    "# the band holds the floor, the ramp and the platform, not the walls.\n\nramps:\n")
-    for name, box, band in ramp_boxes():
-        ramps += (f"  - name: {name}\n    box: [{', '.join(_num(v) for v in box)}]\n"
-                  f"    band: [{', '.join(_num(v) for v in band)}]\n")
+    def ramps_file(about: str, boxes) -> str:
+        text = head + about + "\n\nramps:\n"
+        for name, box, band in boxes:
+            text += (f"  - name: {name}\n    box: [{', '.join(_num(v) for v in box)}]\n"
+                     f"    band: [{', '.join(_num(v) for v in band)}]\n")
+        return text
+
+    def friction_file(about: str, zones) -> str:
+        text = head + about + "\n\nzones:\n"
+        for name, box, mu in zones:
+            text += (f"  - name: {name}\n    box: [{', '.join(_num(v) for v in box)}]\n"
+                     f"    friction: {_num(mu)}\n")
+        return text
+
+    ramps = ramps_file(
+        "# The slope scene's lanes (config/ramps/dp.yaml says what a ramp box does):\n"
+        "# the band holds the floor, the ramp and the platform, not the walls.", ramp_boxes())
     walk = head + ("# The stair is never climbed by the mapping track (poses.txt stays on the\n"
                    "# level floor, so the platform is no storey of its own), so it is fitted\n"
                    "# from this walk, as dp's middle stair is.\n\nwalks:\n"
@@ -284,7 +401,17 @@ def config_files() -> dict[str, str]:
                     f"    box: [{_num(up0 - 1.0)}, {_num(end + 1.0)}, -1.0, 1.0]\n"
                     f"    tread: {_num(TREAD)}\n    riser: {_num(RISER)}\n")
     out = {"config/ramps/slope.yaml": ramps, "config/stair_walks/stairs15.yaml": walk,
-           "config/stair_shapes/stairs15.yaml": shape}
+           "config/stair_shapes/stairs15.yaml": shape,
+           "config/ramps/course.yaml": ramps_file(
+               "# The course scene's hills: the band holds the floor, the ramps and the platforms.",
+               course_ramp_boxes()),
+           "config/friction/friction.yaml": friction_file(
+               "# The friction scene's lanes (syncai_sim/terrains/friction.py says what a zone does):\n"
+               "# box is x0, x1, y0, y1; elsewhere the floor is the feet's own friction.",
+               friction_zones()),
+           "config/friction/course.yaml": friction_file(
+               "# The course scene's strips of floor, and the way up its slippery hill.",
+               course_zones())}
     for name, make in SCENES.items():
         s = make()
         x, y, z, yaw = s.spawn

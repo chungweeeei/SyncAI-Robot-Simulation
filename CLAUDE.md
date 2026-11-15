@@ -122,7 +122,7 @@ Paths are under `syncai_sim/`; `docs/architecture.md` draws the layers.
 | Need | Place |
 |---|---|
 | map -> voxel world (parse, mesh, plates, cache); ray cast / ground / blocked | `world/`: `build.py`, `btree.py`, `greedy_mesh.py`; `voxel_grid.py` (numba); `storeys.py` |
-| the feet's floor heights, flights fitted as staircases; the voxels -> boxes under the feet | `terrains/`: `surface_heights.py`, `stairs.py`, `terrain_patch.py` (numba, `tests/test_terrain_patch.py`); stairs the track never climbed: `config/stair_walks/<map>.yaml`; slopes across voxel layers: `config/ramps/<map>.yaml` |
+| the feet's floor heights, flights fitted as staircases; the voxels -> boxes under the feet | `terrains/`: `surface_heights.py`, `stairs.py`, `friction.py` (per-map zones of floor with their own sliding friction, `config/friction/<map>.yaml`, `tests/test_friction.py`); `terrain_patch.py` (numba, `tests/test_terrain_patch.py`); stairs the track never climbed: `config/stair_walks/<map>.yaml`; slopes across voxel layers: `config/ramps/<map>.yaml` |
 | URDF -> MJCF, the joint order (`LEGS` x `JOINTS`) and default pose (`Q_DEFAULT`), the body's physics knobs (`motor_model`, `trunk_inertial`, contact) | `entity/robot.py` (`RobotConfig`; the defaults in `config/params/sim_params.yaml` are the vendor's) |
 | MjSpec assembly, bitmasks, groups, the MJB scene cache | `scene/scene.py` (`scene_info` reads a loaded model back by name; `scene_key` lists what the cache depends on; the site's picture is not in the model) |
 | the body's measurements (the body IMU, joints, the base's truth, foot contacts), posture, the trunk's contact | `sensor/proprioception.py` (`Sensors`, one float32 record per step; `tests/test_sensors.py`) |

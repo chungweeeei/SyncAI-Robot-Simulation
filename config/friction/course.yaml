@@ -1,0 +1,13 @@
+# Written by scripts/make_scenes.py from its constants; edit there and rerun.
+# The course scene's strips of floor, and the way up its slippery hill.
+
+zones:
+  - name: course wet floor
+    box: [2, 5, -2, 2]
+    friction: 0.4
+  - name: course ice
+    box: [5, 8, -2, 2]
+    friction: 0.2
+  - name: course slippery hill, the way up
+    box: [17.5, 20.34, -2, 2]
+    friction: 0.4

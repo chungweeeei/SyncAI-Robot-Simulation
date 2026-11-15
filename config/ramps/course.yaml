@@ -1,0 +1,10 @@
+# Written by scripts/make_scenes.py from its constants; edit there and rerun.
+# The course scene's hills: the band holds the floor, the ramps and the platforms.
+
+ramps:
+  - name: course hill
+    box: [9.2, 16.5, -2, 2]
+    band: [-0.1, 0.6]
+  - name: course slippery hill
+    box: [17.2, 25.47, -2, 2]
+    band: [-0.1, 0.6]

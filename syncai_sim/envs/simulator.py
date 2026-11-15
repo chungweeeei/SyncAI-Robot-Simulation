@@ -50,6 +50,7 @@ from syncai_sim.sensor.lidar import LidarConfig, LidarModel, in_firing_frame, ra
 from syncai_sim.sensor.proprioception import Sensors, sensor_adr
 from syncai_sim.sensor.prop_rays import ray_aabb, ray_vertical_cylinder
 from syncai_sim.entity.robot import RobotConfig, RobotModel, load_robot
+from syncai_sim.terrains import friction as fr
 from syncai_sim.terrains.terrain_patch import TerrainPatch, TerrainPatchConfig
 from syncai_sim.world.build import World, WorldOptions, build_world
 
@@ -212,6 +213,15 @@ class Simulator:
                              cmd_delay_s=cfg.cmd_delay_ms / 1000.0, torque_bw_hz=cfg.torque_bw_hz)
         self.patch = TerrainPatch(self.world.grid, cfg.terrain, self.surface,
                                   None if stairs is None else stairs.regions)
+        # Floors that grip differently (terrains/friction.py): none on most maps.
+        zones_path = fr.zones_path(cfg.map_dir)
+        self.friction_zones = fr.read_zones(zones_path)
+        if self.friction_zones:
+            foot = tuple(float(v) for v in cfg.foot_friction)
+            sc.let_terrain_set_friction(self.model, self.info, torsional=foot[1], rolling=foot[2])
+            for name, box, mu in self.friction_zones:
+                log(f"[friction] zone: {name} ({zones_path}), box {box}, sliding {mu:g} "
+                    f"(elsewhere {foot[0]:g})")
         self.sensors = Sensors(self.model, self.data, self.info, self.motors)
         self._imu_gyro = sensor_adr(self.model, "imu_gyro")
         self._imu_acc = sensor_adr(self.model, "imu_acc")
@@ -301,10 +311,19 @@ class Simulator:
         if self.can is not None:
             self.can.reset()
         sc.set_base_pose(self.model, self.data, self.info, pos, yaw_pitch_quat(s.yaw, 0.0))
-        sc.place_terrain(self.data, self.info, self.patch.boxes_around(pos))
+        self._place_terrain(pos)
         mujoco.mj_forward(self.model, self.data)
         self.sensors.read(self.link.time(self.sim_time))  # the joints a motor reports before the first step
         self._fallen = False
+
+    def _place_terrain(self, around) -> None:
+        """Deal the terrain pool under `around`, each box with the friction of
+        where it lands (terrains/friction.py)."""
+        boxes = self.patch.boxes_around(around)
+        sc.place_terrain(self.data, self.info, boxes)
+        if self.friction_zones:
+            sc.set_terrain_friction(self.model, self.info, fr.sliding(
+                self.friction_zones, boxes[:, :2], float(self.cfg.foot_friction[0])))
 
     def _floor_under(self, x: float, y: float, voxel_top: float) -> float:
         """The measured floor in the voxel whose top is `voxel_top` (the feet
@@ -359,7 +378,7 @@ class Simulator:
         dt = self.model.opt.timestep
         base = self.data.xpos[self.info.base_body]
         if self.patch.due(base):
-            sc.place_terrain(self.data, self.info, self.patch.boxes_around(base))
+            self._place_terrain(base)
         if self.can is not None:
             self.motors.apply(self.can.poll(self.sim_time, self.sensors))
         else:

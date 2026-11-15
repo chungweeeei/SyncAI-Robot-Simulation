@@ -1,0 +1,7 @@
+# Written by scripts/make_scenes.py from its constants; edit there and rerun.
+# The friction scene: level floor, lanes 2 m wide with a strip of sliding friction 0.6 / 0.4 / 0.2 / 0.1 from x 3 to 9.
+#   python3 -m syncai_sim --profile /home/syncrobotic/sim/config/params/scenes/friction.yaml
+
+map_dir: /home/syncrobotic/sim/scenes/friction
+use_ini_initial_pose: false
+spawn: [0, 1, 0, 0]   # x y z(hint) yaw

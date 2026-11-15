@@ -271,6 +271,27 @@ def place_terrain(data: mujoco.MjData, info: SceneInfo, centres: np.ndarray) -> 
         data.mocap_pos[rest, 2] = TERRAIN_PARK_Z
 
 
+def let_terrain_set_friction(model: mujoco.MjModel, info: SceneInfo,
+                             torsional: float, rolling: float) -> None:
+    """Make the terrain pool's friction the contact's (terrains/friction.py):
+    priority 1, over the feet's 0, so that a box's own sliding friction is
+    used rather than the larger of the two; torsional and rolling as the
+    feet's, which is what the larger-of-two rule gave. Written into the
+    compiled model: the scene cache does not know of it."""
+    geoms = info.terrain_geoms
+    model.geom_priority[geoms] = 1
+    model.geom_friction[geoms, 1] = torsional
+    model.geom_friction[geoms, 2] = rolling
+
+
+def set_terrain_friction(model: mujoco.MjModel, info: SceneInfo, sliding: np.ndarray) -> None:
+    """The sliding friction of the pool's first boxes, in the order
+    `place_terrain` was given their centres."""
+    geoms = info.terrain_geoms
+    k = min(sliding.shape[0], geoms.shape[0])
+    model.geom_friction[geoms[:k], 0] = sliding[:k]
+
+
 def set_base_pose(model: mujoco.MjModel, data: mujoco.MjData, info: SceneInfo,
                   pos, quat_wxyz) -> None:
     """Teleport: put the free base at a pose, at rest."""

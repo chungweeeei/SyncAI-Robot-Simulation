@@ -425,12 +425,13 @@ TF with the host's clock; a sim that falls behind the wall moves it forward
 its own last pose or the INI's `[initial_pose]`, which is where the sim
 spawns the robot, so the two agree at the start.
 
-### Test sites: level ground, ramps, a 15 cm stair
+### Test sites: level ground, ramps, a 15 cm stair, slippery floors, a course
 
-`scripts/make_scenes.py` writes three sites as a mapped one is written
+`scripts/make_scenes.py` writes five sites as a mapped one is written
 (`octomap.bt`, `map.pcd`, `poses.txt`) into `scenes/<name>/`, generated and
-gitignored, and the files a mapped site keeps here (`config/ramps/slope.yaml`,
-`config/stair_walks/stairs15.yaml`, `config/stair_shapes/stairs15.yaml`) and
+gitignored, and the files a mapped site keeps here (`config/ramps/<name>.yaml`,
+`config/friction/<name>.yaml`, `config/stair_walks/stairs15.yaml`,
+`config/stair_shapes/stairs15.yaml`) and
 a profile per site (`config/params/scenes/<name>.yaml`: the map, the spawn).
 The sim reads them like any map, so nothing in it knows they are made.
 
@@ -439,6 +440,14 @@ The sim reads them like any map, so nothing in it knows they are made.
 | `flat` | 20 x 8 m of level floor, walls round it, four pillars to the sides | (0, 0) facing +x |
 | `slope` | four lanes side by side, 5 / 10 / 15 / 20 deg (y 3.6 / 1.2 / -1.2 / -3.6) up to a 0.5 m platform 2 m long and down again; walls between them | (0, 1.2), the 10 deg lane ahead |
 | `stairs15` | six 0.15 m risers on 0.30 m treads (x 3.0 .. 4.5) up to a 0.9 m platform 3 m long, six down (x 7.5 .. 9.0), 1.6 m wide between walls | (0, 0) facing the stair |
+| `friction` | level floor, four lanes side by side (y 3 / 1 / -1 / -3), each with a strip of sliding friction 0.6 / 0.4 / 0.2 / 0.1 from x 3 to 9 | (0, 1), the 0.4 lane ahead |
+| `course` | one corridor along x: friction 0.4 (x 2 .. 5), friction 0.2 (x 5 .. 8), a 0.5 m hill at x 9.5 (10 deg up, 15 deg down), a second at x 17.5 (10 deg both ways) whose way up has friction 0.4 | (0, 0) facing +x |
+
+A floor's friction is a file of boxes per map (`config/friction/<map>.yaml`,
+`terrains/friction.py`): inside one, the terrain boxes under the feet take its
+sliding friction and decide the contact's (MuJoCo would otherwise take the
+larger of floor and foot, and the feet's is 1.0); elsewhere, and on every map
+without such a file, nothing changes. Another lane: `-p spawn:=[0,-3,0,0]`.
 
 ```bash
 python3 /home/syncrobotic/sim/scripts/make_scenes.py           # in the container, once (or after editing it)
