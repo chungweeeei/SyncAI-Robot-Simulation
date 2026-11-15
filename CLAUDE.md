@@ -44,8 +44,10 @@ Removed 2026-11-13, do not bring back: the in-process ONNX policies
 (`locomotion: policy`), the kinematic statue (`locomotion: kinematic`), the
 sim answering as the gait controller on the ASCII link (`driver_link: udp`).
 The layers and one tick are drawn in `docs/architecture.md`. Python
-throughout; one container (`docker-compose.yml`, plain Ubuntu 22.04), the
-sim and its browser viewer start with it (`scripts/sim_entry.sh`). The
+throughout; one container (`docker-compose.yml`, plain Ubuntu 22.04, the
+host's network), the sim and its browser viewer start with it
+(`scripts/sim_entry.sh`); `docker-compose.controller.yml` is the only other
+compose file, laid over the controller's own. The
 workspace (`chungweeeei/SyncAI-Robot-Workspace`, a sibling checkout) is
 mounted at `/home/syncrobotic/robot_ws` for its maps and the robot's URDF
 only; this repo at `/home/syncrobotic/sim`.
@@ -98,7 +100,17 @@ only; this repo at `/home/syncrobotic/sim`.
    the joints; only `sensor/` reads the body for others.
 6. **Comments explain why**, and record measurements and rejected
    alternatives. A bare number without its reason is out of place.
-7. Python: `ruff.toml` (py310, 100 columns; `uvx ruff check syncai_sim tests
+7. **The controller is the robot's, unchanged.** g2-device-control has one
+   mode and knows no simulator: whatever differs on the sim is set from
+   here (`docker-compose.controller.yml`), never by a switch there. It runs
+   on the sim with `G2_SKIP_HOMING=1`, always: the sim's motors power up
+   homed and the model's stops are the URDF's limits, so homing sets a
+   wrong zero (`can_link.py` has the numbers). Do not make homing work.
+8. **What restarts with the sim.** The controller enables its motors once,
+   at its start, and Point-LIO integrates the sim's time and pose: a sim
+   restarted under a running stack needs the controller restarted and the
+   backend's `POST /api/v1/robot/restart`. Never restart it alone.
+9. Python: `ruff.toml` (py310, 100 columns; `uvx ruff check syncai_sim tests
    scripts` on the host). Tests: `python3 -m pytest /home/syncrobotic/sim/tests`
    in the container; `tests/test_simulator_site.py` runs the whole sim on the
    workspace's `map/dp` and skips without it.
@@ -117,7 +129,7 @@ Paths are under `syncai_sim/`; `docs/architecture.md` draws the layers.
 | the sim as the robot's MID360 on the Livox protocol (`lidar_link: livox`): discovery, commands, point and IMU packets, the device clock | `sensor/livox_link.py` (its docstring is the protocol's spec, with the vendored SDK's file for each rule; `tests/test_livox_link.py` pins the SDK's own bytes); the raw scan it sends is `Simulator.last_raw_scan`, the IMU `Simulator.lidar_imu` |
 | the lidar pattern, prop rays | `sensor/lidar.py`, `sensor/prop_rays.py`; the recorded MID360 bank `config/lidar/mid360_pattern.npz` (built by `scripts/lidar_pattern.py` through `sensor/livox_bag.py`, which reads a rosbag2 sqlite file directly) |
 | the motors: the PD closed every step (a generalized force, never a MuJoCo actuator), the motor clamp, the command delay and torque filter, `JointCommand` | `actuator/motors.py` (`tests/test_motors.py`) |
-| the hardware link: the body's record out, a controller process's command in, the watchdog; the stand-in controller | `locomotion/hardware_link.py` (its docstring is the protocol's spec; `tests/test_hardware_link.py`); the bench `scripts/controller_bench.py` |
+| the state datagram (the body's record out, every step) and, with `joint_link: udp`, a controller process's command in, the watchdog; the stand-in controller | `locomotion/hardware_link.py` (its docstring is the protocol's spec; `tests/test_hardware_link.py`); the bench `scripts/controller_bench.py` |
 | the joints as J60 motors on four SocketCAN buses (`joint_link: can`): the frames, the wiring (bus, id, sign, homed zero per joint), enable / timeout (the motor disables itself, fault latched) / set-home, per-bus delay and drop; the stand-in | `locomotion/can_link.py` (its docstring is the spec, and names its four assumptions; `tests/test_can_link.py`); the interfaces `scripts/vcan_up.sh` |
 | the body IMU as the robot's Yesense on a serial port (`imu_link: serial`): the frame, the rate, the pseudo-terminal and its backlog | `sensor/imu_serial.py` (its docstring is the spec; `tests/test_imu_serial.py` ports the controller's reader) |
 | the pack's BMS on `can0` (`bms_link: can`): the items, request / cycle, the battery model (charge against the joints' power) | `sensor/bms_link.py` (its docstring is the spec; `tests/test_bms_link.py`) |
@@ -127,7 +139,7 @@ Paths are under `syncai_sim/`; `docs/architecture.md` draws the layers.
 | the viewer (viser: the site as GLB tiles once, poses at 20 Hz, drawn by the host's browser; nothing renders in the container), its panel's driving | `viewer/web_view.py`, `viewer/teleop.py` |
 | the viewer's look (tiles, intensity shading, the Poisson and TSDF surfaces, colours, the lidar map layer) | `visuals/`: `site_tiles.py` (10 m tiles as GLB, a texel per voxel face), `voxel_intensity.py`, `pcd_mesh.py`, `tsdf_mesh.py`, `visual.py`, `map_cloud.py` (picture only, never sensing); the site, storey and layer switches are the panel in `viewer/web_view.py` |
 | test sites made, not mapped (flat, slope, stairs15): their .bt / .pcd / poses, ramps, stair walk and shape, profiles | `scripts/make_scenes.py` (writes `scenes/<name>/`, gitignored, and the config files, committed; `tests/test_scenes.py`); the .bt writer `world/btree.py` `write_occupied` |
-| the container's command | `scripts/sim_entry.sh` (`SIM_AUTOSTART`, `SIM_ARGS`) |
+| the container's command; the container itself; what the robot's controller needs set on the sim | `scripts/sim_entry.sh` (`SIM_AUTOSTART`, `SIM_ARGS`, empty by default); `docker-compose.yml`; `docker-compose.controller.yml` (the IMU's path, no homing, driver_manager's addresses, the OrbStack shim `scripts/spin_sleep.sh`) |
 
 ## Running and testing (inside the container)
 

@@ -46,8 +46,8 @@ ONNX policies in-process or carry a rigid statue by rules).
                │                                       ▲
                ▼                                       │ JointCommand
    locomotion/hardware_link.py   every step's record out, the controller's
-                     command in — a controller PROCESS (SyncAI-Robot-Control
-                     --backend sim) runs its RL or LMA against this
+                     command in with `joint_link: udp` (the stand-in; the
+                     robot's controller comes in over CAN, below)
                │
    locomotion/can_link.py   `joint_link: can`: the same joints as J60 motors on
                      four SocketCAN buses, one per leg, as on the robot — the
