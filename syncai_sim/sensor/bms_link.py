@@ -113,8 +113,8 @@ class Bms:
             except OSError as err:
                 raise SystemExit(
                     f"bms_link can: cannot open {c.interface}: {err}. The interface must exist "
-                    f"where the sim runs (scripts/vcan_up.sh makes it; in the container that "
-                    f"needs SIM_NETWORK_MODE=host)") from err
+                    f"where the sim runs (scripts/vcan_up.sh makes it, again after a restart of "
+                    f"the machine or Docker's VM)") from err
         sock.setblocking(False)
         self.sock = sock
         self.soc = float(c.soc)

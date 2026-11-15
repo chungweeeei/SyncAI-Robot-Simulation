@@ -2,11 +2,11 @@
 # from <map>/octomap.bt whenever that file changes, so never committed.
 cache/
 
-# Session logs written by scripts/run_session.sh (log/stack/<robot_id>/...).
+# Bench reports (scripts/controller_bench.py: log/bench/<name>.jsonl).
 log/
 
-# The link to the IMU's pseudo-terminal (docker-compose.can.yml), shared with
-# the controller's container.
+# The link to the IMU's pseudo-terminal, shared with the controller's
+# container (docker-compose.controller.yml), and the OrbStack shim.
 run/
 
 # Compose interpolation (ROBOT_WS and friends) — copy .env.example and edit.
@@ -17,9 +17,6 @@ __pycache__/
 .pytest_cache/
 .ruff_cache/
 .DS_Store
-
-# Foxglove layouts written per robot_id by scripts/foxglove.sh from the template.
-config/foxglove/layout-*.json
 
 # MuJoCo writes this next to the cwd on some errors.
 MUJOCO_LOG.TXT

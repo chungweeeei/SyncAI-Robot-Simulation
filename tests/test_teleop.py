@@ -1,5 +1,5 @@
 """Teleop (teleop.py): a held command from the browser's panel, a stop once,
-the keys as closures under the lock, and the teleport-only mode (no --teleop)."""
+the keys as closures under the lock."""
 
 from syncai_sim.viewer.teleop import Teleop
 
@@ -57,15 +57,3 @@ def test_keys_run_under_the_lock_in_order():
     assert FakeDriver.policy == 0 and "policy -> 1" in logged[1] and "policy -> 0" in logged[2]
     assert sim.teleported == (0, 0, 0, 0)
 
-
-def test_without_drive_only_the_teleport():
-    # No --teleop: the command and the keys are whoever's on the UDP link.
-    t = Teleop((1.0, 2.0, 0.0, 0.5), log=lambda *a: None, drive=False)
-    sim = FakeSim()
-    t.set_cmd(0.5, 0.0)
-    t.motion_key("5")
-    t.toggle_policy()
-    t.teleport_home()
-    t.apply(sim)
-    assert sim.cmds == []
-    assert sim.teleported == (1.0, 2.0, 0.5, 0.0)

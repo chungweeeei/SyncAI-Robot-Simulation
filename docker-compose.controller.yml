@@ -5,19 +5,24 @@
 # doing is said here, in the sim's repository, and nothing there.
 #
 #   scripts/vcan_up.sh
-#   docker compose -f docker-compose.yml -f docker-compose.can.yml up -d      # the sim
+#   docker compose up -d                                                      # the sim
 #   docker compose -f ../g2-device-control/docker-compose.yml -f docker-compose.controller.yml up -d
 #   docker compose -f ../g2-device-control/docker-compose.yml -f docker-compose.controller.yml logs -f controller
 #
 # Run from this directory (${PWD} below is this checkout), the sim first: the
 # controller configures and enables its motors once, at its start.
+#
+# Why a file of its own and not a service in docker-compose.yml: a service
+# there would have to `extends` the controller's compose file, and compose
+# reads an extended file whenever it reads this project, so the sim would no
+# longer start without a g2-device-control checkout beside it.
 # =============================================================================
 
 services:
   controller:
     # The IMU here is a pseudo-terminal, which `devices:` cannot pass through
     # (its node does not open outside a devpts): it is reached through the
-    # host's /dev/pts and this checkout's run/ (docker-compose.can.yml).
+    # host's /dev/pts and this checkout's run/ (docker-compose.yml).
     devices: !reset []
     environment:
       G2_IMU_PORT: /run/syncai/syncai_imu

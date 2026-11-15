@@ -9,7 +9,7 @@ the terrain boxes under the feet when asked. The browser draws it all at
 its own frame rate with the host's GPU, orbits and zooms itself, and follows
 the robot by moving its look-at point while keeping whatever offset the
 mouse gave the camera. The panel holds the storey switch, the layers, the
-status, the teleport, and with --teleop the sliders and motion keys
+status, the teleport, and the sliders and motion keys
 (teleop.py applies them under the sim lock).
 
 It shows what the sim itself is made of — which tiles exist, what the feet
@@ -340,13 +340,8 @@ class WebView:
 
         if self.teleop is None:
             return
-        # The teleport is wanted without --teleop too (a fall leaves the
-        # controller locked; teleop.py); the rest only when the sim is driven
-        # by hand.
         home = gui.add_button("Teleport to the spawn", hint="back on the spawn, standing")
         home.on_click(lambda _e: self.teleop.teleport_home())
-        if not self.teleop.drive:
-            return
         with gui.add_folder("Teleop"):
             vx = gui.add_slider("vx m/s", -0.6, 0.8, 0.05, 0.0)
             wz = gui.add_slider("wz rad/s", -1.5, 1.5, 0.05, 0.0)

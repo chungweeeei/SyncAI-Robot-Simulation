@@ -3,9 +3,12 @@
 # each --profile, then -p key:=value. A plain mapping: an unknown key is an
 # error at load.
 #
-# The sim is the robot's hardware: the joints are a controller process's
-# over the hardware link (syncai_sim/locomotion/hardware_link.py), the lidar
-# goes out on the Livox protocol. It walks nowhere by itself.
+# The sim is the robot's hardware, and these values are the robot: the
+# joints J60 motors on four CAN buses, the BMS on a fifth, the body IMU on a
+# serial port, the lidar on the Livox protocol. Run with no argument, it is
+# what the robot's controller and the workspace's nav stack connect to
+# unchanged. What that needs of the host is said at each link below and put
+# together in README, "Running". It walks nowhere by itself.
 
 # --- world ---------------------------------------------------------------
 # The map comes from the INI ([map] pcd -> its directory's octomap.bt), like
@@ -43,8 +46,8 @@ visual_mesh: voxels
 # bag; without that file the ramp is shown. Grey where the camera never
 # looked (the robot's back, ceilings).
 visual_look: ramp
-# The browser viewer (viewer/web_view.py): its port inside the container
-# (docker-compose.yml maps it to SIM_WEB_VIEW_PORT, 8080).
+# The browser viewer (viewer/web_view.py): its port, the host's (the
+# container is on the host's network).
 web_view_port: 8080
 
 # --- spawn ---------------------------------------------------------------
@@ -80,21 +83,23 @@ controller_command_ip: 127.0.0.1    # the controller's address
 controller_command_port: 50051      # the controller's command port
 
 # --- the lidar on the network ------------------------------------------------
-# none: the scans stay in the sim (the viewer draws them).
 # livox: the sim is the robot's MID360 / MID360s on the Livox protocol
 #   (sensor/livox_link.py): the workspace's livox_ros_driver2 finds it and
 #   reads its points and IMU as it reads the robot's, so Point-LIO, the
 #   localizer and the planner run on the sim. Its IP has to be an address of
 #   this host and the driver's host_ip another (README, "The sim as the
 #   robot's lidar").
-lidar_link: none
+# none: the scans stay in the sim (the viewer draws them); for a run with
+#   no nav stack on a host without those addresses.
+lidar_link: livox
 livox_lidar_ip: ""            # "" = the INI's [sensor.lidar] ip, the driver's lidar_configs ip
 livox_lidar_type: ""          # mid360 | mid360s; "" = the INI's [sensor.lidar] type (the JSON is keyed by it)
 livox_points_per_packet: 96   # the MID360's own
 livox_imu_hz: 200.0           # the MID360's own; Point-LIO warns past a 30 ms gap
 
 # --- the hardware link (syncai_sim/locomotion/hardware_link.py) -------------
-# The controller's --backend sim must use the same ports.
+# The state datagram goes out every step whatever joint_link is; the command
+# port is read with joint_link udp only.
 link_command_port: 20001     # joint commands in
 link_state_host: "127.0.0.1" # the body's record out, to here
 link_state_port: 30010
@@ -104,17 +109,18 @@ link_state_port: 30010
 link_watchdog_ms: 100.0
 
 # --- the joints on SocketCAN (syncai_sim/locomotion/can_link.py) ------------
-# udp: the joint commands are the hardware link's command datagram (above).
 # can: the twelve joints are J60 motors on four CAN buses, one per leg, as
 #   on the robot — its frames, its motor ids, its homed zero and directions —
 #   so a controller's SocketCAN hardware layer drives the sim as it drives
 #   the robot. The interfaces must exist where the sim runs: vcan ones of
-#   the robot's names (scripts/vcan_up.sh; the container on the host's
-#   network, SIM_NETWORK_MODE=host). The state datagram above is still sent
-#   (the IMU, the base's truth and the contacts are on no CAN bus); the
-#   command port is not read. link_watchdog_ms is then each motor's CAN
-#   timeout at power-up, until SET_CAN_TIMEOUT.
-joint_link: udp
+#   the robot's names (scripts/vcan_up.sh). The state datagram above is
+#   still sent (the IMU, the base's truth and the contacts are on no CAN
+#   bus); the command port is not read. link_watchdog_ms is then each
+#   motor's CAN timeout at power-up, until SET_CAN_TIMEOUT.
+# udp: the joint commands are the hardware link's command datagram (above):
+#   no CAN interface needed, and no controller speaks it yet (the stand-in
+#   of scripts/controller_bench.py does).
+joint_link: can
 can_interfaces: [can1, can2, can3, can4]   # HR, FR, FL, HL (the G2.3's verified mapping)
 can_motor_ids: [2, 3, 4]                   # HipX, HipY, Knee on every bus
 # vcan delivers every frame at once; these put a bus's faults back, per bus.
@@ -122,23 +128,23 @@ can_delay_ms: [0.0, 0.0, 0.0, 0.0]         # CONTROL commands held this long bef
 can_drop_rate: [0.0, 0.0, 0.0, 0.0]        # fraction of received frames lost (not applied, not answered)
 
 # --- the body IMU on a serial port (syncai_sim/sensor/imu_serial.py) --------
-# none: the body IMU is only in the state datagram above.
-# serial: the sim is also the robot's Yesense IMU, streaming its frames
+# serial: the sim is the robot's Yesense IMU, streaming its frames
 #   (acceleration, angular rate, Euler angles) on a pseudo-terminal that
 #   imu_serial_port links to, as the unit does on /dev/ttyTHS1: the
-#   controller's own serial reader parses it. The pseudo-terminal is in the
-#   sim's container; a real serial device named here is written instead.
-imu_link: none
-imu_serial_port: /tmp/syncai_imu
+#   controller's own serial reader parses it. A real serial device named
+#   there is written instead.
+# none: the body IMU is only in the state datagram above.
+imu_link: serial
+imu_serial_port: ""          # "" = run/syncai_imu of this checkout, which the controller's container mounts (docker-compose.controller.yml)
 imu_serial_hz: 200.0         # not known for the robot's unit; 115200 baud carries at most 235 of this frame
 
 # --- the BMS on CAN (syncai_sim/sensor/bms_link.py) -------------------------
-# none: no battery.
 # can: the sim is the pack's BMS (Foxlink Jeff-8S3P) on the robot's fifth
 #   bus, extended frames: silent until asked, 0x87 starts the cycle of
 #   voltages, current, temperatures, state and SOC. A vcan interface, as
 #   for the joints (scripts/vcan_up.sh makes can0 too).
-bms_link: none
+# none: no battery.
+bms_link: can
 bms_interface: can0
 bms_period_ms: 100.0         # the whole table once started; not in the protocol document
 bms_soc: 0.8                 # at start, 0..1

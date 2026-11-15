@@ -1,11 +1,16 @@
 # =============================================================================
-# One container: the MuJoCo sim, its browser viewer and its UDP links. No ROS.
+# One container: the MuJoCo sim as the robot's hardware, and its browser
+# viewer. No ROS.
 #
 #   cp .env.example .env            # set ROBOT_WS to your workspace checkout
 #   docker compose build
-#   docker compose up -d            # starts the sim + its browser viewer (http://localhost:8080)
+#   scripts/vcan_up.sh              # the CAN interfaces; again after a restart of the machine / Docker's VM
+#   docker compose up -d            # the sim + its browser viewer (http://localhost:8080)
 #   docker compose logs -f sim      # the sim's output
 #   docker compose exec sim bash    # then see README "Running"
+#
+# The robot's controller is not started here: it has its own repository and
+# its own compose file, which docker-compose.controller.yml goes over.
 #
 # The workspace is mounted, not copied, for two things only: the maps under
 # its map/ and the robot's URDF and meshes under src/syncai_bringup. Nothing
@@ -35,32 +40,23 @@ services:
     # PID 1 is the entry script (then `sleep infinity`), which never reaps;
     # Docker's init reaps what the shells under `docker compose exec` leave.
     init: true
-    # bridge (the default): the ports below reach the sim from the host. host:
-    # the sim's sockets are the host's (the ports below are then ignored);
-    # what a controller process on the host machine finds most simply.
-    network_mode: "${SIM_NETWORK_MODE:-bridge}"
-    ports:
-      - "${SIM_WEB_VIEW_PORT:-8080}:8080"   # the browser viewer (viewer/web_view.py)
-      # The sim's UDP input. Its outputs go where the params say:
-      # link_state_host:link_state_port (30010) and the panel's keys and AXES
-      # to controller_command_port (50051); from a bridge network to a program
-      # on the host, set link_state_host to host.docker.internal.
-      - "20001:20001/udp"   # the hardware link: a controller's joint commands
-      # joint_link can and bms_link can have no port to map: the CAN
-      # interfaces are the host's (scripts/vcan_up.sh), seen only with
-      # network_mode host. imu_link serial is a pseudo-terminal inside this
-      # container (/tmp/syncai_imu): its reader runs here, unless the
-      # container has the host's /dev/pts. docker-compose.can.yml sets all
-      # of that up for a controller in a container of its own.
+    # The host's network, always: the CAN interfaces are the host's (a vcan
+    # is seen in no other network namespace), the lidar's IP is an address of
+    # the host, and the controller and the nav stack find the sim's UDP ports
+    # on 127.0.0.1. Until 2026-11-15 a bridge network was the default and a
+    # second compose file switched to this one; nothing the robot's software
+    # connects to worked on the bridge.
+    network_mode: host
     environment:
       HOME: /home/syncrobotic
       # numba's parallel ray caster on OpenMP (gcc's libgomp).
       NUMBA_THREADING_LAYER: omp
       PYTHONUNBUFFERED: "1"
       # What the container starts (scripts/sim_entry.sh): the sim and its
-      # browser viewer, unless SIM_AUTOSTART is 0.
+      # browser viewer, unless SIM_AUTOSTART is 0. SIM_ARGS is empty for the
+      # robot as it is; a test site: --profile .../config/params/scenes/flat.yaml
       SIM_AUTOSTART: "${SIM_AUTOSTART:-1}"
-      SIM_ARGS: "${SIM_ARGS:---teleop}"
+      SIM_ARGS: "${SIM_ARGS:-}"
     volumes:
       - ${ROBOT_WS:-../SyncAI-Robot-Workspace}:/home/syncrobotic/robot_ws
       - .:/home/syncrobotic/sim
@@ -68,6 +64,14 @@ services:
       # config/system.ini. Single-file: edit it in place, never rename over it
       # (a rename gives the content a new inode this mount never sees).
       - ${SIM_INSTANCE_INI:-./config/instances/sim01.ini}:/home/syncrobotic/robot_ws/config/system.ini
+      # The IMU's pseudo-terminal has to be one the controller's container can
+      # open. A container has its own devpts, whose /dev/pts/N exist nowhere
+      # else, so both mount the host's: the sim's pseudo-terminal is then
+      # /dev/pts/N in both. The link to it is written in run/ of this
+      # checkout (mounted above, and the sim's user can write there), which
+      # the controller's container mounts as well. Checked on OrbStack
+      # 2026-11-14: a second container read the frames through it.
+      - /dev/pts:/dev/pts
     # The sim and its viewer at start (http://localhost:8080), then the
     # container stays up for `docker compose exec sim bash` whatever the sim
     # does; its output is `docker compose logs -f sim`.

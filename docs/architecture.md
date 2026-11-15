@@ -126,15 +126,16 @@ the same.
 ## Running it
 
 ```bash
-# the sim as a controller's hardware: nothing on the link, the motors in damping
-python3 -m syncai_sim --teleop
+# the sim as the robot (the joints on CAN, the IMU, the BMS, the lidar): no
+# controller, so the motors are never enabled
+python3 -m syncai_sim
 
-# the link end to end with no controller process: the stand-in's PD stands the robot
+# no controller process: the stand-in's PD stands the robot through the CAN buses
 python3 /home/syncrobotic/sim/scripts/controller_bench.py --fake-controller --seconds 5
 
-# a controller process on the link (its --backend sim, ports 20001 / 30010 / 50051):
+# the same on this UDP link, the joint commands in on 20001:
 python3 /home/syncrobotic/sim/scripts/controller_bench.py \
-    --send "MODE Z" --send "MODE M" --gap 3 --axes 0.5 0 0 --seconds 15 --listen
+    -p joint_link:=udp -p imu_link:=none -p bms_link:=none --fake-controller --seconds 5
 ```
 
 The defaults (config/params/sim_params.yaml) set the body the way a
@@ -144,7 +145,8 @@ controller sees here is what it would see there; every value says why.
 
 ## What is next
 
-The controller process itself: SyncAI-Robot-Control's `--backend sim` against
-this specification, in a container of its own beside the sim's (Ubuntu 22.04,
-Rust, the C++ MPC stack), and `controller_bench.py --send "MODE M"` against
-its LMA. Not in this repository yet.
+The robot's controller drives the sim through its real hardware layer since
+2026-11-14 (the CAN buses, the IMU's serial port; README, "The robot's
+controller in its own container"), so this link's command half has no
+consumer but the stand-in; its state datagram is what the benches read.
+Not run yet: the controller's MPC (`MODE M`) on the sim.

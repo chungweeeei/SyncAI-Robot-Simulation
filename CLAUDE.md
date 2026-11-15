@@ -11,15 +11,13 @@ outside over **UDP, SocketCAN and a serial port only** (no ROS anywhere, removed
 the robot's hardware and nothing more** (2026-11-13): it sends out what the
 sensors measure and applies the joint commands it is sent. Turning cmd_vel
 into joint commands (RL or MPC) and the controller's state machine belong to
-the controller process, never here.
+the controller process, never here. **Run with no argument it is the robot**
+(2026-11-15): every link below is the default, on the host's network, so
+the robot's controller (g2-device-control, its own repository and compose
+file, with `docker-compose.controller.yml` over it) and the workspace's nav
+stack connect unchanged. Do not add a flag or a compose file for what a
+parameter's default can say.
 
-* **the sim is a controller's hardware**: the joints are handed to a
-  controller process over the binary hardware link
-  (`locomotion/hardware_link.py`: the body's record out to 30010, joint
-  commands in on 20001). The consumer is SyncAI-Robot-Control's
-  `--backend sim` (not written yet); with nothing on the link the motors are
-  in damping and the robot lies down. The viewer panel's keys and AXES go to
-  the controller's command port, 50051 (`driver/udp_driver.py`).
 * **the sim is the robot's motors on CAN** (`joint_link: can`): the twelve
   joints as J60 motors on four SocketCAN buses, one per leg, with the
   robot's frames, ids, signs and homed zero (`locomotion/can_link.py`), so a
@@ -35,6 +33,12 @@ the controller process, never here.
   on the Livox protocol (`sensor/livox_link.py`), read by the workspace's own
   livox_ros_driver2, so Point-LIO, the localizer and the planner run on it.
   Keep it byte-compatible with the vendored Livox-SDK2.
+* **the state datagram** (`locomotion/hardware_link.py`): the body's whole
+  record out on UDP 30010 every step, whatever the joints' link. With
+  `joint_link: udp` the same link takes the joint commands in on 20001
+  instead of CAN; only the bench's stand-in speaks that today. The viewer
+  panel's keys and AXES go to the controller's command port, 50051
+  (`driver/udp_driver.py`).
 
 Removed 2026-11-13, do not bring back: the in-process ONNX policies
 (`locomotion: policy`), the kinematic statue (`locomotion: kinematic`), the
@@ -67,8 +71,8 @@ only; this repo at `/home/syncrobotic/sim`.
    each link is a protocol with a consumer.**
    The hardware link's spec is the docstring of `locomotion/hardware_link.py`
    plus `tests/test_hardware_link.py` (228-byte state out, 240-byte command
-   in, field order, frames, the watchdog): a change there is a change in
-   SyncAI-Robot-Control's `--backend sim` too, said so in the commit message.
+   in, field order, frames, the watchdog): a change there is a change for
+   whatever reads the datagram (the benches), said so in the commit message.
    The panel's lines to the controller (`driver/udp_driver.py`) are the
    robot's controller protocol as driver_manager speaks it: keep them
    byte-compatible. The CAN link (`locomotion/can_link.py`, 2026-11-13) is
@@ -132,23 +136,25 @@ docker compose up -d                 # the sim + its viewer start: http://localh
 docker compose logs -f sim
 docker compose exec sim bash
 python3 -m pytest /home/syncrobotic/sim/tests
-python3 -m syncai_sim --headless --seconds 30     # no controller on the link: the motors in damping
-# the link end to end with the stand-in controller (docs/architecture.md):
+python3 -m syncai_sim --headless --seconds 30     # no controller: the motors never enabled, the robot lies down
+# the stand-in controller on the four CAN buses, with the IMU and the BMS (docs/architecture.md):
 python3 /home/syncrobotic/sim/scripts/controller_bench.py --fake-controller --seconds 5
-# the same over four CAN buses (on the host first: scripts/vcan_up.sh; SIM_NETWORK_MODE=host):
-python3 /home/syncrobotic/sim/scripts/controller_bench.py -p joint_link:=can --fake-controller --seconds 5
-# the robot's controller in its own container (README, "The robot's controller in its own container"):
-#   docker compose -f docker-compose.yml -f docker-compose.can.yml up -d
+# the same on the UDP link, where there is no vcan (a throwaway container, CI):
+python3 /home/syncrobotic/sim/scripts/controller_bench.py -p joint_link:=udp -p imu_link:=none -p bms_link:=none --fake-controller --seconds 5
+# the robot's controller in its own container (README, "The robot's controller in its own container"),
+# on the host, from this directory, the sim first:
+#   scripts/vcan_up.sh
+#   docker compose up -d
 #   docker compose -f ../g2-device-control/docker-compose.yml -f docker-compose.controller.yml up -d
 # (its compose file unchanged: what the sim makes different is docker-compose.controller.yml's, here)
 # a made test site (README, "Test sites"): flat, slope, stairs15
 python3 /home/syncrobotic/sim/scripts/make_scenes.py
-python3 -m syncai_sim --teleop --profile /home/syncrobotic/sim/config/params/scenes/stairs15.yaml
-# with the IMU on /tmp/syncai_imu and the BMS on can0 as well:
-python3 /home/syncrobotic/sim/scripts/controller_bench.py -p joint_link:=can -p imu_link:=serial -p bms_link:=can --fake-controller --seconds 5
+python3 -m syncai_sim --profile /home/syncrobotic/sim/config/params/scenes/stairs15.yaml
 ```
 
-`docker compose up` already runs a sim on the viewer's port and the UDP
-ports; start another by hand with `SIM_AUTOSTART=0` (or `--headless` and other
+The sim's flags are `--headless`, `--seconds`, `--profile` and `-p` only:
+anything else that can be set is a parameter (`config/params/sim_params.yaml`).
+`docker compose up` already runs a sim on the viewer's port, the UDP ports
+and the CAN buses; start another by hand with `SIM_AUTOSTART=0` (or `--headless` and other
 ports), or the two clash. Do not run `docker compose build` on your own after
 an edit; leave that to the user unless asked.

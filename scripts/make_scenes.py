@@ -3,7 +3,7 @@
 
     python3 scripts/make_scenes.py              # all three into scenes/<name>/
     python3 scripts/make_scenes.py stairs15     # one
-    python3 -m syncai_sim --teleop --profile /home/syncrobotic/sim/config/params/scenes/stairs15.yaml
+    python3 -m syncai_sim --profile /home/syncrobotic/sim/config/params/scenes/stairs15.yaml
 
 Each is written as a mapped site is, so the sim reads it the same way
 (CLAUDE.md, rule 2): `octomap.bt` (the voxels: the lidar, the ground, the
@@ -290,7 +290,7 @@ def config_files() -> dict[str, str]:
         x, y, z, yaw = s.spawn
         out[f"config/params/scenes/{name}.yaml"] = (
             head + f"# The {name} scene: {s.about}.\n"
-            f"#   python3 -m syncai_sim --teleop --profile "
+            f"#   python3 -m syncai_sim --profile "
             f"/home/syncrobotic/sim/config/params/scenes/{name}.yaml\n\n"
             f"map_dir: /home/syncrobotic/sim/scenes/{name}\n"
             "use_ini_initial_pose: false\n"

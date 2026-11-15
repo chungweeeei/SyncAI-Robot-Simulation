@@ -6,10 +6,9 @@ loop under the sim lock. All of it goes to the controller process
 A command, once set, is sent every loop while it is non-zero and once more
 as a stop when it goes to zero, then nothing: a teleop that set 0 every loop
 would override the AXES arriving on the UDP link with the panel untouched,
-so the panel and a program on the link can drive together. `drive=False`
-(no --teleop) keeps only the teleport: whatever is on the link owns the
-command and the motion keys, but putting the robot back on the spawn after
-a fall is wanted there most.
+so the panel and a program on the link (driver_manager under a navigation
+goal) drive together, and the panel needs no switch: until 2026-11-15 a
+--teleop flag turned its driving on, and no run was ever started without it.
 
 Until 2026-10-26 this was the GLFW window's keyboard (hold-to-drive arrows,
 press timers for a browser that reported no key releases); the window went
@@ -20,33 +19,26 @@ from __future__ import annotations
 
 
 class Teleop:
-    def __init__(self, spawn, log=print, drive: bool = True):
+    def __init__(self, spawn, log=print):
         self.spawn = spawn  # x, y, z, yaw: where `teleport_home` puts the robot
         self.log = log
-        self.drive = drive
         self._cmd: tuple[float, float, float] | None = None
         self._pending = []  # closures applied under the sim lock
         self._driving = False
 
     # -- from the panel (any thread) ----------------------------------------------
     def set_cmd(self, vx: float, wz: float) -> None:
-        if self.drive:
-            self._cmd = (float(vx), 0.0, float(wz))
+        self._cmd = (float(vx), 0.0, float(wz))
 
     def stop(self) -> None:
-        if self.drive:
-            self._cmd = (0.0, 0.0, 0.0)
+        self._cmd = (0.0, 0.0, 0.0)
 
     def motion_key(self, key: str) -> None:
         """A motion key to the controller: "1" RL, "5" MPC (driver/udp_driver.py)."""
-        if self.drive:
-            self._pending.append(
-                lambda sim: self.log(f"[teleop] key {key} -> {sim.driver.set_motion_key(key)}"))
+        self._pending.append(
+            lambda sim: self.log(f"[teleop] key {key} -> {sim.driver.set_motion_key(key)}"))
 
     def toggle_policy(self) -> None:
-        if not self.drive:
-            return
-
         def toggle(sim):
             new = 0 if sim.driver.policy == 1 else 1
             self.log(f"[teleop] policy -> {new} {sim.driver.set_policy_mode(new)}")

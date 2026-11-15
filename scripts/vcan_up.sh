@@ -12,7 +12,7 @@
 # nor `ip`). On a Mac the host is Docker's VM (OrbStack: its kernel has vcan
 # built in, checked 2026-11-13 on 7.2.12-orbstack; no vxcan, so the sim and
 # the controller must both be on the host's network to see the same
-# interfaces: SIM_NETWORK_MODE=host), reached through a privileged container.
+# interfaces, as their compose files put them), reached through a privileged container.
 # On Linux with `ip` and root it is done directly. The interfaces are gone
 # after a restart of the VM / the machine: run this again.
 #
