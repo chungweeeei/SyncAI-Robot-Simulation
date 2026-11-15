@@ -37,7 +37,7 @@ parameter's default can say.
   record out on UDP 30010 every step, whatever the joints' link. With
   `joint_link: udp` the same link takes the joint commands in on 20001
   instead of CAN; only the bench's stand-in speaks that today. The viewer
-  panel's keys and AXES go to the controller's command port, 50051
+  panel's AXES go to the controller's command port, 50051
   (`driver/udp_driver.py`).
 
 Removed 2026-11-13, do not bring back: the in-process ONNX policies
@@ -75,8 +75,8 @@ only; this repo at `/home/syncrobotic/sim`.
    plus `tests/test_hardware_link.py` (228-byte state out, 240-byte command
    in, field order, frames, the watchdog): a change there is a change for
    whatever reads the datagram (the benches), said so in the commit message.
-   The panel's lines to the controller (`driver/udp_driver.py`) are the
-   robot's controller protocol as driver_manager speaks it: keep them
+   The panel's AXES line to the controller (`driver/udp_driver.py`) is the
+   robot's controller protocol as driver_manager speaks it: keep it
    byte-compatible. The CAN link (`locomotion/can_link.py`, 2026-11-13) is
    the J60's protocol and the robot's wiring as its controller speaks them:
    keep it byte-compatible with the robot, never with the sim's convenience
@@ -133,7 +133,7 @@ Paths are under `syncai_sim/`; `docs/architecture.md` draws the layers.
 | the joints as J60 motors on four SocketCAN buses (`joint_link: can`): the frames, the wiring (bus, id, sign, homed zero per joint), enable / timeout (the motor disables itself, fault latched) / set-home, per-bus delay and drop; the stand-in | `locomotion/can_link.py` (its docstring is the spec, and names its four assumptions; `tests/test_can_link.py`); the interfaces `scripts/vcan_up.sh` |
 | the body IMU as the robot's Yesense on a serial port (`imu_link: serial`): the frame, the rate, the pseudo-terminal and its backlog | `sensor/imu_serial.py` (its docstring is the spec; `tests/test_imu_serial.py` ports the controller's reader) |
 | the pack's BMS on `can0` (`bms_link: can`): the items, request / cycle, the battery model (charge against the joints' power) | `sensor/bms_link.py` (its docstring is the spec; `tests/test_bms_link.py`) |
-| the panel's motion keys, policy number and AXES forwarded to the controller | `driver/udp_driver.py` |
+| the panel's AXES forwarded to the controller (its motion keys and policy toggle removed 2026-11-15) | `driver/udp_driver.py` |
 | one physics tick, scan, spawn, teleport, falls counted; where the base is put down | `envs/simulator.py`; `envs/placement.py` |
 | the main loop, the links polled and ticked, the settings (defaults, `config/params/sim_params.yaml`, `--profile`, `-p`) | `__main__.py` (sets `OPENBLAS_NUM_THREADS=1` before numpy); `config.py` |
 | the viewer (viser: the site as GLB tiles once, poses at 20 Hz, drawn by the host's browser; nothing renders in the container), its panel's driving | `viewer/web_view.py`, `viewer/teleop.py` |

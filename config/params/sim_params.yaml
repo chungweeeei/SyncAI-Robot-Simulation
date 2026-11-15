@@ -76,8 +76,8 @@ lidar_max_range: 40.0
 range_noise_sigma: 0.01      # along the ray; 2 cm pushes returns across the 0.1 m voxel steps (lidar.py)
 
 # --- the controller ----------------------------------------------------------
-# The viewer panel's motion keys, policy numbers and AXES go to the
-# controller process as the ASCII lines driver_manager sends
+# The viewer panel's AXES go to the controller process as the ASCII line
+# driver_manager sends
 # (driver/udp_driver.py); the controller (SyncAI-Robot-Control) binds this.
 controller_command_ip: 127.0.0.1    # the controller's address
 controller_command_port: 50051      # the controller's command port

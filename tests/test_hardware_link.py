@@ -156,16 +156,11 @@ def test_the_stand_in_controller_stands_the_body_through_the_link():
 def test_udp_driver_speaks_the_controllers_lines():
     rx = peer()
     drv = UdpDriver(command_port=rx.getsockname()[1], log=QUIET)
-    assert drv.set_motion_key("0") == (True, "Motion key sent")
-    assert drv.set_motion_key("5")[0] and drv.set_motion_key("4") == (True, "Emergency stop sent")
-    assert drv.set_motion_key("9") == (False, "Unknown motion key '9'")
-    assert drv.set_policy_mode(1) == (True, "Policy updated")
     drv.send_axes(0.5, 0.0, -0.25)
     drv.send("RESET_SAFETY")
-    lines = [rx.recvfrom(256)[0].decode() for _ in range(6)]
-    assert lines == ["MODE Z\n", "MODE M\n", "ESTOP\n", "MODE 1\n", "AXES 0.500000 0.000000 -0.250000\n",
-                     "RESET_SAFETY\n"]
-    assert drv.motion_state == 8 and drv.sent == 6  # UNKNOWN: nothing here reads the telemetry
+    lines = [rx.recvfrom(256)[0].decode() for _ in range(2)]
+    assert lines == ["AXES 0.500000 0.000000 -0.250000\n", "RESET_SAFETY\n"]
+    assert drv.motion_state == 8 and drv.sent == 2  # UNKNOWN: nothing here reads the telemetry
     drv.close()
     rx.close()
 

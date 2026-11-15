@@ -1,7 +1,8 @@
 """Teleop from the browser viewer's panel (web_view.py): a command held until
-the next one or a stop, and the controller's keys, each applied on the main
-loop under the sim lock. All of it goes to the controller process
-(driver/udp_driver.py): the sim walks nowhere by itself.
+the next one or a stop, and the teleport home, each applied on the main loop
+under the sim lock. The command goes to the controller process
+(driver/udp_driver.py): the sim walks nowhere by itself. The controller's
+motion keys and policy toggle were here until 2026-11-15 (udp_driver.py).
 
 A command, once set, is sent every loop while it is non-zero and once more
 as a stop when it goes to zero, then nothing: a teleop that set 0 every loop
@@ -27,22 +28,11 @@ class Teleop:
         self._driving = False
 
     # -- from the panel (any thread) ----------------------------------------------
-    def set_cmd(self, vx: float, wz: float) -> None:
-        self._cmd = (float(vx), 0.0, float(wz))
+    def set_cmd(self, vx: float, vy: float, wz: float) -> None:
+        self._cmd = (float(vx), float(vy), float(wz))
 
     def stop(self) -> None:
         self._cmd = (0.0, 0.0, 0.0)
-
-    def motion_key(self, key: str) -> None:
-        """A motion key to the controller: "1" RL, "5" MPC (driver/udp_driver.py)."""
-        self._pending.append(
-            lambda sim: self.log(f"[teleop] key {key} -> {sim.driver.set_motion_key(key)}"))
-
-    def toggle_policy(self) -> None:
-        def toggle(sim):
-            new = 0 if sim.driver.policy == 1 else 1
-            self.log(f"[teleop] policy -> {new} {sim.driver.set_policy_mode(new)}")
-        self._pending.append(toggle)
 
     def teleport_home(self) -> None:
         x, y, z, yaw = self.spawn
