@@ -59,14 +59,14 @@ ONNX policies in-process or carry a rigid statue by rules).
    sensor/bms_link.py     `bms_link: can`: the pack's BMS on can0, asked and
                      answering; the charge falls with what the joints draw
                │
-   driver/udp_driver.py   the panel's motion keys, policy number and AXES,
+   driver/udp_driver.py   the panel's AXES,
                      forwarded to the controller's command port as ASCII
                │
    envs/simulator.py   the composition root: one tick, scan, spawn, teleport
                │
        ┌───────┴────────┐
    __main__.py       viewer/web_view.py + teleop.py
-   (the main loop:   (the browser; the panel's keys and sliders)
+   (the main loop:   (the browser; the panel's sliders)
     wall clock, the
     UDP links)
 ```

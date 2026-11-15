@@ -26,7 +26,7 @@ and a serial port only:
                          (sensor/imu_serial.py: a pseudo-terminal at
                          imu_serial_port)
     bms_link can         the pack's BMS answers on can0 (sensor/bms_link.py)
-    the panel's driving  motion keys, policy numbers and AXES to the
+    the panel's driving  AXES to the
                          controller's command port, 50051 (driver/udp_driver.py)
     lidar_link livox     the sim is the robot's MID360 on the Livox protocol
                          (sensor/livox_link.py: discovery on 56000, commands on

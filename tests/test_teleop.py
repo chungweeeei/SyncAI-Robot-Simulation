@@ -1,24 +1,12 @@
 """Teleop (teleop.py): a held command from the browser's panel, a stop once,
-the keys as closures under the lock."""
+the teleport as a closure under the lock."""
 
 from syncai_sim.viewer.teleop import Teleop
-
-
-class FakeDriver:
-    policy = 0
-
-    def set_motion_key(self, key):
-        return f"ok {key}"
-
-    def set_policy_mode(self, mode):
-        FakeDriver.policy = mode
-        return "ok"
 
 
 class FakeSim:
     def __init__(self):
         self.cmds = []
-        self.driver = FakeDriver()
         self.teleported = None
 
     def set_cmd(self, vx, vy, wz):
@@ -33,27 +21,21 @@ def test_command_is_held_and_the_stop_sent_once():
     sim = FakeSim()
     t.apply(sim)
     assert sim.cmds == []  # nothing touched: the nav stack's cmd_vel stands
-    t.set_cmd(0.4, -0.2)
+    t.set_cmd(0.4, 0.1, -0.2)
     t.apply(sim)
     t.apply(sim)
-    assert sim.cmds == [(0.4, 0.0, -0.2)] * 2  # every loop while moving
+    assert sim.cmds == [(0.4, 0.1, -0.2)] * 2  # every loop while moving
     t.stop()
     t.apply(sim)
     t.apply(sim)
-    assert sim.cmds == [(0.4, 0.0, -0.2)] * 2 + [(0.0, 0.0, 0.0)]  # one stop, then nothing
+    assert sim.cmds == [(0.4, 0.1, -0.2)] * 2 + [(0.0, 0.0, 0.0)]  # one stop, then nothing
 
 
-def test_keys_run_under_the_lock_in_order():
-    logged = []
-    t = Teleop((0, 0, 0, 0), log=logged.append)
+def test_teleport_runs_under_the_lock():
+    t = Teleop((1, 2, 0, 0.5), log=lambda *a: None)
     sim = FakeSim()
-    t.motion_key("1")
-    t.toggle_policy()
-    t.toggle_policy()
     t.teleport_home()
     assert sim.teleported is None  # queued, not run
     t.apply(sim)
-    assert logged[0] == "[teleop] key 1 -> ok 1"
-    assert FakeDriver.policy == 0 and "policy -> 1" in logged[1] and "policy -> 0" in logged[2]
-    assert sim.teleported == (0, 0, 0, 0)
+    assert sim.teleported == (1, 2, 0.5, 0)
 

@@ -46,9 +46,10 @@ workspace's nav stack connect to it unchanged:
   of what that hardware layer reads on the robot — the body IMU as its
   Yesense unit streaming on a serial port, the battery's BMS answering on
   `can0` (section "The IMU and the BMS").
-* **The panel's driving** (`driver/udp_driver.py`): the viewer's motion keys,
-  policy toggle and sliders go to the controller's command port (50051) as
-  the ASCII lines driver_manager sends (`MODE`, `ESTOP`, `AXES`). The nav
+* **The panel's driving** (`driver/udp_driver.py`): the viewer's sliders go
+  to the controller's command port (50051) as the `AXES` line driver_manager
+  sends. Its motion keys and policy toggle (`MODE`, `ESTOP`) were removed
+  2026-11-15, while the controller's low-level motor control is rewritten. The nav
   stack's driver_manager talks to the controller directly, not to the sim.
 * **The sim as the robot's lidar** (`lidar_link: livox`): the sim is a
   MID360 / MID360s on the Livox protocol (`sensor/livox_link.py`), so the
@@ -96,7 +97,7 @@ syncai_sim/                        the Python package (python3 -m syncai_sim): o
   actuator/motors.py                 the motors: JointCommand (q_des, dq_des, kp, kd, tau_ff), the PD closed every step, the motor clamp, delays
   locomotion/can_link.py             joint_link can: the joints as J60 motors on four SocketCAN buses (the frames, the robot's wiring; the spec); its stand-in controller
   locomotion/hardware_link.py        the body's record out on UDP every step; with joint_link udp a controller's command in as well (the protocol's spec); the stand-in controller
-  driver/udp_driver.py               the panel's motion keys, policy number and AXES, forwarded to the controller process
+  driver/udp_driver.py               the panel's AXES, forwarded to the controller process
   envs/simulator.py, placement.py    the core: step, scan, spawn, teleport; where the base is put down
   viewer/web_view.py, teleop.py      the browser viewer: the site and the robot sent once, poses streamed, drawn by the host's GPU; its panel's driving
   visuals/                           the site's picture (nothing the lidar, the feet or the planner see reads it)
@@ -199,8 +200,8 @@ storey switch (auto: the robot's storey and those below it, so the floor
 above never hides the robot), follow-robot (the camera's look-at follows,
 the offset the mouse gave it stays), the last lidar scan, the terrain boxes
 and fitted stairs under the feet, the lidar map per storey, the status, and
-the teleport back to the spawn, and the driving sliders and the motion
-keys (`viewer/teleop.py`), which go to the controller's command port
+the teleport back to the spawn, and the driving sliders
+(`viewer/teleop.py`), which go to the controller's command port
 (50051) and are sent only while touched, so a navigation goal and the panel
 drive together. `--headless` serves no viewer.
 

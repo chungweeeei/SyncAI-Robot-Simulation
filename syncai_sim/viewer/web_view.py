@@ -9,8 +9,8 @@ the terrain boxes under the feet when asked. The browser draws it all at
 its own frame rate with the host's GPU, orbits and zooms itself, and follows
 the robot by moving its look-at point while keeping whatever offset the
 mouse gave the camera. The panel holds the storey switch, the layers, the
-status, the teleport, and the sliders and motion keys
-(teleop.py applies them under the sim lock).
+status, the teleport, and the driving sliders (teleop.py applies them
+under the sim lock).
 
 It shows what the sim itself is made of — which tiles exist, what the feet
 stand on, where the rays went, the lidar map per storey.
@@ -344,25 +344,23 @@ class WebView:
         home.on_click(lambda _e: self.teleop.teleport_home())
         with gui.add_folder("Teleop"):
             vx = gui.add_slider("vx m/s", -0.6, 0.8, 0.05, 0.0)
+            # the controller clamps AXES vy to +-0.4 (g2-device-control udp_command.rs)
+            vy = gui.add_slider("vy m/s", -0.4, 0.4, 0.05, 0.0)
             wz = gui.add_slider("wz rad/s", -1.5, 1.5, 0.05, 0.0)
             stop = gui.add_button("Stop")
-            key1 = gui.add_button("Motion key 1 (RL)")
-            key5 = gui.add_button("Motion key 5 (MPC)")
-            policy = gui.add_button("Toggle policy 0 / 1")
 
         def drive(_event=None) -> None:
-            self.teleop.set_cmd(vx.value, wz.value)
+            self.teleop.set_cmd(vx.value, vy.value, wz.value)
         vx.on_update(drive)
+        vy.on_update(drive)
         wz.on_update(drive)
 
         @stop.on_click
         def _(_event) -> None:
             vx.value = 0.0
+            vy.value = 0.0
             wz.value = 0.0
             self.teleop.stop()
-        key1.on_click(lambda _e: self.teleop.motion_key("1"))
-        key5.on_click(lambda _e: self.teleop.motion_key("5"))
-        policy.on_click(lambda _e: self.teleop.toggle_policy())
 
     def _wanted(self) -> set[int]:
         n = len(self.sim.info.storey_bounds) + 1
