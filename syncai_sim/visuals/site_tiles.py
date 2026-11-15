@@ -179,7 +179,11 @@ def voxel_tiles(rects: np.ndarray, storeys: np.ndarray, resolution: float, looku
         sel = np.flatnonzero(inverse == g)
         rs = r[sel]
         w, h = rs[:, 5] + 2 * GUTTER, rs[:, 6] + 2 * GUTTER
-        width = min(ATLAS_MAX, max(64, _pow2(math.ceil(math.sqrt(float((w * h).sum()) * 1.15)))))
+        # At least as wide as the widest rectangle: a long thin one (the edge of a ramp's
+        # step) is wider than the square its tile's area asks for.
+        width = min(ATLAS_MAX, max(64, int(w.max()),
+                                   _pow2(math.ceil(math.sqrt(float((w * h).sum()) * 1.15)))))
+        width = _pow2(width)
         x, y, atlas, heights = pack(w, h, width, ATLAS_MAX)
         for part, used in enumerate(heights):
             part_sel = np.flatnonzero(atlas == part)
