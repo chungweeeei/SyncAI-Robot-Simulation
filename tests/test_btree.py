@@ -79,3 +79,20 @@ def test_rejects_other_files(tmp_path):
     p.write_bytes(b"not a tree")
     with pytest.raises(ValueError):
         read_occupied_leaves(str(p))
+
+
+def test_write_occupied_reads_back(tmp_path):
+    from syncai_sim.world.btree import write_occupied
+
+    rng = np.random.default_rng(0)
+    vox = TREE_MAX_VAL + rng.integers(-300, 300, size=(2000, 3))
+    vox = np.concatenate([vox, vox[:10]])  # duplicates are one voxel
+    p = tmp_path / "w.bt"
+    size = write_occupied(str(p), vox, 0.1)
+    leaves = read_occupied_leaves(str(p))
+    assert leaves.resolution == 0.1
+    assert leaves.node_count == size
+    assert leaves.free_leaves == 0
+    assert (leaves.cubes[:, 3] == 1).all()
+    got = {tuple(v) for v in cubes_to_voxels(leaves.cubes).tolist()}
+    assert got == {tuple(v) for v in vox.tolist()}

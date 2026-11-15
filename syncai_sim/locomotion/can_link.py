@@ -289,8 +289,8 @@ class CanLink:
                     s.close()
                 raise SystemExit(
                     f"joint_link can: cannot open {name}: {err}. The interfaces must exist where "
-                    f"the sim runs (scripts/vcan_up.sh makes them; in the container that needs "
-                    f"SIM_NETWORK_MODE=host)") from err
+                    f"the sim runs (scripts/vcan_up.sh makes them, again after a restart of "
+                    f"the machine or Docker's VM)") from err
         for s in socks:
             s.setblocking(False)
         self.socks = socks

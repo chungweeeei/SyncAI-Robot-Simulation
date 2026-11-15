@@ -70,6 +70,7 @@ def build_sim_config(ini: IniSettings, p: dict) -> SimConfig:
     from syncai_sim.sensor.lidar import LidarConfig
     from syncai_sim.scene.scene import PropSpec
     from syncai_sim.envs.simulator import SimConfig
+    from syncai_sim import REPO_DIR
     from syncai_sim.world.build import default_cache_dir
 
     map_dir = p["map_dir"] or ini.map_dir
@@ -104,7 +105,10 @@ def build_sim_config(ini: IniSettings, p: dict) -> SimConfig:
         can_motor_ids=tuple(int(v) for v in p["can_motor_ids"]),
         can_delay_ms=tuple(float(v) for v in p["can_delay_ms"]),
         can_drop_rate=tuple(float(v) for v in p["can_drop_rate"]),
-        imu_link=p["imu_link"], imu_serial_port=p["imu_serial_port"],
+        imu_link=p["imu_link"],
+        # run/ of the checkout: where a controller in a container of its own
+        # finds the link (docker-compose.controller.yml mounts it).
+        imu_serial_port=p["imu_serial_port"] or os.path.join(REPO_DIR, "run", "syncai_imu"),
         imu_serial_hz=float(p["imu_serial_hz"]),
         bms_link=p["bms_link"], bms_interface=p["bms_interface"],
         bms_period_ms=float(p["bms_period_ms"]), bms_soc=float(p["bms_soc"]),
@@ -175,7 +179,8 @@ PARAM_DEFAULTS: dict = {
     "visual_mesh": "voxels", "visual_look": "ramp",
     "web_view_port": 8080,
     "controller_command_ip": "127.0.0.1", "controller_command_port": 50051,
-    "lidar_link": "none", "livox_lidar_ip": "", "livox_lidar_type": "",
+    # The links are the robot's (sim_params.yaml says what each needs of the host).
+    "lidar_link": "livox", "livox_lidar_ip": "", "livox_lidar_type": "",
     "livox_points_per_packet": 96, "livox_imu_hz": 200.0,
     "use_ini_initial_pose": True, "spawn": [0.0, 0.0, 0.0, 0.0],
     "lidar_height": 0.481,
@@ -192,12 +197,12 @@ PARAM_DEFAULTS: dict = {
     "link_command_port": 20001, "link_state_host": "127.0.0.1", "link_state_port": 30010,
     "link_watchdog_ms": 100.0, "max_catch_up_s": 0.008,
     # The joints on SocketCAN (locomotion/can_link.py)
-    "joint_link": "udp", "can_interfaces": ["can1", "can2", "can3", "can4"],
+    "joint_link": "can", "can_interfaces": ["can1", "can2", "can3", "can4"],
     "can_motor_ids": [2, 3, 4], "can_delay_ms": [0.0, 0.0, 0.0, 0.0],
     "can_drop_rate": [0.0, 0.0, 0.0, 0.0],
     # The body IMU on a serial port (sensor/imu_serial.py), the BMS on CAN
     # (sensor/bms_link.py)
-    "imu_link": "none", "imu_serial_port": "/tmp/syncai_imu", "imu_serial_hz": 200.0,
-    "bms_link": "none", "bms_interface": "can0", "bms_period_ms": 100.0, "bms_soc": 0.8,
+    "imu_link": "serial", "imu_serial_port": "", "imu_serial_hz": 200.0,
+    "bms_link": "can", "bms_interface": "can0", "bms_period_ms": 100.0, "bms_soc": 0.8,
     "bms_capacity_ah": 15.0, "bms_idle_w": 40.0,
 }

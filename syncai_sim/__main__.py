@@ -1,26 +1,27 @@
 """python3 -m syncai_sim: run the simulator at wall-clock pace.
 
-    python3 -m syncai_sim [--teleop] [--headless] [--system-config INI] [--map DIR]
-                          [--seconds S]
-                          [--visual-mesh voxels|pointcloud|tsdf] [--visual-look ramp|photo]
-                          [--profile PARAMS.yaml ...] [-p key:=value ...]
+    python3 -m syncai_sim [--headless] [--seconds S] [--profile PARAMS.yaml ...]
+                          [-p key:=value ...]
 
+Run with no argument it is the robot: every link below as the robot has it.
 Settings: config.PARAM_DEFAULTS, then config/params/sim_params.yaml (always,
-it documents every key), then each --profile in order, then -p, then the
-flags. The INI
-(config/system.ini relative to the cwd, i.e. the workspace root, or
-$SYNCAI_SYSTEM_INI) gives the map and the spawn pose.
+it documents every key), then each --profile in order, then -p. Everything
+that can be set is a parameter; the flags are only how a run is hosted
+(no viewer, a time limit). The INI (config/system.ini relative to the cwd,
+i.e. the workspace root, or $SYNCAI_SYSTEM_INI) gives the map and the spawn
+pose.
 
 The sim is the robot's hardware and talks to the outside over UDP, SocketCAN
 and a serial port only:
 
-    the hardware link    the joints are a controller process's
-                         (locomotion/hardware_link.py: the body's record out to
-                         30010, joint commands in on 20001); without one the
-                         watchdog holds them in damping and the robot lies down
     joint_link can       the joints are J60 motors on four SocketCAN buses, one
                          per leg, as on the robot (locomotion/can_link.py:
-                         can1..can4, vcan here); the record still goes out
+                         can1..can4, vcan here); not enabled, they are limp
+                         and the robot lies down
+    joint_link udp       instead: joint commands in on 20001
+                         (locomotion/hardware_link.py)
+    the state datagram   the body's record out to 30010 every step, whichever
+                         of the two (the truth and the contacts are on no bus)
     imu_link serial      the body IMU is the robot's Yesense on a serial port
                          (sensor/imu_serial.py: a pseudo-terminal at
                          imu_serial_port)
@@ -32,7 +33,8 @@ and a serial port only:
                          56100, points / IMU out from 56300 / 56400)
 
 The browser viewer (viewer/web_view.py, the `web_view_port` parameter) is
-served unless --headless; --teleop puts the driving controls on its panel.
+served unless --headless; its panel teleports the robot and drives the
+controller.
 """
 
 from __future__ import annotations
@@ -57,16 +59,8 @@ def main(argv=None) -> int:
     argv = sys.argv[1:] if argv is None else argv
     ap = argparse.ArgumentParser(prog="python3 -m syncai_sim", description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--teleop", action="store_true", help="driving controls on the viewer's panel")
     ap.add_argument("--headless", action="store_true", help="no browser viewer")
-    ap.add_argument("--system-config", default=None, help="the instance INI (default config/system.ini)")
-    ap.add_argument("--map", default=None, help="map/<name> directory (default: the INI's [map])")
     ap.add_argument("--seconds", type=float, default=None, help="exit after this much wall time")
-    ap.add_argument("--visual-mesh", choices=("voxels", "pointcloud", "tsdf"), default=None,
-                    help="the site the viewer starts with (default: voxels); the panel switches")
-    ap.add_argument("--visual-look", choices=("ramp", "photo"), default=None,
-                    help="the site's look (default: ramp); photo needs config/colour/<map>.npz "
-                         "(scripts/colour_map.py)")
     ap.add_argument("--profile", action="append", default=[], metavar="PARAMS.yaml",
                     help="a params YAML applied after sim_params.yaml (repeatable, in order)")
     ap.add_argument("-p", action="append", default=[], metavar="key:=value", dest="overrides",
@@ -74,19 +68,18 @@ def main(argv=None) -> int:
     a = ap.parse_args(argv)
 
     from syncai_sim.config import read_ini
-    ini = read_ini(a.system_config)
+    ini = read_ini()
     print(f"[sim] INI {ini.path}: map {ini.map_dir or '(none)'}, initial_pose {ini.initial_pose}",
           flush=True)
     return run(ini, a)
 
 
 def _viewer(a, sim, spawn, web_port: int, log):
-    """(teleop, viewer factory): the browser viewer unless --headless; its
-    panel drives the robot with --teleop, teleports in any case."""
+    """(teleop, viewer factory): the browser viewer unless --headless."""
     if a.headless:
         return None, None
     from syncai_sim.viewer.teleop import Teleop
-    teleop = Teleop(spawn, log=log, drive=a.teleop)
+    teleop = Teleop(spawn, log=log)
 
     def factory():
         try:
@@ -101,19 +94,12 @@ def _viewer(a, sim, spawn, web_port: int, log):
 
 
 def settings(a) -> dict:
-    """PARAM_DEFAULTS, sim_params.yaml, the profiles, -p, then the flags."""
+    """PARAM_DEFAULTS, sim_params.yaml, the profiles, then -p."""
     from syncai_sim.config import PARAM_DEFAULTS, apply_overrides, load_profile
     params = dict(PARAM_DEFAULTS)
     for path in [DEFAULT_PROFILE, *a.profile]:
         params.update(load_profile(path))
-    apply_overrides(params, a.overrides)
-    if a.map:
-        params["map_dir"] = a.map
-    if a.visual_mesh:
-        params["visual_mesh"] = a.visual_mesh
-    if a.visual_look:
-        params["visual_look"] = a.visual_look
-    return params
+    return apply_overrides(params, a.overrides)
 
 
 def _livox_link(ini, params):

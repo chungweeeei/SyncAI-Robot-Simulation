@@ -45,7 +45,7 @@ The pseudo-terminal is in the sim's container: a controller reads it from
 there (`docker compose exec sim ...`), or `imu_serial_port` names a real
 serial device both can open, which is then written at 115200 8N1 instead.
 A controller in a container of its own cannot open another container's
-/dev/pts/N: a container's devpts is its own. docker-compose.can.yml mounts
+/dev/pts/N: a container's devpts is its own. docker-compose.yml mounts
 the host's /dev/pts in the sim's container and puts the link in run/ of the
 checkout; a controller's container that mounts both opens the same
 pseudo-terminal (checked 2026-11-14 with the robot's controller).
@@ -145,7 +145,7 @@ class ImuSerial:
             if mode is not None:
                 os.unlink(c.port)
             # The link's directory may be one made for it (run/, shared with
-            # the controller's container: docker-compose.can.yml).
+            # the controller's container: docker-compose.controller.yml).
             os.makedirs(os.path.dirname(os.path.abspath(c.port)), exist_ok=True)
             os.symlink(self.device, c.port)
             self._link = c.port

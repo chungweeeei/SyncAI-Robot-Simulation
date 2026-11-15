@@ -9,8 +9,8 @@ in the container, the image or the code (removed 2026-11-03).
 What the simulator is, in one paragraph: the site's `octomap.bt` (written by
 `syncai_mapping`'s `clean_map --octomap 1`) becomes a voxel world; the G23,
 from the workspace's own URDF, stands on a patch of those voxels on twelve
-motor-driven joints whose commands come from a controller process at the
-other end of a UDP link; a Livox MID360 is ray-cast against the voxels at
+motor-driven joints whose commands come from the robot's controller over
+the robot's four CAN buses; a Livox MID360 is ray-cast against the voxels at
 10 Hz, firing the scan pattern recorded from the real one. The picture is
 drawn by the host's browser (`viewer/web_view.py`): nothing renders in the
 container.
@@ -18,8 +18,8 @@ container.
 **The sim is the robot's hardware and nothing more** (2026-11-13). It sends
 out what the robot's sensors measure and applies the joint commands it is
 sent; it decides no motion of its own. Turning cmd_vel into joint commands
-— RL or MPC — is the controller's job (SyncAI-Robot-Control), and so is the
-controller's state machine. Until 2026-11-13 the sim also walked itself (the
+— RL or MPC — is the controller's job (g2-device-control, the process the
+robot itself runs), and so is the controller's state machine. Until 2026-11-13 the sim also walked itself (the
 robot's ONNX policies in-process, or a rigid statue carried by rules) and
 could answer as the gait controller on its ASCII link; git history has them.
 
@@ -31,14 +31,11 @@ feet's floor (`terrains/`), the robot and the MuJoCo scene (`entity/`,
 panel's driving forwarded to the controller (`driver/`), and the picture
 (`viewer/`, `visuals/`).
 
-The UDP links, the only ways in and out:
+The links, the only ways in and out. Started with no argument the sim is
+every one of them as the robot has it (2026-11-15: the robot's links are the
+defaults, where each was a `-p` before), so the robot's controller and the
+workspace's nav stack connect to it unchanged:
 
-* **The hardware link** (`locomotion/hardware_link.py`): every physics step
-  the body's measurements go out (30010) and the joint command comes back
-  (20001), so the controller's RL or its MPC (LMA) decides and the sim is
-  its hardware. The consumer is SyncAI-Robot-Control's `--backend sim`
-  (not written yet); with nothing on the link the motors are in damping and
-  the robot lies down.
 * **The joints on CAN** (`joint_link: can`, `locomotion/can_link.py`): the
   twelve joints are J60 motors on four SocketCAN buses, one per leg, as on
   the robot — `can1..can4`, motor ids 2 / 3 / 4, the J60's frames, each
@@ -58,19 +55,28 @@ The UDP links, the only ways in and out:
   workspace's own livox_ros_driver2 finds it and reads its points and IMU,
   and Point-LIO, the localizer and the planner run on the sim — the robot's
   pose in the map is the sim's (section "The sim as the robot's lidar").
+* **The state datagram** (`locomotion/hardware_link.py`): every physics step
+  the body's whole record goes out on UDP (30010), the base's truth and the
+  foot contacts with it, which are on no bus: what a bench measures the
+  controller against. With `-p joint_link:=udp` the same link also takes
+  the joint commands (20001) in place of the CAN buses; no controller
+  speaks that yet (the stand-in of `scripts/controller_bench.py` does).
 
 ## Layout
 
 ```
-Dockerfile, docker-compose.yml     one container: Ubuntu 22.04 + MuJoCo + numba + viser; no ROS, no display, no GPU
-.env.example                       ROBOT_WS (the workspace checkout: maps + URDF), the viewer's port, the network mode, what starts
-config/instances/sim01.ini         the instance INI (the map, the spawn), bind-mounted over the workspace's config/system.ini
+Dockerfile, docker-compose.yml     one container on the host's network: Ubuntu 22.04 + MuJoCo + numba + viser; no ROS, no display, no GPU
+docker-compose.controller.yml      laid over the robot's controller's own compose file: what differs for it when its hardware is this sim
+.env.example                       ROBOT_WS (the workspace checkout: maps + URDF), the instance INI, what starts
+config/instances/sim01.ini         the instance INI (the map, the spawn, the lidar's model and IP), bind-mounted over the workspace's config/system.ini
 config/params/sim_params.yaml      every sim parameter with why it is what it is; always loaded (a plain YAML mapping)
+config/params/scenes/              a profile per made test site (scripts/make_scenes.py): its map and spawn
+config/ramps/, stair_walks/, stair_shapes/   per map: sloping floors, stairs the mapping track never climbed, stairs measured on site (terrains/surface_heights.py)
 scripts/sim_entry.sh               the container's command: the sim + its viewer at start (SIM_AUTOSTART, SIM_ARGS), then stays up
 syncai_sim/                        the Python package (python3 -m syncai_sim): one subpackage per layer (docs/architecture.md)
-  __main__.py, config.py             the CLI and the wall-clock main loop (the UDP links polled and ticked); the params and the INI
+  __main__.py, config.py             the wall-clock main loop (the links polled and ticked) and its four flags; the params and the INI
   world/                             the site as the sim senses it: octomap.bt -> VoxelGrid, the truth for rays, ground, blocking
-    btree.py                           OctoMap .bt reader (no octomap dependency)
+    btree.py                           OctoMap .bt reader, and the writer the made test sites use (no octomap dependency)
     greedy_mesh.py                     voxels -> boxes
     voxel_grid.py                      the numba ray caster, ground query, blocking test
     build.py                           octomap.bt -> VoxelGrid + the exposed faces as rectangles + collision plates, cached (python3 -m syncai_sim.world)
@@ -88,8 +94,8 @@ syncai_sim/                        the Python package (python3 -m syncai_sim): o
     imu_serial.py                      imu_link serial: the body IMU as the robot's Yesense on a pseudo-terminal (the frame; the spec)
     bms_link.py                        bms_link can: the pack's Foxlink BMS on can0 (the items, the cycle; the spec) and the small battery behind it
   actuator/motors.py                 the motors: JointCommand (q_des, dq_des, kp, kd, tau_ff), the PD closed every step, the motor clamp, delays
-  locomotion/hardware_link.py        the body's record out and the controller's command in, one UDP datagram each per step (the protocol's spec); the stand-in controller
   locomotion/can_link.py             joint_link can: the joints as J60 motors on four SocketCAN buses (the frames, the robot's wiring; the spec); its stand-in controller
+  locomotion/hardware_link.py        the body's record out on UDP every step; with joint_link udp a controller's command in as well (the protocol's spec); the stand-in controller
   driver/udp_driver.py               the panel's motion keys, policy number and AXES, forwarded to the controller process
   envs/simulator.py, placement.py    the core: step, scan, spawn, teleport; where the base is put down
   viewer/web_view.py, teleop.py      the browser viewer: the site and the robot sent once, poses streamed, drawn by the host's GPU; its panel's driving
@@ -104,10 +110,11 @@ syncai_sim/                        the Python package (python3 -m syncai_sim): o
     map_cloud.py                       map.pcd thinned per storey: the viewer's lidar map layer
 scripts/spin_sleep.sh, .c          OrbStack only: the LD_PRELOAD shim that makes the controller's sleeps end on time (its 1 kHz)
 scripts/vcan_up.sh                 the vcan interfaces of joint_link can and bms_link can (can0..can4), made on the host (a privileged container on a Mac)
-scripts/controller_bench.py        the sim as a controller's hardware, headless: MODE / AXES to the controller, its MODE_STATE back, the link's counters
+scripts/controller_bench.py        the sim headless with a stand-in controller or beside a real one: MODE / AXES to it, its MODE_STATE back, falls, posture, the links' counters
 docs/architecture.md               the layers, one physics tick, what a controller needs from the sim and why
 config/lidar/mid360_pattern.npz    the MID360's recorded pattern bank, from the workspace's record/dp (config/lidar/README.md)
 scripts/lidar_pattern.py           rebuilds it from any MID360 recording
+scripts/make_scenes.py             test sites made, not mapped (flat, slope, stairs15) into scenes/ (gitignored), their config files and profiles
 tests/                             pytest; test_simulator_site runs the whole sim on the workspace's map/dp (skips without it)
 cache/                             per-map build products (gitignored): the world, the compiled scene (scene-*.mjb, 20 MB on dp), the voxel intensities, the browser's tiles (140 MB), the decimated robot meshes (robot/)
 ```
@@ -123,38 +130,46 @@ Nothing in the workspace is built or run.
 ```bash
 cp .env.example .env            # ROBOT_WS = path to the workspace checkout (default: ../SyncAI-Robot-Workspace)
 docker compose build            # Ubuntu 22.04 + the Python packages in requirements.txt
+scripts/vcan_up.sh              # the robot's CAN interfaces, can0..can4 (again after a restart of the machine / Docker's VM)
 docker compose up -d            # the sim + its browser viewer start with it: http://localhost:8080
 docker compose logs -f sim      # the sim's output
 docker compose exec sim bash    # cwd is the workspace root
 ```
 
-**What starts with the container** (`scripts/sim_entry.sh`, two `.env`
-knobs). By default `python3 -m syncai_sim --teleop`: the controller's
-hardware, the viewer's panel driving the controller. `SIM_ARGS` replaces the
-arguments (the robot's lidar too: `--teleop -p lidar_link:=livox`);
-`SIM_AUTOSTART=0` starts nothing. The container stays up whatever the sim does.
+**What the host must have**, because the sim is the robot's devices on the
+host's own network: the five vcan interfaces (`scripts/vcan_up.sh`), and
+the lidar's IP as one of its addresses (`[sensor.lidar]` of the instance
+INI, 192.168.1.172; section "The sim as the robot's lidar" adds it on a
+Mac). Without the first the sim stops at start and says which interface;
+`-p lidar_link:=none` runs without the second, for a run with no nav stack.
 
-**The network.** By default a bridge network: the viewer on 8080 and the
-sim's UDP input (20001, a controller's joint commands) are mapped to the
-host. The sim's outputs go where the params say (`link_state_host` and
-`controller_command_ip`, 127.0.0.1 by default; from a bridge network to a
-program on the host, `host.docker.internal`). `SIM_NETWORK_MODE=host` puts the
-sim's sockets on the host's network instead, which is the simplest for a
-controller process on the same machine (127.0.0.1 both ways).
+**What starts with the container** (`scripts/sim_entry.sh`, two `.env`
+knobs). By default `python3 -m syncai_sim`, no argument: the robot.
+`SIM_ARGS` gives it arguments (a test site: `--profile
+/home/syncrobotic/sim/config/params/scenes/flat.yaml`); `SIM_AUTOSTART=0`
+starts nothing. The container stays up whatever the sim does.
+
+**The network** is the host's (`network_mode: host`): a vcan interface is
+seen in no other network namespace, the lidar's IP is the host's, and the
+controller and the nav stack reach the sim's ports on 127.0.0.1. The viewer
+listens on 8080 (`web_view_port`). Until 2026-11-15 a bridge network was
+the default and `docker-compose.can.yml` switched to the host's; nothing
+the robot's software connects to worked on the bridge, so the file is gone.
 
 `SIM_INSTANCE_INI` (default `config/instances/sim01.ini`) picks the map (`[map]
-name`) and the spawn pose (`[initial_pose]`; z is the ground height, a hint
-for the floor). It is a single-file bind mount: edit it in place, do not
-rename over it.
+name`), the spawn pose (`[initial_pose]`; z is the ground height, a hint
+for the floor) and the lidar the sim answers as (`[sensor.lidar]`). It is a
+single-file bind mount: edit it in place, do not rename over it.
 
 ## Running
 
 Inside the container (`docker compose exec sim bash`; the sim that came up
-with the container already holds the viewer's port and the UDP ports, so for
-another one by hand bring the container up with `SIM_AUTOSTART=0` first):
+with the container already holds the viewer's port, the UDP ports and the
+CAN buses, so for another one by hand bring the container up with
+`SIM_AUTOSTART=0` first):
 
 ```bash
-python3 -m syncai_sim --teleop                                   # drive from the panel at http://localhost:8080
+python3 -m syncai_sim                                            # the robot; the panel at http://localhost:8080
 python3 -m syncai_sim --headless --seconds 30                    # no viewer
 python3 -m syncai_sim.world map/dp                               # (re)build a map's cache and print its stats
 python3 -m pytest /home/syncrobotic/sim/tests                    # the tests; test_simulator_site needs map/dp
@@ -169,12 +184,14 @@ too, so later starts take about a second and the picture is up in two.
 
 **Settings.** `config.PARAM_DEFAULTS`, then `config/params/sim_params.yaml`
 (always; it documents every key), then each `--profile` in order, then `-p
-key:=value`, then the flags (`--map`, `--visual-mesh`, `--visual-look`).
+key:=value`. Everything that can be set is a parameter; the only flags are
+`--headless` and `--seconds`, how a run is hosted. (`--map`,
+`--visual-mesh`, `--visual-look` and `--system-config` each repeated a
+parameter or `$SYNCAI_SYSTEM_INI` and were used nowhere; `--teleop` was
+passed on every run. Removed 2026-11-15.)
 
 **The viewer** (`viewer/web_view.py`) is a page the host's browser draws:
-`http://localhost:8080` (compose maps the container's `web_view_port`;
-`SIM_WEB_VIEW_PORT` moves it; with a host network the sim listens on 8080
-itself). The site's tiles and the robot's meshes go over once (dp: 1078
+`http://localhost:8080` (`web_view_port`). The site's tiles and the robot's meshes go over once (dp: 1078
 tiles, 2.5 M triangles, in a second), then only poses at 20 Hz, so it draws
 at the browser's own frame rate with shadows, on the host's GPU; nothing
 renders in the container. Left-drag orbits, scroll zooms; the panel has the
@@ -182,34 +199,29 @@ storey switch (auto: the robot's storey and those below it, so the floor
 above never hides the robot), follow-robot (the camera's look-at follows,
 the offset the mouse gave it stays), the last lidar scan, the terrain boxes
 and fitted stairs under the feet, the lidar map per storey, the status, and
-the teleport back to the spawn. With `--teleop` it also has the driving
-sliders and the motion keys (`viewer/teleop.py`), which go to the
-controller's command port. `--headless` serves no viewer.
+the teleport back to the spawn, and the driving sliders and the motion
+keys (`viewer/teleop.py`), which go to the controller's command port
+(50051) and are sent only while touched, so a navigation goal and the panel
+drive together. `--headless` serves no viewer.
 
-**The controller on the link.** Every physics step sends the body's
-measurements to a controller process and applies the joint command it sends
-back (`locomotion/hardware_link.py` is the protocol; `docs/architecture.md`
-says what each field is for). The defaults set the link up — its ports,
-1 kHz, the body the way a controller's own development simulation models it:
+**A controller on the joints.** With none the motors are never enabled and
+the robot lies down. The robot's own controller is the section "The robot's
+controller in its own container"; the bench runs the sim headless with a
+stand-in or beside a controller, and reports falls, posture and the links'
+counters (`docs/architecture.md` says what each field of the state datagram
+is for):
 
 ```bash
-python3 /home/syncrobotic/sim/scripts/controller_bench.py --fake-controller --seconds 5   # the link end to end with the stand-in controller
-python3 /home/syncrobotic/sim/scripts/controller_bench.py --send "MODE Z" --send "MODE M" --gap 3 --axes 0.5 0 0 --seconds 15 --listen   # a controller process on the link
+python3 /home/syncrobotic/sim/scripts/controller_bench.py --fake-controller --seconds 5   # the stand-in on the four CAN buses
+python3 /home/syncrobotic/sim/scripts/controller_bench.py -p joint_link:=udp -p imu_link:=none -p bms_link:=none --fake-controller --seconds 5   # on the UDP link: no CAN interface needed
+python3 /home/syncrobotic/sim/scripts/controller_bench.py --send "MODE Z" --axes 0.5 0 0 --seconds 15   # a controller process running beside it
 ```
-
-With nothing on the link the motors are in damping and the robot lies down;
-the panel's motion keys and sliders go to the controller's command port
-(50051). The controller process itself (SyncAI-Robot-Control's `--backend
-sim`) is the next step, not in this repository. Until it exists, the nav
-stack has no way to walk the sim: driver_manager talks to the controller,
-and the sim no longer plays one (the recipe of before, `-p
-driver_link:=udp`, is gone with it).
 
 ### The joints on CAN
 
 On the robot the controller reaches its motors over four CAN buses, one per
-leg, three J60s on each, and commands them at 1 kHz. With `-p
-joint_link:=can` the sim is those motors (`locomotion/can_link.py` is the
+leg, three J60s on each, and commands them at 1 kHz. The sim is those
+motors (`joint_link: can`, the default) (`locomotion/can_link.py` is the
 specification): it answers on `can1..can4` with the J60's frames, so the
 same hardware layer that drives the robot drives the sim, with what that
 brings — the protocol's quantisation (a position command resolves 1.2 mrad;
@@ -238,9 +250,8 @@ the controller share, both on the host's network:
 
 ```bash
 scripts/vcan_up.sh                         # on the host: can0..can4 (a privileged container on a Mac); again after a VM restart
-SIM_NETWORK_MODE=host SIM_ARGS="--teleop -p joint_link:=can" docker compose up -d
-python3 /home/syncrobotic/sim/scripts/controller_bench.py -p joint_link:=can --fake-controller --seconds 5   # in the container: the stand-in on the buses
-scripts/vcan_up.sh down
+docker compose up -d
+scripts/vcan_up.sh down                    # remove them
 ```
 
 **The robot's controller on these buses always runs with
@@ -278,21 +289,20 @@ controller reads them; every other field is little-endian.
 ### The IMU and the BMS
 
 The robot's controller reads two more devices beside its motors, neither on
-the legs' buses, and the sim can be both:
+the legs' buses, and the sim is both:
 
-* **`-p imu_link:=serial`** — the body IMU is a Yesense unit on a UART
+* **`imu_link: serial`** — the body IMU is a Yesense unit on a UART
   (`/dev/ttyTHS1`, 115200 baud) that streams 49-byte frames of acceleration,
   angular rate and Euler angles. The sim opens a pseudo-terminal, links
-  `imu_serial_port` (`/tmp/syncai_imu`) to it and writes the same frames
-  from the body's record, 200 a second (`sensor/imu_serial.py` is the
-  specification, byte-compatible with the controller's reader). The
-  pseudo-terminal is in the sim's container, so the reader runs there
-  (`docker compose exec sim ...`, with `G2_IMU_PORT=/tmp/syncai_imu` for the
-  robot's controller) or in a container that shares the host's `/dev/pts`
-  with the sim's (below); a real serial device named by `imu_serial_port` is
-  written instead. A port nobody reads keeps no backlog: more than 50 ms of
+  `imu_serial_port` (`run/syncai_imu` of this checkout) to it and writes
+  the same frames from the body's record, 200 a second
+  (`sensor/imu_serial.py` is the specification, byte-compatible with the
+  controller's reader). The reader runs in the sim's container or in one
+  that shares the host's `/dev/pts` and `run/` with it, as the controller's
+  does (below); a real serial device named by `imu_serial_port` is written
+  instead. A port nobody reads keeps no backlog: more than 50 ms of
   unread frames is dropped, as a UART would have lost them.
-* **`-p bms_link:=can`** — the battery's BMS (Foxlink Jeff-8S3P) is alone on
+* **`bms_link: can`** — the battery's BMS (Foxlink Jeff-8S3P) is alone on
   `can0`, extended frames, and silent until asked: a frame with an item's
   id is answered with that item, `0x87` starts the cycle of all of them
   (cell voltages, temperatures, pack voltage, current, state, SOC / SOH)
@@ -302,11 +312,6 @@ the legs' buses, and the sim can be both:
   power and winding heat, the latter from the J60 manual's resistance and
   torque constants — so standing on dp reads about 4 A at 31.7 V.
 
-```bash
-scripts/vcan_up.sh                         # can0 too
-SIM_NETWORK_MODE=host SIM_ARGS="--teleop -p joint_link:=can -p imu_link:=serial -p bms_link:=can" docker compose up -d
-```
-
 Checked on OrbStack (2026-11-13) with a second process in the container
 reading as the controller does while the stand-in stood the robot through
 the buses: 208 IMU frames in a second, gravity on z and the trunk level;
@@ -314,26 +319,31 @@ the BMS's 27 items every 100 ms after `0x87`, 31.68 V, −3.6 A, 80.0 %.
 Assumed, because nothing at hand says: the IMU's rate (200 Hz; 115200 baud
 carries at most 235 of this frame), the BMS cycle's period (100 ms), the
 pack's capacity (15 Ah) and the idle draw. No noise or bias on the IMU, no
-voltage sag, no thermal model, and the BMS never trips. Neither has been
-read by the robot's controller itself yet, only by its reader ported into
-the tests.
+voltage sag, no thermal model, and the BMS never trips. Both are read by
+the robot's controller itself since 2026-11-14 (next section).
 
 ### The robot's controller in its own container
 
 The robot's controller (g2-device-control) has one mode, the robot's: it
 does not know a simulator from the robot, and its repository says nothing
 about this one. It runs from its own, unchanged compose file against the
-sim's three links; what the sim makes different is in two files here,
-`docker-compose.can.yml` over this repository's compose file and
-`docker-compose.controller.yml` over the controller's.
+sim's links; what the sim makes different for it is one file here,
+`docker-compose.controller.yml`, laid over the controller's.
 
 ```bash
 scripts/vcan_up.sh                                                         # on the host
-docker compose -f docker-compose.yml -f docker-compose.can.yml up -d       # the sim, the three links
+docker compose up -d                                                       # the sim
 docker compose -f ../g2-device-control/docker-compose.yml -f docker-compose.controller.yml up -d   # from this directory, after the sim is up
 ```
 
-What the two files settle:
+Two compose files, then, and why not one: the controller as a service of
+`docker-compose.yml` would have to `extends` its own compose file, which
+compose reads whenever it reads the project, so the sim would not start
+without a g2-device-control checkout beside it. (A third file,
+`docker-compose.can.yml`, set the sim's side up until 2026-11-15; that is
+now what `docker-compose.yml` and the defaults are.)
+
+What is settled between the two containers:
 
 * **The IMU's pseudo-terminal across containers.** A container has its own
   devpts, so the sim's `/dev/pts/N` exists in no other. Both containers
@@ -377,8 +387,8 @@ itself was not run, nor the controller's MPC (`MODE M`).
 
 ### The sim as the robot's lidar
 
-With `-p lidar_link:=livox` the sim answers the Livox driver as the robot's
-lidar does: discovery on 56000, commands on 56100, points from 56300 and the
+The sim answers the Livox driver as the robot's lidar does (`lidar_link:
+livox`, the default): discovery on 56000, commands on 56100, points from 56300 and the
 IMU from 56400, every packet in the SDK's own format (`sensor/livox_link.py`
 documents the protocol and where each rule is in the vendored SDK). The
 workspace's nav session runs unchanged against it — bringup's driver,
@@ -403,7 +413,7 @@ VM's loopback, then restart the robot container so its driver can bind:
 docker run --rm --net host --privileged alpine ip addr add 192.168.1.103/32 dev lo
 docker run --rm --net host --privileged alpine ip addr add 192.168.1.172/32 dev lo
 docker restart robot01
-SIM_ARGS="--teleop -p lidar_link:=livox" docker compose up -d
+docker compose up -d
 ```
 
 `[livox] found by the driver` and `[livox] configured: ...` in the sim's log
@@ -414,6 +424,88 @@ TF with the host's clock; a sim that falls behind the wall moves it forward
 (`reanchors` in the status line), never back. The localizer starts from
 its own last pose or the INI's `[initial_pose]`, which is where the sim
 spawns the robot, so the two agree at the start.
+
+### Test sites: level ground, ramps, a 15 cm stair
+
+`scripts/make_scenes.py` writes three sites as a mapped one is written
+(`octomap.bt`, `map.pcd`, `poses.txt`) into `scenes/<name>/`, generated and
+gitignored, and the files a mapped site keeps here (`config/ramps/slope.yaml`,
+`config/stair_walks/stairs15.yaml`, `config/stair_shapes/stairs15.yaml`) and
+a profile per site (`config/params/scenes/<name>.yaml`: the map, the spawn).
+The sim reads them like any map, so nothing in it knows they are made.
+
+| site | what | spawn |
+|---|---|---|
+| `flat` | 20 x 8 m of level floor, walls round it, four pillars to the sides | (0, 0) facing +x |
+| `slope` | four lanes side by side, 5 / 10 / 15 / 20 deg (y 3.6 / 1.2 / -1.2 / -3.6) up to a 0.5 m platform 2 m long and down again; walls between them | (0, 1.2), the 10 deg lane ahead |
+| `stairs15` | six 0.15 m risers on 0.30 m treads (x 3.0 .. 4.5) up to a 0.9 m platform 3 m long, six down (x 7.5 .. 9.0), 1.6 m wide between walls | (0, 0) facing the stair |
+
+```bash
+python3 /home/syncrobotic/sim/scripts/make_scenes.py           # in the container, once (or after editing it)
+python3 -m syncai_sim --profile /home/syncrobotic/sim/config/params/scenes/stairs15.yaml
+SIM_ARGS="--profile /home/syncrobotic/sim/config/params/scenes/slope.yaml" docker compose up -d
+```
+
+Checked 2026-11-15: the stair fits
+as six risers of 0.150 m on 0.300 m treads (residual 0) and is built as
+boxes, 1.6 m wide; the feet's floor down each lane's middle is 0.3-0.4 cm
+off the design on average, at worst 0.7 / 1.2 / 1.8 / 2.2 cm on 5 / 10 /
+15 / 20 deg, at the kinks, which the ramps' smoothing rounds.
+A ramp is still 0.1 m columns under the feet (`terrains/terrain_patch.py`):
+risers of 0.1 tan(angle), 0.9 cm at 5 deg and 3.6 cm at 20 deg. Only the
+sim knows these sites: the workspace's localizer has no map of them, so
+drive with the panel or AXES, not with goals.
+
+### The whole stack around it
+
+The sim, the robot's controller, the workspace's robot container (the Livox
+driver, Point-LIO, the localizer, driver_manager, the planner), the backend
+and the frontend ran together on one Mac (OrbStack, 2026-11-14/15), each
+from its own repository's compose file, none of them changed for the sim:
+goals sent through the backend were walked on dp. driver_manager read the
+controller's telemetry at 209.5 Hz with no parse warning, the lidar arrived
+at 9-9.5 Hz and Point-LIO ran at 9.2 Hz, the backend showed the battery
+(79 %), no motor error and a valid localization.
+
+The order matters, and so does what restarts with what:
+
+1. `scripts/vcan_up.sh` and three addresses on the host, again after a
+   restart of the machine or the VM: the lidar's and the driver's (above)
+   and the one driver_manager sends its commands to, added the same way
+   (`ip addr add 192.168.1.120/32 dev lo`).
+2. The sim (`docker compose up -d`), then the controller: it configures and
+   enables the motors once, at its start.
+3. The robot container, the backend, the frontend.
+
+A sim restarted alone leaves the others on a body that is gone: restart the
+controller with it, and Point-LIO (the backend's `POST
+/api/v1/robot/restart`), whose odometry otherwise diverges, since the sim's
+time and pose start over.
+
+What was measured there, so nobody measures it twice:
+
+* **The sim runs at x0.95 of real time on OrbStack** with the lidar on (the
+  status line's `x`; `resyncs` ~6 a second, the Livox clock's `reanchors`
+  ~2.5): the VM's 3 ms timer tick plus a 6-7 ms scan exceed the 8 ms a late
+  loop may catch up. Not fixed; the controller's shim (`scripts/spin_sleep`)
+  would be the same cure, not tried on the sim.
+* **The body walks at 0.82 of the commanded AXES** forwards under the
+  controller's RL policy (PPO), which is what the real robot does (0.78-0.82)
+  and why driver_manager scales its commands by 1.40: the scale is right on
+  the sim as it is, not to be set to 1 here.
+* **Turning in place drifts**, and that, not the navigation, is why the
+  robot ends away from a goal that ends in a turn. While it turns the body
+  keeps a steady velocity in its own frame — turning left 0.11-0.12 m/s
+  forwards and 0.07-0.08 to the right, turning right 0.06-0.07 forwards and
+  0.05 to the right — so it walks a circle: 0.32-0.38 m displaced after
+  180 deg to the left, 0.15-0.21 m to the right, more at a slower turn (the
+  circle's radius is v / w). Left turns show the diagonal pairs unevenly
+  loaded (FL / HR on the ground 0.71-0.78 of the time, FR / HL 0.35-0.42).
+  Standing still it does not drift at all, and stopping from 0.3 m/s it
+  slides 0.10 m in 0.64 s, so waiting before the turn would not help. The
+  nav stack's goal checker is `stateful`: once inside the 0.10 m tolerance
+  it only checks the yaw, which hides the drift. HimLoco was no better. A
+  matter for the policy's training; not checked on the real robot.
 
 ## The world, the robot, the rules
 
@@ -705,9 +797,19 @@ food for the planner's dynamic overlay and TerrainLayer's `obstacle_memory`.
   the sim's impersonation of the gait controller on the ASCII link: turning
   cmd_vel into joint commands is the controller's, wherever it runs, and a
   second copy of it here only had to be kept in step with the robot's. The
-  price is that nothing walks the sim until a controller is on the link, and
-  that the link's spec lives here and the controller's `--backend sim` must
-  follow it.
+  price is that nothing walks the sim until a controller is on its joints.
+* **The robot's links are the defaults; one compose file (2026-11-15).**
+  Each of the robot's links arrived as an option beside the UDP link (`-p
+  joint_link:=can` and so on, a second compose file for the host's network),
+  and a run as the robot took a line of arguments and two `-f`. Once the
+  robot's own controller drove the sim unchanged, the robot was the only
+  thing anyone started: the links became the defaults, the container is
+  always on the host's network, and the flags that repeated a parameter
+  went. The controller's g2-device-control keeps one mode, the robot's;
+  what the sim makes different for it is `docker-compose.controller.yml`
+  here, never a switch there. The UDP command link stays as `joint_link:
+  udp` for runs without CAN interfaces (the stand-in, a throwaway
+  container).
 
 ## Status
 
@@ -721,9 +823,8 @@ food for the planner's dynamic overlay and TerrainLayer's `obstacle_memory`.
   hardware only. The joints as J60 motors on four SocketCAN buses
   (2026-11-13, `joint_link: can`), checked with a stand-in on vcan; the
   body IMU on a serial port and the BMS on `can0` (`imu_link: serial`,
-  `bms_link: can`), checked with the controller's readers ported into the
-  tests, not yet with the controller.
-* **Next.** The controller process on the link: SyncAI-Robot-Control's
-  `--backend sim` against `locomotion/hardware_link.py`, in a container
-  beside the sim's, then `scripts/controller_bench.py --send "MODE Z" --send
-  "MODE M"` against its LMA.
+  `bms_link: can`). The robot's controller on all of them from a container
+  of its own (2026-11-14), and with the workspace's nav stack, the backend
+  and the frontend around it. The robot's links as the defaults, one compose
+  file for the sim (2026-11-15). Test sites made by script (2026-11-15).
+* **Next.** The controller's MPC (`MODE M`) on the sim, not run yet.

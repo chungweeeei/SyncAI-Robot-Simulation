@@ -1,0 +1,7 @@
+# Written by scripts/make_scenes.py from its constants; edit there and rerun.
+# The slope scene: lanes at 5 / 10 / 15 / 20 deg up to a 0.5 m platform and down, walls between them.
+#   python3 -m syncai_sim --profile /home/syncrobotic/sim/config/params/scenes/slope.yaml
+
+map_dir: /home/syncrobotic/sim/scenes/slope
+use_ini_initial_pose: false
+spawn: [0, 1.2, 0, 0]   # x y z(hint) yaw
