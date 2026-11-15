@@ -186,3 +186,53 @@ def cubes_to_voxels(cubes: np.ndarray) -> np.ndarray:
         grid = np.stack(np.meshgrid(r, r, r, indexing="ij"), axis=-1).reshape(-1, 3)
         parts.append((sel[:, None, :] + grid[None, :, :]).reshape(-1, 3))
     return np.concatenate(parts, axis=0).astype(np.int32, copy=False)
+
+
+def _morton(voxels: np.ndarray) -> np.ndarray:
+    """Per voxel its path from the root: 16 octal digits, the root's child
+    first (bit 0 x, 1 y, 2 z: the key's bit 15 - d at depth d)."""
+    v = np.asarray(voxels, np.int64)
+    m = np.zeros(v.shape[0], np.int64)
+    for d in range(TREE_DEPTH):
+        bit = TREE_DEPTH - 1 - d
+        digit = ((v[:, 0] >> bit) & 1) | (((v[:, 1] >> bit) & 1) << 1) | (((v[:, 2] >> bit) & 1) << 2)
+        m = (m << 3) | digit
+    return m
+
+
+def write_occupied(path: str, voxels: np.ndarray, resolution: float) -> int:
+    """Write full-depth voxel indices ((N, 3), as `cubes_to_voxels` returns
+    them) as an OcTree `.bt` that `read_occupied_leaves` reads back: every
+    voxel an occupied leaf at depth 16, nothing free, nothing pruned. For
+    maps made rather than measured (scripts/make_scenes.py). Returns the
+    header's `size`, the tree's node count (inner nodes and leaves) as
+    OcTree::size() counts it."""
+    m = np.unique(_morton(voxels))
+    out = bytearray()
+    leaves = int(m.size)
+    inner = 0
+    # Depth first, children in order 0..7: the reader's order (module docstring).
+    stack = [(0, 0, int(m.size))]
+    while stack:
+        depth, a, b = stack.pop()
+        shift = 3 * (TREE_DEPTH - 1 - depth)
+        digits = (m[a:b] >> shift) & 7
+        starts = np.searchsorted(digits, np.arange(9))
+        node = [0, 0]
+        kids = []
+        for c in range(8):
+            if starts[c] == starts[c + 1]:
+                continue
+            code = 2 if depth == TREE_DEPTH - 1 else 3  # occupied leaf (hi bit) or inner node
+            node[c // 4] |= code << (2 * (c % 4))
+            if code == 3:
+                kids.append((depth + 1, a + int(starts[c]), a + int(starts[c + 1])))
+        out += bytes(node)
+        inner += 1
+        stack.extend(reversed(kids))
+    size = inner + leaves
+    header = (b"# Octomap OcTree binary file\n# written by syncai_sim.world.btree.write_occupied\n"
+              b"id OcTree\nsize %d\nres %s\ndata\n" % (size, repr(float(resolution)).encode()))
+    with open(path, "wb") as f:
+        f.write(header + bytes(out))
+    return size

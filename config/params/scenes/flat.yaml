@@ -1,0 +1,7 @@
+# Written by scripts/make_scenes.py from its constants; edit there and rerun.
+# The flat scene: 20 x 8 m of level floor, four pillars to the sides.
+#   python3 -m syncai_sim --teleop --profile /home/syncrobotic/sim/config/params/scenes/flat.yaml
+
+map_dir: /home/syncrobotic/sim/scenes/flat
+use_ini_initial_pose: false
+spawn: [0, 0, 0, 0]   # x y z(hint) yaw

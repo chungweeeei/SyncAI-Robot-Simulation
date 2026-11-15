@@ -108,6 +108,7 @@ scripts/controller_bench.py        the sim as a controller's hardware, headless:
 docs/architecture.md               the layers, one physics tick, what a controller needs from the sim and why
 config/lidar/mid360_pattern.npz    the MID360's recorded pattern bank, from the workspace's record/dp (config/lidar/README.md)
 scripts/lidar_pattern.py           rebuilds it from any MID360 recording
+scripts/make_scenes.py             test sites made, not mapped (flat, slope, stairs15) into scenes/ (gitignored), their config files and profiles
 tests/                             pytest; test_simulator_site runs the whole sim on the workspace's map/dp (skips without it)
 cache/                             per-map build products (gitignored): the world, the compiled scene (scene-*.mjb, 20 MB on dp), the voxel intensities, the browser's tiles (140 MB), the decimated robot meshes (robot/)
 ```
@@ -414,6 +415,38 @@ TF with the host's clock; a sim that falls behind the wall moves it forward
 (`reanchors` in the status line), never back. The localizer starts from
 its own last pose or the INI's `[initial_pose]`, which is where the sim
 spawns the robot, so the two agree at the start.
+
+### Test sites: level ground, ramps, a 15 cm stair
+
+`scripts/make_scenes.py` writes three sites as a mapped one is written
+(`octomap.bt`, `map.pcd`, `poses.txt`) into `scenes/<name>/`, generated and
+gitignored, and the files a mapped site keeps here (`config/ramps/slope.yaml`,
+`config/stair_walks/stairs15.yaml`, `config/stair_shapes/stairs15.yaml`) and
+a profile per site (`config/params/scenes/<name>.yaml`: the map, the spawn).
+The sim reads them like any map, so nothing in it knows they are made.
+
+| site | what | spawn |
+|---|---|---|
+| `flat` | 20 x 8 m of level floor, walls round it, four pillars to the sides | (0, 0) facing +x |
+| `slope` | four lanes side by side, 5 / 10 / 15 / 20 deg (y 3.6 / 1.2 / -1.2 / -3.6) up to a 0.5 m platform 2 m long and down again; walls between them | (0, 1.2), the 10 deg lane ahead |
+| `stairs15` | six 0.15 m risers on 0.30 m treads (x 3.0 .. 4.5) up to a 0.9 m platform 3 m long, six down (x 7.5 .. 9.0), 1.6 m wide between walls | (0, 0) facing the stair |
+
+```bash
+python3 /home/syncrobotic/sim/scripts/make_scenes.py           # in the container, once (or after editing it)
+python3 -m syncai_sim --teleop --profile /home/syncrobotic/sim/config/params/scenes/stairs15.yaml
+SIM_ARGS="--teleop --profile /home/syncrobotic/sim/config/params/scenes/slope.yaml" docker compose up -d
+```
+
+With the robot's controller on CAN, append the profile to
+`docker-compose.can.yml`'s `SIM_ARGS`. Checked 2026-11-15: the stair fits
+as six risers of 0.150 m on 0.300 m treads (residual 0) and is built as
+boxes, 1.6 m wide; the feet's floor down each lane's middle is 0.3-0.4 cm
+off the design on average, at worst 0.7 / 1.2 / 1.8 / 2.2 cm on 5 / 10 /
+15 / 20 deg, at the kinks, which the ramps' smoothing rounds.
+A ramp is still 0.1 m columns under the feet (`terrains/terrain_patch.py`):
+risers of 0.1 tan(angle), 0.9 cm at 5 deg and 3.6 cm at 20 deg. Only the
+sim knows these sites: the workspace's localizer has no map of them, so
+drive with the panel or AXES, not with goals.
 
 ## The world, the robot, the rules
 

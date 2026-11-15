@@ -122,6 +122,7 @@ Paths are under `syncai_sim/`; `docs/architecture.md` draws the layers.
 | the main loop, the links polled and ticked, the settings (defaults, `config/params/sim_params.yaml`, `--profile`, `-p`) | `__main__.py` (sets `OPENBLAS_NUM_THREADS=1` before numpy); `config.py` |
 | the viewer (viser: the site as GLB tiles once, poses at 20 Hz, drawn by the host's browser; nothing renders in the container), its panel's driving | `viewer/web_view.py`, `viewer/teleop.py` |
 | the viewer's look (tiles, intensity shading, the Poisson and TSDF surfaces, colours, the lidar map layer) | `visuals/`: `site_tiles.py` (10 m tiles as GLB, a texel per voxel face), `voxel_intensity.py`, `pcd_mesh.py`, `tsdf_mesh.py`, `visual.py`, `map_cloud.py` (picture only, never sensing); the site, storey and layer switches are the panel in `viewer/web_view.py` |
+| test sites made, not mapped (flat, slope, stairs15): their .bt / .pcd / poses, ramps, stair walk and shape, profiles | `scripts/make_scenes.py` (writes `scenes/<name>/`, gitignored, and the config files, committed; `tests/test_scenes.py`); the .bt writer `world/btree.py` `write_occupied` |
 | the container's command | `scripts/sim_entry.sh` (`SIM_AUTOSTART`, `SIM_ARGS`) |
 
 ## Running and testing (inside the container)
@@ -140,6 +141,9 @@ python3 /home/syncrobotic/sim/scripts/controller_bench.py -p joint_link:=can --f
 #   docker compose -f docker-compose.yml -f docker-compose.can.yml up -d
 #   docker compose -f ../g2-device-control/docker-compose.yml -f docker-compose.controller.yml up -d
 # (its compose file unchanged: what the sim makes different is docker-compose.controller.yml's, here)
+# a made test site (README, "Test sites"): flat, slope, stairs15
+python3 /home/syncrobotic/sim/scripts/make_scenes.py
+python3 -m syncai_sim --teleop --profile /home/syncrobotic/sim/config/params/scenes/stairs15.yaml
 # with the IMU on /tmp/syncai_imu and the BMS on can0 as well:
 python3 /home/syncrobotic/sim/scripts/controller_bench.py -p joint_link:=can -p imu_link:=serial -p bms_link:=can --fake-controller --seconds 5
 ```

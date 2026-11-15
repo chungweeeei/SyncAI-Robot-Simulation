@@ -27,3 +27,6 @@ MUJOCO_LOG.TXT
 # The G23's trained weights, left from before 2026-11-13 when the sim ran
 # them in-process: never published from here.
 policy/
+
+# Test sites written by scripts/make_scenes.py (its config files are committed).
+/scenes/
