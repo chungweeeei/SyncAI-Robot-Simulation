@@ -177,7 +177,7 @@ class WebView:
         self._switch_site(self._site_mode.value)
 
     def _switch_site(self, mode: str) -> None:
-        """Replace the site's tiles with `mode`'s (voxels / pointcloud / tsdf)
+        """Replace the site's tiles with `mode`'s (voxels / pointcloud)
         in the panel's look (ramp / photo; site_tiles.py builds a set once
         and caches it)."""
         from syncai_sim.visuals import site_tiles
@@ -288,10 +288,10 @@ class WebView:
         self._storeys = gui.add_dropdown("Storeys", self._storey_modes, initial_value="auto",
                                          hint="auto: the robot's storey and those below it")
         self._site_mode = gui.add_dropdown(
-            "Site", ["voxels", "pointcloud", "tsdf"],
+            "Site", ["voxels", "pointcloud"],
             initial_value=getattr(self.sim.cfg, "visual_mesh", "voxels"),
-            hint="voxels: what the sim senses; pointcloud: the Poisson surface; tsdf: the "
-                 "surface from the keyframes (each built once, minutes the first time)")
+            hint="voxels: what the sim senses; pointcloud: the Poisson surface (built once, "
+                 "minutes the first time)")
 
         self._look = gui.add_dropdown(
             "Look", list(visual.LOOKS), initial_value=getattr(self.sim.cfg, "visual_look", "ramp"),

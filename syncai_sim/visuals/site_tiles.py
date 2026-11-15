@@ -13,9 +13,10 @@ texture coordinates (world.quad_corners says which corner is which), so the
 geometry stays what it was: two triangles per rectangle. A tile is ~1600
 rectangles and a 512 x 512 atlas on dp; the GLB's PNG is a few tens of KB.
 
-`visual_mesh: pointcloud` (pcd_mesh.py's Poisson surface) and `tsdf`
-(tsdf_mesh.py) have no voxel faces: their vertices are a few centimetres
-apart, so there the intensity goes on the vertices.
+`visual_mesh: pointcloud` (pcd_mesh.py's Poisson surface) has no voxel
+faces: its vertices are a few centimetres apart, so there the intensity goes
+on the vertices. A third, `tsdf` (tsdf_mesh.py: a TSDF surface from the
+mapping run's keyframe patches), was removed 2026-11-15, unused.
 
 The `photo` look paints the same texels and vertices with the colour the
 mapping run's camera saw at each voxel (voxel_colour.py, visual.shade_photo)
@@ -254,8 +255,8 @@ def load_or_build(world: World, map_dir: str, cache_dir: str, visual_mesh: str,
     for the voxels; the surface adds pcd_mesh.py's own build the first time)."""
     from syncai_sim.visuals import voxel_colour, voxel_intensity
 
-    if visual_mesh not in ("voxels", "pointcloud", "tsdf"):
-        raise ValueError(f"visual_mesh {visual_mesh!r}: voxels | pointcloud | tsdf")
+    if visual_mesh not in ("voxels", "pointcloud"):
+        raise ValueError(f"visual_mesh {visual_mesh!r}: voxels | pointcloud")
     if look not in visual.LOOKS:
         raise ValueError(f"look {look!r}: " + " | ".join(visual.LOOKS))
     colour_table = None
@@ -272,19 +273,14 @@ def load_or_build(world: World, map_dir: str, cache_dir: str, visual_mesh: str,
         intensity_key = f"{st.st_size}-{int(st.st_mtime)}-{voxel_intensity.FORMAT}"
     surface_key = None
     surface = None
-    if visual_mesh != "voxels":
-        if visual_mesh == "pointcloud":
-            from syncai_sim.visuals.pcd_mesh import load_or_build as load_surface
-            cache_file = "pcd_mesh.npz"
-        else:
-            from syncai_sim.visuals.tsdf_mesh import load_or_build as load_surface
-            cache_file = "tsdf_mesh.npz"
+    if visual_mesh == "pointcloud":
+        from syncai_sim.visuals.pcd_mesh import load_or_build as load_surface
         surface = load_surface(map_dir, cache_dir, world, log=log)
         if surface is None:
             log("[tiles] no surface: the voxels are shown instead")
             visual_mesh = "voxels"
         else:
-            st = os.stat(os.path.join(cache_dir, cache_file))
+            st = os.stat(os.path.join(cache_dir, "pcd_mesh.npz"))
             surface_key = f"{st.st_size}-{int(st.st_mtime)}"
     key = _key(world, visual_mesh, intensity_key, surface_key, look, colour_key)
     path = os.path.join(cache_dir, f"site_tiles-{visual_mesh}-{look}.npz")

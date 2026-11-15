@@ -69,7 +69,7 @@ class SimConfig:
     props: list[sc.PropSpec] = field(default_factory=list)
     seed: int = 0
     terrain: TerrainPatchConfig = field(default_factory=TerrainPatchConfig)
-    visual_mesh: str = "voxels"  # the browser's site: voxels | pointcloud | tsdf (site_tiles.py)
+    visual_mesh: str = "voxels"  # the browser's site: voxels | pointcloud (site_tiles.py)
     visual_look: str = "ramp"  # its look: ramp | photo (visual.py; photo needs config/colour/<map>.npz)
     # fitted = the fitted flights as fixed boxes (stairs.py); voxels = the
     # patch's boxes there too, risers on the 0.1 m column grid (the sim before 2026-10-25)
@@ -176,8 +176,8 @@ class Simulator:
             motor_model=cfg.motor_model, trunk_inertial=cfg.trunk_inertial,
             foot_solref=tuple(float(v) for v in cfg.foot_solref),
             foot_friction=tuple(float(v) for v in cfg.foot_friction)), log=log)
-        if cfg.visual_mesh not in ("voxels", "pointcloud", "tsdf"):
-            raise ValueError(f"visual_mesh {cfg.visual_mesh!r}: voxels | pointcloud | tsdf")
+        if cfg.visual_mesh not in ("voxels", "pointcloud"):
+            raise ValueError(f"visual_mesh {cfg.visual_mesh!r}: voxels | pointcloud")
         if cfg.visual_look not in ("ramp", "photo"):
             raise ValueError(f"visual_look {cfg.visual_look!r}: ramp | photo")
         capacity = cfg.terrain.capacity
