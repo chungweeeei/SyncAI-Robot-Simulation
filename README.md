@@ -104,7 +104,6 @@ syncai_sim/                        the Python package (python3 -m syncai_sim): o
     visual.py                          the viewer's look: colour by height, shaded by the lidar's intensity; or the photo
     site_tiles.py                      the site for the browser: 10 m tiles, every voxel face a texel of its intensity or its colour, as GLB, cached
     pcd_mesh.py                        map.pcd -> a smooth viewer surface (Poisson, open3d), cached
-    tsdf_mesh.py                       the keyframes' patches + poses.txt -> a TSDF viewer surface (open3d), thin structure kept, cached
     voxel_intensity.py                 map.pcd -> the median intensity of each voxel, cached
     voxel_colour.py                    the mapping run's bag -> the colour the camera saw at each voxel (config/colour/<map>.npz, scripts/colour_map.py)
     bag_camera.py                      the bag's images, camera_info and /tf_static, read from its sqlite file
@@ -662,18 +661,15 @@ is not the robot; worth measuring on the real G23 before trusting the
 planner's ground estimate against the sim.
 
 **The picture** (`visual_mesh`, `--visual-mesh`, the panel's Site switch;
-`visuals/site_tiles.py`). Three sites, each built once and cached: `voxels` (the
+`visuals/site_tiles.py`). Two sites, each built once and cached: `voxels` (the
 default) is the octomap's cubes, what the sim actually senses and stands on;
 `pointcloud` is a smooth surface reconstructed from the map's `map.pcd`
 (`visuals/pcd_mesh.py`: points kept only on the cleaned voxels, 4 cm, screened
 Poisson, 1.5 M triangles; dp ~3.5 min; it blurs thin structure and bubbles
-where the cloud is sparse); `tsdf` is a truncated signed distance field
-integrated from the mapping run's own keyframe patches and poses
-(`visuals/tsdf_mesh.py`: each patch rendered to six cube-face depth images and
-integrated with open3d at 7 cm, free space carved along every ray, so
-handrails, door frames and tread edges keep their shape and unseen places
-stay open; built in 35 m blocks, dp 6 min and 2.5 GB at most, 2 M triangles; `python3 -m syncai_sim.visuals.tsdf_mesh map/dp` builds it
-ahead). All three are coloured by
+where the cloud is sparse). A third, `tsdf` (a TSDF surface integrated
+from the mapping run's keyframe patches with open3d: thin structure kept,
+dp 6 min and 2.5 GB to build), was removed 2026-11-15, unused. Both are
+coloured by
 height — floors and treads along a ramp, walls a pale copy, undersides grey
 (`visuals/visual.py`) — and shaded by the lidar's intensity, which is what makes a
 lidar map legible: `visuals/voxel_intensity.py` keeps the median intensity of
@@ -815,7 +811,7 @@ food for the planner's dynamic overlay and TerrainLayer's `obstacle_memory`.
 ## Status
 
 * **Done.** The voxel world and its cleanups, the fitted stairs and ramps, the MID360's recorded pattern, the
-  browser viewer with the voxel / Poisson / TSDF sites and the photo look.
+  browser viewer with the voxel / Poisson sites and the photo look.
   The layered package and the hardware link (2026-11-03): the sim as a
   controller's hardware, checked end to end with the stand-in controller (dp,
   5 s at 1 kHz: ~5000 states, ~4800 commands, 0 falls). ROS removed the same

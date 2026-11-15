@@ -33,11 +33,9 @@ planner_hole_fill_passes: 2
 # is built once and cached, site_tiles.py): "voxels" = the octomap's cubes,
 # what the sim senses and the planner plans on; "pointcloud" = a smooth
 # Poisson surface from <map>/map.pcd (pcd_mesh.py; dp ~3.5 min the first
-# time; blurs thin structure, bubbles where the map is sparse); "tsdf" = a
-# TSDF surface integrated from the mapping run's own keyframe patches
-# (tsdf_mesh.py; dp ~5 min the first time; keeps thin structure, leaves
-# unseen places open). All three shaded by the lidar's intensity. A
-# picture either way.
+# time; blurs thin structure, bubbles where the map is sparse). Both
+# shaded by the lidar's intensity. A picture either way. ("tsdf", a
+# surface from the keyframe patches, was removed 2026-11-15, unused.)
 visual_mesh: voxels
 # The site's look (the panel's Look switch; visual.py): "ramp" = colour
 # by height, shaded by the lidar's intensity; "photo" = the colour the

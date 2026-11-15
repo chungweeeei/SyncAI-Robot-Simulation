@@ -8,7 +8,7 @@ numpy>=1.26,<2
 # scaled linearly against boxes. numba is what makes a Python sim real-time.
 numba==0.68.0
 # The viewer's smooth site from map.pcd (syncai_sim/visuals/pcd_mesh.py:
-# Poisson reconstruction) and the TSDF site. 0.18.0 is the version tested here
+# Poisson reconstruction). 0.18.0 is the version tested here
 # (py310 aarch64 wheel). Optional: without it the viewer shows the voxels.
 open3d==0.18.0
 # The viewer (syncai_sim/viewer/web_view.py): a Python server in the container,

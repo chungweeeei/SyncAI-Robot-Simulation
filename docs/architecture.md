@@ -15,7 +15,7 @@ ONNX policies in-process or carry a rigid statue by rules).
    world/        octomap -> VoxelGrid: the TRUTH for lidar rays, the ground
    (truth)       under the robot, whether the trunk is blocked (numba)
           │
-          ├──────────────► visuals/   tiles, the Poisson / TSDF surfaces, the
+          ├──────────────► visuals/   tiles, the Poisson surface, the
           │                (picture)  intensity shading, the photo look — drawn
           │                           by the host's browser (viewer/), read by
           │                           nothing that senses or stands
