@@ -28,7 +28,7 @@ own (`docs/architecture.md` draws them): the voxel truth (`world/`), the
 feet's floor (`terrains/`), the robot and the MuJoCo scene (`entity/`,
 `scene/`), what the body measures and what drives its joints (`sensor/`,
 `actuator/`), the controller's link to the joints (`locomotion/`), the
-panel's driving forwarded to the controller (`driver/`), and the picture
+bench's command lines to the controller (`driver/`), and the picture
 (`viewer/`, `visuals/`).
 
 The links, the only ways in and out. Started with no argument the sim is
@@ -46,11 +46,12 @@ workspace's nav stack connect to it unchanged:
   of what that hardware layer reads on the robot — the body IMU as its
   Yesense unit streaming on a serial port, the battery's BMS answering on
   `can0` (section "The IMU and the BMS").
-* **The panel's driving** (`driver/udp_driver.py`): the viewer's sliders go
-  to the controller's command port (50051) as the `AXES` line driver_manager
-  sends. Its motion keys and policy toggle (`MODE`, `ESTOP`) were removed
-  2026-11-15, while the controller's low-level motor control is rewritten. The nav
-  stack's driver_manager talks to the controller directly, not to the sim.
+* **No driving from the panel** (2026-11-15). Its motion keys, policy toggle
+  and AXES sliders went while the controller's low-level motor control is
+  rewritten: SyncAI-Robot-Control speaks a binary protocol and is driven by
+  its own `syncai_ctl` (`teleop` from the keyboard). `driver/udp_driver.py`
+  is left to the bench's ASCII lines. The nav stack's driver_manager talks
+  to the controller directly, not to the sim.
 * **The sim as the robot's lidar** (`lidar_link: livox`): the sim is a
   MID360 / MID360s on the Livox protocol (`sensor/livox_link.py`), so the
   workspace's own livox_ros_driver2 finds it and reads its points and IMU,
@@ -97,9 +98,9 @@ syncai_sim/                        the Python package (python3 -m syncai_sim): o
   actuator/motors.py                 the motors: JointCommand (q_des, dq_des, kp, kd, tau_ff), the PD closed every step, the motor clamp, delays
   locomotion/can_link.py             joint_link can: the joints as J60 motors on four SocketCAN buses (the frames, the robot's wiring; the spec); its stand-in controller
   locomotion/hardware_link.py        the body's record out on UDP every step; with joint_link udp a controller's command in as well (the protocol's spec); the stand-in controller
-  driver/udp_driver.py               the panel's AXES, forwarded to the controller process
+  driver/udp_driver.py               the bench's ASCII lines (MODE, AXES) to a controller process
   envs/simulator.py, placement.py    the core: step, scan, spawn, teleport; where the base is put down
-  viewer/web_view.py, teleop.py      the browser viewer: the site and the robot sent once, poses streamed, drawn by the host's GPU; its panel's driving
+  viewer/web_view.py, teleport.py    the browser viewer: the site and the robot sent once, poses streamed, drawn by the host's GPU; its panel's teleport
   visuals/                           the site's picture (nothing the lidar, the feet or the planner see reads it)
     visual.py                          the viewer's look: colour by height, shaded by the lidar's intensity; or the photo
     site_tiles.py                      the site for the browser: 10 m tiles, every voxel face a texel of its intensity or its colour, as GLB, cached
@@ -199,10 +200,8 @@ storey switch (auto: the robot's storey and those below it, so the floor
 above never hides the robot), follow-robot (the camera's look-at follows,
 the offset the mouse gave it stays), the last lidar scan, the terrain boxes
 and fitted stairs under the feet, the lidar map per storey, the status, and
-the teleport back to the spawn, and the driving sliders
-(`viewer/teleop.py`), which go to the controller's command port
-(50051) and are sent only while touched, so a navigation goal and the panel
-drive together. `--headless` serves no viewer.
+the teleport back to the spawn (`viewer/teleport.py`). It drives nothing.
+`--headless` serves no viewer.
 
 **A controller on the joints.** With none the motors are never enabled and
 the robot lies down. The robot's own controller is the section "The robot's
@@ -425,13 +424,13 @@ TF with the host's clock; a sim that falls behind the wall moves it forward
 its own last pose or the INI's `[initial_pose]`, which is where the sim
 spawns the robot, so the two agree at the start.
 
-### Test sites: level ground, ramps, a 15 cm stair, slippery floors, a course
+### Test sites: level ground, ramps, a 15 cm stair, slippery floors, a course, all of them
 
-`scripts/make_scenes.py` writes five sites as a mapped one is written
+`scripts/make_scenes.py` writes six sites as a mapped one is written
 (`octomap.bt`, `map.pcd`, `poses.txt`) into `scenes/<name>/`, generated and
 gitignored, and the files a mapped site keeps here (`config/ramps/<name>.yaml`,
-`config/friction/<name>.yaml`, `config/stair_walks/stairs15.yaml`,
-`config/stair_shapes/stairs15.yaml`) and
+`config/friction/<name>.yaml`, `config/stair_walks/<name>.yaml` and
+`config/stair_shapes/<name>.yaml` for stairs15 and all) and
 a profile per site (`config/params/scenes/<name>.yaml`: the map, the spawn).
 The sim reads them like any map, so nothing in it knows they are made.
 
@@ -442,12 +441,14 @@ The sim reads them like any map, so nothing in it knows they are made.
 | `stairs15` | six 0.15 m risers on 0.30 m treads (x 3.0 .. 4.5) up to a 0.9 m platform 3 m long, six down (x 7.5 .. 9.0), 1.6 m wide between walls | (0, 0) facing the stair |
 | `friction` | level floor, four lanes side by side (y 3 / 1 / -1 / -3), each with a strip of sliding friction 0.6 / 0.4 / 0.2 / 0.1 from x 3 to 9 | (0, 1), the 0.4 lane ahead |
 | `course` | one corridor along x: friction 0.4 (x 2 .. 5), friction 0.2 (x 5 .. 8), a 0.5 m hill at x 9.5 (10 deg up, 15 deg down), a second at x 17.5 (10 deg both ways) whose way up has friction 0.4 | (0, 0) facing +x |
+| `all` | the five above as bays side by side, each as it is on its own, open onto a 6 m level apron (x -6 .. 0): from +y flat (y 10.3 .. 17.7), friction (2.0 .. 10.0), slope (-7.7 .. 1.7), stairs15 (-13.4 .. -8.0), course (-17.7 .. -13.7); a bay's y is its own scene's plus 14.0 / 6.0 / -3.0 / -10.7 / -15.7 | (-3, 0) on the apron, facing the slope's 5 deg lane |
 
 A floor's friction is a file of boxes per map (`config/friction/<map>.yaml`,
 `terrains/friction.py`): inside one, the terrain boxes under the feet take its
 sliding friction and decide the contact's (MuJoCo would otherwise take the
 larger of floor and foot, and the feet's is 1.0); elsewhere, and on every map
-without such a file, nothing changes. Another lane: `-p spawn:=[0,-3,0,0]`.
+without such a file, nothing changes. Another lane: `-p spawn:=[0,-3,0,0]`;
+in `all`, the stair's foot: `-p spawn:=[1,-10.7,0,0]`.
 
 ```bash
 python3 /home/syncrobotic/sim/scripts/make_scenes.py           # in the container, once (or after editing it)
@@ -455,7 +456,9 @@ python3 -m syncai_sim --profile /home/syncrobotic/sim/config/params/scenes/stair
 SIM_ARGS="--profile /home/syncrobotic/sim/config/params/scenes/slope.yaml" docker compose up -d
 ```
 
-Checked 2026-11-15: the stair fits
+`all` checked 2026-11-15: up in 4 s (its caches built), standing on the apron, and the ground
+under the robot 0.900 m on the stair's platform, 0.500 m on the slope's and the course's
+hill tops, 0 on the friction strips and in the flat bay. Checked 2026-11-15: the stair fits
 as six risers of 0.150 m on 0.300 m treads (residual 0) and is built as
 boxes, 1.6 m wide; the feet's floor down each lane's middle is 0.3-0.4 cm
 off the design on average, at worst 0.7 / 1.2 / 1.8 / 2.2 cm on 5 / 10 /
@@ -463,7 +466,7 @@ off the design on average, at worst 0.7 / 1.2 / 1.8 / 2.2 cm on 5 / 10 /
 A ramp is still 0.1 m columns under the feet (`terrains/terrain_patch.py`):
 risers of 0.1 tan(angle), 0.9 cm at 5 deg and 3.6 cm at 20 deg. Only the
 sim knows these sites: the workspace's localizer has no map of them, so
-drive with the panel or AXES, not with goals.
+drive with `syncai_ctl teleop`, not with goals.
 
 ### The whole stack around it
 

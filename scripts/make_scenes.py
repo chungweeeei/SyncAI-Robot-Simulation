@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Test sites made rather than mapped: level ground, ramps, a 15 cm stair,
-floors of different grip, and a course of several of these in a row.
+floors of different grip, a course of several of these in a row, and all of
+them side by side in one site.
 
     python3 scripts/make_scenes.py              # all of them into scenes/<name>/
     python3 scripts/make_scenes.py stairs15     # one
@@ -35,6 +36,10 @@ there for the lidar too: on an open plane Point-LIO has nothing to hold to.
     course    one corridor along x with, in turn: a strip of friction 0.4, one
               of 0.2, a hill (10 deg up, 15 deg down), and a second hill
               (10 deg both ways) whose way up has friction 0.4
+    all       the five above as bays side by side (from +y: flat, friction,
+              slope, stairs15, course), each as it is on its own, open onto
+              one level apron at x < 0 where the robot starts: one site, one
+              sim, every test a walk away
 
 The feet stand on 0.1 m boxes whatever the site (terrains/terrain_patch.py),
 so a ramp is a stair of 0.1 m treads with risers of 0.1 tan(angle): 0.9 cm
@@ -105,6 +110,7 @@ class Scene:
     def __init__(self, name, x0, x1, y0, y1, height, track, spawn, about):
         self.name, self.x0, self.x1, self.y0, self.y1 = name, x0, x1, y0, y1
         self.height = height  # (x, y) arrays -> top (m)
+        self.inner = None  # the same without the outer walls (`all` puts it in a bay)
         self.track = track  # (K, 2) keyframes on the level floor
         self.spawn = spawn  # x y z yaw
         self.about = about
@@ -134,7 +140,8 @@ FLAT_PILLARS = [(2.7, 3.3, 2.2, 2.8, 1.2), (5.7, 6.3, -2.8, -2.2, 1.2),
 def flat() -> Scene:
     s = Scene("flat", -4.0, 16.0, -4.0, 4.0, None, _line(-3.0, 15.0, 0.0), (0.0, 0.0, 0.0, 0.0),
               "20 x 8 m of level floor, four pillars to the sides")
-    s.height = lambda x, y: _walls(x, y, s, _boxes(x, y, np.zeros_like(x), FLAT_PILLARS))
+    s.inner = lambda x, y: _boxes(x, y, np.zeros_like(x), FLAT_PILLARS)
+    s.height = lambda x, y: _walls(x, y, s, s.inner(x, y))
     return s
 
 
@@ -168,16 +175,17 @@ def slope() -> Scene:
               "lanes at " + " / ".join(f"{a:g}" for a in RAMP_ANGLES)
               + f" deg up to a {RAMP_RISE} m platform and down, walls between them")
 
-    def height(x, y):
+    def inner(x, y):
         h = np.zeros_like(x)
         for _, a, yl, yr in lanes:
             h = np.where((y < yl) & (y >= yr), _lane_profile(x, a), h)
         divider = (x >= RAMP_START - 0.5) & (x < _slope_end() + 0.5)
         for (_, _, _, yr), (_, _, yl, _) in zip(lanes[:-1], lanes[1:]):
             h = np.where(divider & (y < yr) & (y >= yl), DIVIDER_H, h)
-        return _walls(x, y, s, h)
+        return h
 
-    s.height = height
+    s.inner = inner
+    s.height = lambda x, y: _walls(x, y, s, inner(x, y))
     return s
 
 
@@ -207,7 +215,8 @@ def friction() -> Scene:
               f"level floor, lanes {FRICTION_LANE_W:g} m wide with a strip of sliding friction "
               + " / ".join(f"{mu:g}" for mu in FRICTION_VALUES)
               + f" from x {FRICTION_X[0]:g} to {FRICTION_X[1]:g}")
-    s.height = lambda x, y: _walls(x, y, s, np.zeros_like(x))
+    s.inner = lambda x, y: np.zeros_like(x)
+    s.height = lambda x, y: _walls(x, y, s, s.inner(x, y))
     return s
 
 
@@ -245,13 +254,14 @@ def course() -> Scene:
                         + (f", friction {mu:g} on the way up)" if mu else ")")
                         for _, start, up, down, mu in COURSE_HILLS))
 
-    def height(x, y):
+    def inner(x, y):
         h = np.zeros_like(x)
         for _, start, up, down, _ in COURSE_HILLS:
             h = np.maximum(h, hill_profile(x, start, up, down))
-        return _walls(x, y, s, h)
+        return h
 
-    s.height = height
+    s.inner = inner
+    s.height = lambda x, y: _walls(x, y, s, inner(x, y))
     return s
 
 
@@ -299,14 +309,14 @@ def stairs15() -> Scene:
               f"{RISERS} risers of {RISER} m on {TREAD} m treads up to a {RISERS * RISER:.2f} m "
               f"platform and {RISERS} down, {2 * STAIR_HALF_W} m wide between walls")
 
-    def height(x, y):
+    def inner(x, y):
         h = np.where(np.abs(y) < STAIR_HALF_W, stair_profile(x), 0.0)
         wall = ((np.abs(y) >= STAIR_HALF_W) & (np.abs(y) < STAIR_HALF_W + STAIR_WALL_T)
                 & (x >= up0 - TREAD) & (x < end + TREAD))
-        h = np.where(wall, RISERS * RISER + STAIR_WALL_H, h)
-        return _walls(x, y, s, h)
+        return np.where(wall, RISERS * RISER + STAIR_WALL_H, h)
 
-    s.height = height
+    s.inner = inner
+    s.height = lambda x, y: _walls(x, y, s, inner(x, y))
     return s
 
 
@@ -319,8 +329,76 @@ def stair_walk():
             [down0 - 0.15, 0.0, top], [end + 0.15, 0.0, 0.0], [end + 2.0, 0.0, 0.0]]
 
 
+# --- all -------------------------------------------------------------------
+# The bays from +y to -y. Each keeps its own x (every test starts 1.5 m or
+# more past x 0, its entrance) and the y between its own walls; a wall
+# WALL_T thick between two bays, and one across each bay's far end.
+ALL_BAYS = ("flat", "friction", "slope", "stairs15", "course")
+ALL_APRON = 6.0  # m of level floor before the bays, the whole site wide: the start
+
+
+def all_bays():
+    """(name, scene, dy, y0, y1, x_end) per bay: its scene, the shift from the
+    scene's y to the site's, the bay's y between its walls and its far wall's x."""
+    scenes = [SCENES[name]() for name in ALL_BAYS]
+    widths = [(s.y1 - WALL_T) - (s.y0 + WALL_T) for s in scenes]
+    top = round((sum(widths) + WALL_T * (len(scenes) - 1)) / 2, 6)
+    out = []
+    for name, s, w in zip(ALL_BAYS, scenes, widths):
+        dy = top - (s.y1 - WALL_T)
+        out.append((name, s, dy, top - w, top, s.x1 - WALL_T))
+        top = round(top - w - WALL_T, 6)
+    return out
+
+
+def all_scene() -> Scene:
+    bays = all_bays()
+    half = bays[0][4]
+    track_y = np.arange(-half + 1.0, half - 1.0 + 1e-9, TRACK_STEP)
+    s = Scene("all", -ALL_APRON - WALL_T, max(b[5] for b in bays) + WALL_T, -half - WALL_T,
+              half + WALL_T, None,
+              np.stack([np.full(track_y.size, -ALL_APRON / 2), track_y], axis=1),
+              (-ALL_APRON / 2, 0.0, 0.0, 0.0),
+              "bays side by side, from +y " + ", ".join(
+                  f"{name} (y {y0:.1f} .. {y1:.1f})" for name, _, _, y0, y1, _ in bays)
+              + f", each as its own scene, open onto a {ALL_APRON:g} m level apron at x < 0")
+
+    def inner(x, y):
+        h = np.where(x >= 0.0, WALL_H, 0.0)  # the walls between the bays, unless a bay is there
+        for _, b, dy, y0, y1, x_end in bays:
+            in_bay = (y >= y0) & (y < y1) & (x >= 0.0)
+            h = np.where(in_bay, np.where(x < x_end, b.inner(x, y - dy), WALL_H), h)
+        return h
+
+    s.inner = inner
+    s.height = lambda x, y: _walls(x, y, s, inner(x, y))
+    return s
+
+
+def _bay_dy(name: str) -> float:
+    return next(dy for n, _, dy, _, _, _ in all_bays() if n == name)
+
+
+def _shift_y(box, dy):
+    """[x0, x1, y0, y1] with y moved by dy."""
+    return [box[0], box[1], box[2] + dy, box[3] + dy]
+
+
+def all_ramp_boxes():
+    """config/ramps/all.yaml: the slope's lanes and the course's hills in their bays."""
+    return ([(f"all {n}", _shift_y(b, _bay_dy("slope")), band) for n, b, band in ramp_boxes()]
+            + [(f"all {n}", _shift_y(b, _bay_dy("course")), band)
+               for n, b, band in course_ramp_boxes()])
+
+
+def all_zones():
+    """config/friction/all.yaml: the friction lanes and the course's floors in their bays."""
+    return ([(f"all {n}", _shift_y(b, _bay_dy("friction")), mu) for n, b, mu in friction_zones()]
+            + [(f"all {n}", _shift_y(b, _bay_dy("course")), mu) for n, b, mu in course_zones()])
+
+
 SCENES = {"flat": flat, "slope": slope, "stairs15": stairs15, "friction": friction,
-          "course": course}
+          "course": course, "all": all_scene}
 
 
 # --- writing ---------------------------------------------------------------
@@ -389,17 +467,24 @@ def config_files() -> dict[str, str]:
     ramps = ramps_file(
         "# The slope scene's lanes (config/ramps/dp.yaml says what a ramp box does):\n"
         "# the band holds the floor, the ramp and the platform, not the walls.", ramp_boxes())
-    walk = head + ("# The stair is never climbed by the mapping track (poses.txt stays on the\n"
-                   "# level floor, so the platform is no storey of its own), so it is fitted\n"
-                   "# from this walk, as dp's middle stair is.\n\nwalks:\n"
-                   "  - name: stairs15 up and down\n    points:\n")
-    for p in stair_walk():
-        walk += f"      - [{', '.join(_num(v) for v in p)}]\n"
-    up0, _, _, end = stair_x()
-    shape = head + ("# The stair as built, so both flights are fitted to it.\n\nstairs:\n"
-                    "  - name: stairs15\n"
-                    f"    box: [{_num(up0 - 1.0)}, {_num(end + 1.0)}, -1.0, 1.0]\n"
-                    f"    tread: {_num(TREAD)}\n    riser: {_num(RISER)}\n")
+    def walk_file(name: str, dy: float) -> str:
+        text = head + ("# The stair is never climbed by the mapping track (poses.txt stays on the\n"
+                       "# level floor, so the platform is no storey of its own), so it is fitted\n"
+                       "# from this walk, as dp's middle stair is.\n\nwalks:\n"
+                       f"  - name: {name} up and down\n    points:\n")
+        for x, y, z in stair_walk():
+            text += f"      - [{', '.join(_num(v) for v in (x, y + dy, z))}]\n"
+        return text
+
+    def shape_file(name: str, dy: float) -> str:
+        up0, _, _, end = stair_x()
+        return head + ("# The stair as built, so both flights are fitted to it.\n\nstairs:\n"
+                       f"  - name: {name}\n"
+                       f"    box: [{_num(up0 - 1.0)}, {_num(end + 1.0)}, {round(dy - 1.0, 4)}, "
+                       f"{round(dy + 1.0, 4)}]\n"
+                       f"    tread: {_num(TREAD)}\n    riser: {_num(RISER)}\n")
+
+    walk, shape = walk_file("stairs15", 0.0), shape_file("stairs15", 0.0)
     out = {"config/ramps/slope.yaml": ramps, "config/stair_walks/stairs15.yaml": walk,
            "config/stair_shapes/stairs15.yaml": shape,
            "config/ramps/course.yaml": ramps_file(
@@ -411,7 +496,15 @@ def config_files() -> dict[str, str]:
                friction_zones()),
            "config/friction/course.yaml": friction_file(
                "# The course scene's strips of floor, and the way up its slippery hill.",
-               course_zones())}
+               course_zones()),
+           "config/ramps/all.yaml": ramps_file(
+               "# The all scene's ramps: the slope's lanes and the course's hills, in their bays.",
+               all_ramp_boxes()),
+           "config/friction/all.yaml": friction_file(
+               "# The all scene's floors: the friction lanes and the course's, in their bays.",
+               all_zones()),
+           "config/stair_walks/all.yaml": walk_file("all stairs15", _bay_dy("stairs15")),
+           "config/stair_shapes/all.yaml": shape_file("all stairs15", _bay_dy("stairs15"))}
     for name, make in SCENES.items():
         s = make()
         x, y, z, yaw = s.spawn

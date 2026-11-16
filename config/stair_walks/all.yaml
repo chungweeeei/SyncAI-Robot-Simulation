@@ -1,0 +1,14 @@
+# Written by scripts/make_scenes.py from its constants; edit there and rerun.
+# The stair is never climbed by the mapping track (poses.txt stays on the
+# level floor, so the platform is no storey of its own), so it is fitted
+# from this walk, as dp's middle stair is.
+
+walks:
+  - name: all stairs15 up and down
+    points:
+      - [1, -10.7, 0]
+      - [2.85, -10.7, 0]
+      - [4.65, -10.7, 0.9]
+      - [7.35, -10.7, 0.9]
+      - [9.15, -10.7, 0]
+      - [11, -10.7, 0]

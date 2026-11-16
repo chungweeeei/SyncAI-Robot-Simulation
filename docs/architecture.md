@@ -59,14 +59,14 @@ ONNX policies in-process or carry a rigid statue by rules).
    sensor/bms_link.py     `bms_link: can`: the pack's BMS on can0, asked and
                      answering; the charge falls with what the joints draw
                │
-   driver/udp_driver.py   the panel's AXES,
-                     forwarded to the controller's command port as ASCII
+   driver/udp_driver.py   the bench's MODE / AXES lines to the
+                     controller's command port as ASCII
                │
    envs/simulator.py   the composition root: one tick, scan, spawn, teleport
                │
        ┌───────┴────────┐
-   __main__.py       viewer/web_view.py + teleop.py
-   (the main loop:   (the browser; the panel's sliders)
+   __main__.py       viewer/web_view.py + teleport.py
+   (the main loop:   (the browser; the panel's teleport)
     wall clock, the
     UDP links)
 ```
@@ -88,8 +88,9 @@ terrain patch moved if due
 ```
 
 The 55-float record is built in place and sent as one datagram per step.
-cmd_vel never reaches the body: the panel's AXES go to the controller
-(driver/udp_driver.py), which turns them into joint commands.
+cmd_vel never reaches the body: it goes to the controller (its own
+`syncai_ctl`, or the bench's AXES through driver/udp_driver.py), which turns
+it into joint commands.
 
 Everything the sim tells the outside goes over UDP or, as the robot's own
 devices, SocketCAN (`joint_link: can`, `bms_link: can`) and a serial port

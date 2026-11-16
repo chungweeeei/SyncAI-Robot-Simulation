@@ -26,8 +26,6 @@ and a serial port only:
                          (sensor/imu_serial.py: a pseudo-terminal at
                          imu_serial_port)
     bms_link can         the pack's BMS answers on can0 (sensor/bms_link.py)
-    the panel's driving  AXES to the
-                         controller's command port, 50051 (driver/udp_driver.py)
     lidar_link livox     the sim is the robot's MID360 on the Livox protocol
                          (sensor/livox_link.py: discovery on 56000, commands on
                          56100, points / IMU out from 56300 / 56400)
@@ -75,11 +73,11 @@ def main(argv=None) -> int:
 
 
 def _viewer(a, sim, spawn, web_port: int, log):
-    """(teleop, viewer factory): the browser viewer unless --headless."""
+    """(teleport, viewer factory): the browser viewer unless --headless."""
     if a.headless:
         return None, None
-    from syncai_sim.viewer.teleop import Teleop
-    teleop = Teleop(spawn, log=log)
+    from syncai_sim.viewer.teleport import Teleport
+    teleport = Teleport(spawn)
 
     def factory():
         try:
@@ -89,8 +87,8 @@ def _viewer(a, sim, spawn, web_port: int, log):
             # a picture rather than not at all.
             log(f"[web] no browser viewer: {err} (rebuild the image)")
             return None
-        return WebView(sim, teleop, port=web_port, log=log)
-    return teleop, factory
+        return WebView(sim, teleport, port=web_port, log=log)
+    return teleport, factory
 
 
 def settings(a) -> dict:
@@ -143,7 +141,7 @@ def run(ini, a) -> int:
     spawn = _spawn_pose(ini, params)
     sim.spawn(*spawn[:2], spawn[3], spawn[2])
     livox = _livox_link(ini, params)
-    teleop, factory = _viewer(a, sim, spawn, params["web_view_port"], print)
+    teleport, factory = _viewer(a, sim, spawn, params["web_view_port"], print)
     viewer = factory() if factory else None
     dt = sim.model.opt.timestep
     t_start = time.perf_counter()
@@ -166,8 +164,8 @@ def run(ini, a) -> int:
             steps = pacer.steps(now)
             if livox is not None:
                 livox.poll()
-            if teleop:
-                teleop.apply(sim)
+            if teleport:
+                teleport.apply(sim)
             for _ in range(steps):
                 sim.step()
             if livox is not None:

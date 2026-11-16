@@ -94,3 +94,28 @@ def test_a_hill_with_a_friction_of_its_own_has_it_on_the_way_up_only():
         box, value = zones[key]
         x0, top0, _, _ = ms.hill_x(start, up, down)
         assert value == mu and box[0] == x0 and np.isclose(box[1], top0, atol=0.01)
+
+
+def test_all_holds_every_scene_in_a_bay_of_its_own_open_onto_a_level_apron():
+    s = ms.all_scene()
+    bays = ms.all_bays()
+    assert [b[0] for b in bays] == list(ms.ALL_BAYS)
+    assert set(ms.ALL_BAYS) == set(ms.SCENES) - {"all"}
+    # Side by side from +y, a wall's thickness apart, the outer walls round them.
+    assert np.isclose(bays[0][4], s.y1 - ms.WALL_T) and np.isclose(bays[-1][3], s.y0 + ms.WALL_T)
+    assert all(np.isclose(a[3] - b[4], ms.WALL_T) for a, b in zip(bays[:-1], bays[1:]))
+    for name, b, dy, y0, y1, x_end in bays:
+        # Inside its bay a scene is what it is on its own, moved by dy.
+        x, y = (a.ravel() for a in np.meshgrid(np.arange(0.05, x_end, 0.1),
+                                               np.arange(y0 + 0.05, y1, 0.1)))
+        assert (s.height(x, y) == b.height(x, y - dy)).all(), name
+        # Walled at its far end, and from the next bay all along it.
+        assert s.height(np.array([x_end + 0.05]), np.array([(y0 + y1) / 2]))[0] == ms.WALL_H
+        if y0 > s.y0 + ms.WALL_T:
+            xs = np.arange(0.05, x_end, 0.1)
+            assert (s.height(xs, np.full(xs.size, y0 - ms.WALL_T / 2)) == ms.WALL_H).all(), name
+    x, y = (a.ravel() for a in np.meshgrid(np.arange(s.x0 + ms.WALL_T + 0.05, 0.0, 0.1),
+                                           np.arange(s.y0 + ms.WALL_T + 0.05, s.y1 - ms.WALL_T, 0.1)))
+    assert (s.height(x, y) == 0.0).all()  # the apron
+    sx, sy, _, yaw = s.spawn
+    assert sx < 0.0 and yaw == 0.0 and s.track[:, 0].max() < 0.0  # start and track on the apron

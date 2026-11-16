@@ -1,0 +1,25 @@
+# Written by scripts/make_scenes.py from its constants; edit there and rerun.
+# The all scene's floors: the friction lanes and the course's, in their bays.
+
+zones:
+  - name: all friction 0.6 lane
+    box: [3, 9, 8, 10]
+    friction: 0.6
+  - name: all friction 0.4 lane
+    box: [3, 9, 6, 8]
+    friction: 0.4
+  - name: all friction 0.2 lane
+    box: [3, 9, 4, 6]
+    friction: 0.2
+  - name: all friction 0.1 lane
+    box: [3, 9, 2, 4]
+    friction: 0.1
+  - name: all course wet floor
+    box: [2, 5, -17.7, -13.7]
+    friction: 0.4
+  - name: all course ice
+    box: [5, 8, -17.7, -13.7]
+    friction: 0.2
+  - name: all course slippery hill, the way up
+    box: [17.5, 20.34, -17.7, -13.7]
+    friction: 0.4

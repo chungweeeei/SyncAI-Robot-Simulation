@@ -99,7 +99,7 @@ def test_web_view_serves_the_scene_without_a_browser():
     from syncai_sim.viewer.web_view import WebView
     sim = FakeSim()
     port = 18200 + os.getpid() % 500
-    view = WebView(sim, teleop=None, port=port, log=lambda *a: None, site_in_background=False)
+    view = WebView(sim, teleport=None, port=port, log=lambda *a: None, site_in_background=False)
     try:
         assert view.rate_hz > 0 and view.is_running()
         assert view._site == {}  # no world, no tiles

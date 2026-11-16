@@ -1,0 +1,7 @@
+# Written by scripts/make_scenes.py from its constants; edit there and rerun.
+# The all scene: bays side by side, from +y flat (y 10.3 .. 17.7), friction (y 2.0 .. 10.0), slope (y -7.7 .. 1.7), stairs15 (y -13.4 .. -8.0), course (y -17.7 .. -13.7), each as its own scene, open onto a 6 m level apron at x < 0.
+#   python3 -m syncai_sim --profile /home/syncrobotic/sim/config/params/scenes/all.yaml
+
+map_dir: /home/syncrobotic/sim/scenes/all
+use_ini_initial_pose: false
+spawn: [-3, 0, 0, 0]   # x y z(hint) yaw

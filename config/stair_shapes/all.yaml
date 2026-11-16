@@ -1,0 +1,8 @@
+# Written by scripts/make_scenes.py from its constants; edit there and rerun.
+# The stair as built, so both flights are fitted to it.
+
+stairs:
+  - name: all stairs15
+    box: [2, 10, -11.7, -9.7]
+    tread: 0.3
+    riser: 0.15

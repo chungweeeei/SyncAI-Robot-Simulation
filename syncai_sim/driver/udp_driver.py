@@ -1,15 +1,17 @@
-"""The panel's driving, forwarded to the controller process.
+"""ASCII command lines to a controller process, from the bench.
 
 The joints are a controller's (locomotion/hardware_link.py), and so is its
-state machine: the viewer's sliders go to it as the `AXES vx vy wz` line the
-nav stack's driver_manager sends, on its command port (50051), and a bench
-sends any other line as given (`send`). What it is in is whatever its
+state machine: scripts/controller_bench.py sends it `AXES vx vy wz` (through
+`Simulator.set_cmd`) and any other line as given (`send`), the lines g2's
+driver_manager sends, on its command port (50051). What it is in is whatever its
 telemetry says, which nothing here listens to by default (`motion_state`
 stays UNKNOWN until a bench that reads the telemetry writes it).
 
 Until 2026-11-15 the panel also sent the motion keys (`MODE Z/C/X/R/M`,
 `ESTOP`) and the policy toggle (`MODE <n>`); they went while the
-controller's low-level motor control is rewritten, its modes with it.
+controller's low-level motor control is rewritten, its modes with it; the
+same day the panel's AXES sliders went too: SyncAI-Robot-Control speaks a
+binary protocol (its protocol.rs) and is driven by its own `syncai_ctl`.
 Until 2026-11-13 a stand-in state machine (fake_driver.py) had this surface
 for the sim's own policies, and the sim could answer as the controller on
 the same ASCII link (controller_link.py); both went with the policies.

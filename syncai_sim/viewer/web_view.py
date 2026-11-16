@@ -9,8 +9,8 @@ the terrain boxes under the feet when asked. The browser draws it all at
 its own frame rate with the host's GPU, orbits and zooms itself, and follows
 the robot by moving its look-at point while keeping whatever offset the
 mouse gave the camera. The panel holds the storey switch, the layers, the
-status, the teleport, and the driving sliders (teleop.py applies them
-under the sim lock).
+status and the teleport (teleport.py applies it under the sim lock). It
+drives nothing: the controller is driven from its own `syncai_ctl teleop`.
 
 It shows what the sim itself is made of — which tiles exist, what the feet
 stand on, where the rays went, the lidar map per storey.
@@ -77,12 +77,12 @@ def boxes_mesh(centres: np.ndarray, halves: np.ndarray) -> tuple[np.ndarray, np.
 
 
 class WebView:
-    def __init__(self, sim, teleop=None, port: int = 8080, log=print, host: str = "0.0.0.0",
+    def __init__(self, sim, teleport=None, port: int = 8080, log=print, host: str = "0.0.0.0",
                  site_in_background: bool = True):
         import viser
 
         self.sim = sim
-        self.teleop = teleop
+        self.teleport = teleport
         self.log = log
         self.rate_hz = VIEW_HZ
         self.server = viser.ViserServer(host=host, port=port, verbose=False)
@@ -338,29 +338,10 @@ class WebView:
             for k, h in self._map.items():
                 h.visible = self._map_cloud.value and (self._shown is None or k in self._shown)
 
-        if self.teleop is None:
+        if self.teleport is None:
             return
         home = gui.add_button("Teleport to the spawn", hint="back on the spawn, standing")
-        home.on_click(lambda _e: self.teleop.teleport_home())
-        with gui.add_folder("Teleop"):
-            vx = gui.add_slider("vx m/s", -0.6, 0.8, 0.05, 0.0)
-            # the controller clamps AXES vy to +-0.4 (g2-device-control udp_command.rs)
-            vy = gui.add_slider("vy m/s", -0.4, 0.4, 0.05, 0.0)
-            wz = gui.add_slider("wz rad/s", -1.5, 1.5, 0.05, 0.0)
-            stop = gui.add_button("Stop")
-
-        def drive(_event=None) -> None:
-            self.teleop.set_cmd(vx.value, vy.value, wz.value)
-        vx.on_update(drive)
-        vy.on_update(drive)
-        wz.on_update(drive)
-
-        @stop.on_click
-        def _(_event) -> None:
-            vx.value = 0.0
-            vy.value = 0.0
-            wz.value = 0.0
-            self.teleop.stop()
+        home.on_click(lambda _e: self.teleport.home())
 
     def _wanted(self) -> set[int]:
         n = len(self.sim.info.storey_bounds) + 1

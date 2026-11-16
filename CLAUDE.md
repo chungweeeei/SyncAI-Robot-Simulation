@@ -37,8 +37,8 @@ parameter's default can say.
   record out on UDP 30010 every step, whatever the joints' link. With
   `joint_link: udp` the same link takes the joint commands in on 20001
   instead of CAN; only the bench's stand-in speaks that today. The viewer
-  panel's AXES go to the controller's command port, 50051
-  (`driver/udp_driver.py`).
+  drives nothing (its sliders went 2026-11-15); SyncAI-Robot-Control is
+  driven by its own `syncai_ctl` (`teleop` from the keyboard).
 
 Removed 2026-11-13, do not bring back: the in-process ONNX policies
 (`locomotion: policy`), the kinematic statue (`locomotion: kinematic`), the
@@ -75,9 +75,7 @@ only; this repo at `/home/syncrobotic/sim`.
    plus `tests/test_hardware_link.py` (228-byte state out, 240-byte command
    in, field order, frames, the watchdog): a change there is a change for
    whatever reads the datagram (the benches), said so in the commit message.
-   The panel's AXES line to the controller (`driver/udp_driver.py`) is the
-   robot's controller protocol as driver_manager speaks it: keep it
-   byte-compatible. The CAN link (`locomotion/can_link.py`, 2026-11-13) is
+   The CAN link (`locomotion/can_link.py`, 2026-11-13) is
    the J60's protocol and the robot's wiring as its controller speaks them:
    keep it byte-compatible with the robot, never with the sim's convenience
    (`tests/test_can_link.py` pins the bytes and the mapping); where the
@@ -133,12 +131,12 @@ Paths are under `syncai_sim/`; `docs/architecture.md` draws the layers.
 | the joints as J60 motors on four SocketCAN buses (`joint_link: can`): the frames, the wiring (bus, id, sign, homed zero per joint), enable / timeout (the motor disables itself, fault latched) / set-home, per-bus delay and drop; the stand-in | `locomotion/can_link.py` (its docstring is the spec, and names its four assumptions; `tests/test_can_link.py`); the interfaces `scripts/vcan_up.sh` |
 | the body IMU as the robot's Yesense on a serial port (`imu_link: serial`): the frame, the rate, the pseudo-terminal and its backlog | `sensor/imu_serial.py` (its docstring is the spec; `tests/test_imu_serial.py` ports the controller's reader) |
 | the pack's BMS on `can0` (`bms_link: can`): the items, request / cycle, the battery model (charge against the joints' power) | `sensor/bms_link.py` (its docstring is the spec; `tests/test_bms_link.py`) |
-| the panel's AXES forwarded to the controller (its motion keys and policy toggle removed 2026-11-15) | `driver/udp_driver.py` |
+| the bench's ASCII lines (MODE, AXES) to a controller; the panel's driving removed 2026-11-15 | `driver/udp_driver.py` |
 | one physics tick, scan, spawn, teleport, falls counted; where the base is put down | `envs/simulator.py`; `envs/placement.py` |
 | the main loop, the links polled and ticked, the settings (defaults, `config/params/sim_params.yaml`, `--profile`, `-p`) | `__main__.py` (sets `OPENBLAS_NUM_THREADS=1` before numpy); `config.py` |
-| the viewer (viser: the site as GLB tiles once, poses at 20 Hz, drawn by the host's browser; nothing renders in the container), its panel's driving | `viewer/web_view.py`, `viewer/teleop.py` |
+| the viewer (viser: the site as GLB tiles once, poses at 20 Hz, drawn by the host's browser; nothing renders in the container), its panel's teleport | `viewer/web_view.py`, `viewer/teleport.py` |
 | the viewer's look (tiles, intensity shading, the Poisson surface, colours, the lidar map layer) | `visuals/`: `site_tiles.py` (10 m tiles as GLB, a texel per voxel face), `voxel_intensity.py`, `pcd_mesh.py`, `visual.py`, `map_cloud.py` (picture only, never sensing); the site, storey and layer switches are the panel in `viewer/web_view.py` |
-| test sites made, not mapped (flat, slope, stairs15): their .bt / .pcd / poses, ramps, stair walk and shape, profiles | `scripts/make_scenes.py` (writes `scenes/<name>/`, gitignored, and the config files, committed; `tests/test_scenes.py`); the .bt writer `world/btree.py` `write_occupied` |
+| test sites made, not mapped (flat, slope, stairs15, friction, course, and all: the five side by side): their .bt / .pcd / poses, ramps, stair walk and shape, profiles | `scripts/make_scenes.py` (writes `scenes/<name>/`, gitignored, and the config files, committed; `tests/test_scenes.py`); the .bt writer `world/btree.py` `write_occupied` |
 | the container's command; the container itself; what the robot's controller needs set on the sim | `scripts/sim_entry.sh` (`SIM_AUTOSTART`, `SIM_ARGS`, empty by default); `docker-compose.yml`; `docker-compose.controller.yml` (the IMU's path, no homing, driver_manager's addresses, the OrbStack shim `scripts/spin_sleep.sh`) |
 
 ## Running and testing (inside the container)
@@ -159,7 +157,7 @@ python3 /home/syncrobotic/sim/scripts/controller_bench.py -p joint_link:=udp -p 
 #   docker compose up -d
 #   docker compose -f ../g2-device-control/docker-compose.yml -f docker-compose.controller.yml up -d
 # (its compose file unchanged: what the sim makes different is docker-compose.controller.yml's, here)
-# a made test site (README, "Test sites"): flat, slope, stairs15
+# a made test site (README, "Test sites"): flat, slope, stairs15, friction, course, all
 python3 /home/syncrobotic/sim/scripts/make_scenes.py
 python3 -m syncai_sim --profile /home/syncrobotic/sim/config/params/scenes/stairs15.yaml
 ```

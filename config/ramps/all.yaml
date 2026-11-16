@@ -1,0 +1,22 @@
+# Written by scripts/make_scenes.py from its constants; edit there and rerun.
+# The all scene's ramps: the slope's lanes and the course's hills, in their bays.
+
+ramps:
+  - name: all slope 5 deg lane
+    box: [1.7, 15.73, -0.4, 1.7]
+    band: [-0.1, 0.6]
+  - name: all slope 10 deg lane
+    box: [1.7, 9.97, -2.8, -0.8]
+    band: [-0.1, 0.6]
+  - name: all slope 15 deg lane
+    box: [1.7, 8.03, -5.2, -3.2]
+    band: [-0.1, 0.6]
+  - name: all slope 20 deg lane
+    box: [1.7, 7.05, -7.7, -5.6]
+    band: [-0.1, 0.6]
+  - name: all course hill
+    box: [9.2, 16.5, -17.7, -13.7]
+    band: [-0.1, 0.6]
+  - name: all course slippery hill
+    box: [17.2, 25.47, -17.7, -13.7]
+    band: [-0.1, 0.6]

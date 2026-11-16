@@ -6,8 +6,8 @@ The sim is the robot's hardware and nothing more: the twelve joints are a
 controller process's — over the hardware link (locomotion/hardware_link.py),
 or as J60 motors on four SocketCAN buses as on the robot (`joint_link: can`,
 locomotion/can_link.py) — and the sim decides no joint command of its own. The controller's RL or MPC
-turns cmd_vel into joint commands; the panel's keys and AXES go to the
-controller (driver/udp_driver.py), not to the body.
+turns cmd_vel into joint commands; a bench's AXES go to the controller
+(driver/udp_driver.py), not to the body.
 
 One `step()` is one physics tick (`physics_hz`, 1000 by default, the params'
 value): the terrain patch is moved under the feet, the controller's command
@@ -87,7 +87,7 @@ class SimConfig:
     cmd_delay_ms: float = 0.0
     torque_bw_hz: float = 0.0
     # The hardware link (locomotion/hardware_link.py says the protocol), and
-    # where the panel's motion keys and AXES go: the controller's command port.
+    # where a bench's AXES go: the controller's command port.
     link_command_port: int = 20001
     link_state_host: str = "127.0.0.1"
     link_state_port: int = 30010
@@ -357,7 +357,7 @@ class Simulator:
 
     # -- commands ----------------------------------------------------------------
     def set_cmd(self, vx: float, vy: float, wz: float, now: float | None = None) -> None:
-        """cmd_vel from the panel: AXES to the controller, which walks."""
+        """cmd_vel from a bench: AXES to the controller, which walks."""
         self.cmd[:] = (vx, vy, wz)
         self.cmd_time = time.monotonic() if now is None else now
         self.driver.send_axes(vx, vy, wz)
